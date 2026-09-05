@@ -159,16 +159,17 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
   preview(_roomId: string): Promise<RoomPreview> { return Promise.reject(new NotImplementedError('preview')) }
   listRooms(): Promise<readonly RoomSummary[]> { return Promise.reject(new NotImplementedError('listRooms')) }
 
+  /** SDK§10-6 — 게이트 닫기가 먼저다. 전송로를 놓은 뒤 sender 를 만지면 닫힌 연결에 손댄다. */
   private async leave(roomId: string): Promise<void> {
     const handle = this.handles.get(roomId)
     if (handle) handle.state = 'leaving'
+    this.ptts.get(roomId)?.reset('left')
+    this.ptts.delete(roomId)
     try {
       await this.roomsDomain.leave(roomId)
     } finally {
       if (handle) handle.state = 'closed'
       this.handles.delete(roomId)
-      this.ptts.get(roomId)?.reset('left')
-      this.ptts.delete(roomId)
     }
   }
 
@@ -241,7 +242,12 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     if (!handle) return
     const version = note.body.version as Version | undefined
 
-    if (note.op === Op.ParticipantEvent) {
+    // ★연§4-6 — seq 는 입퇴장에도 오른다. 이 통지가 보관본 문을 안 지나면
+    // 뒤따라오는 TRACK_EVENT 가 매번 갭으로 보여 트랙이 영영 안 붙는다.
+    if (note.op === Op.ParticipantEvent && version) {
+      const verdict = this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [] })
+      if (verdict === 'stale') return
+      if (verdict === 'resync') { handle.emit('resync'); return }
       const type = note.body.type as string
       const userId = String(note.body.user_id ?? '')
       if (type === 'joined') {
@@ -255,35 +261,54 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       return
     }
 
+    // 연§6-7 — TRACK_EVENT 의 갈래는 action 이다(type 이 아니다).
     if (note.op === Op.TrackEvent && version) {
-      const type = note.body.type as string
+      const action = note.body.action as string
       const tracks = (note.body.tracks ?? []) as TrackEntry[]
       const verdict = this.roomsDomain.applyEvent(roomId, version,
-        type === 'remove' ? { kind: 'remove', tracks } : { kind: 'add', tracks })
+        action === 'remove' ? { kind: 'remove', tracks } : { kind: 'add', tracks })
       if (verdict === 'stale') return
       if (verdict === 'resync') { handle.emit('resync'); return }
-      if (type === 'remove') for (const t of tracks) handle.drop(t.track_id)
+      if (action === 'remove') for (const t of tracks) handle.drop(t.track_id)
       const server = this.roomsDomain.serverOf(roomId)
       if (server) void this.renegotiate(server, roomId)
       return
     }
 
+    // 연§6-7 — TRACK_STATE 는 트랙 하나의 표시만 고친다. 배열이 아니다.
     if (note.op === Op.TrackState && version) {
-      const tracks = (note.body.tracks ?? []) as TrackEntry[]
-      if (this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks }) !== 'ok') return
-      for (const t of tracks) handle.refresh(t)
+      const server = this.roomsDomain.serverOf(roomId)
+      const known = server?.store.tracks(roomId).find((t) => t.track_id === note.body.track_id)
+      if (!known) return
+      const patched: TrackEntry = {
+        ...known,
+        ...(note.body.active === undefined ? {} : { active: note.body.active as boolean }),
+        ...(note.body.duplex === undefined ? {} : { duplex: note.body.duplex as 'full' | 'half' }),
+      }
+      if (this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [patched] }) !== 'ok') return
+      handle.refresh(patched)
       return
     }
 
+    // 연§6-7 — 결말은 cause 가 아니라 목록이 정한다. sub_rooms 에 없으면 방이 닫힌 것이다.
     if (note.op === Op.RoomEvent) {
       const type = note.body.type as string
-      if (type === 'closed' || type === 'kicked') {
-        handle.state = 'closed'
-        this.handles.delete(roomId)
-        handle.emit('forced', { cause: type === 'kicked' ? 'kick' : 'room_closed' })
-      } else if (type === 'affiliation' && note.body.cause === 'media_lost') {
-        void this.rebuild(handle.server)
+      if (type === 'sync_required') { handle.emit('resync'); return }
+      if (type !== 'affiliation') return
+      if (version && this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [] }) === 'stale') return
+
+      const affiliation = note.body.affiliation as { sub_rooms?: string[] } | undefined
+      const cause = (note.body.cause ?? 'moderate') as string
+      if (affiliation?.sub_rooms?.includes(roomId) === true) {
+        handle.emit('affiliation', { cause: 'moderate' })
+        return
       }
+      if (cause === 'media_lost') { void this.rebuild(handle.server); return }
+      handle.state = 'closed'
+      this.handles.delete(roomId)
+      this.ptts.get(roomId)?.reset('left')
+      this.ptts.delete(roomId)
+      handle.emit('forced', { cause: cause === 'kick' ? 'kick' : cause === 'room_closed' ? 'room_closed' : 'moderate' })
     }
   }
 
@@ -320,8 +345,8 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     for (const entry of server.store.tracks(roomId)) {
       const media = server.link.mediaFor(entry.mid!)
       if (!media) continue
-      const track = handle.adopt(entry, media as unknown as MediaStreamTrack)
-      this.emit('track', handle, track)
+      const { track, fresh } = handle.adopt(entry, media as unknown as MediaStreamTrack)
+      if (fresh) this.emit('track', handle, track)
     }
   }
 

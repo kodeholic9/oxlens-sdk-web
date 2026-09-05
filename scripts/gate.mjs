@@ -28,11 +28,17 @@ ok = step('typecheck', npx, ['tsc', '--noEmit', '-p', 'tsconfig.json']) && ok
 ok = step('arch', process.execPath, ['tools/arch_check.mjs']) && ok
 ok = step('build', npx, ['tsc', '-p', 'tsconfig.build.json']) && ok
 ok = step('1층 단위', process.execPath, ['test/run.mjs']) && ok
+// ★3층 앞에 빌드를 강제한다 — SDK 를 고치고 빌드를 잊으면 옛 코드를 시험하고 초록을 받는다.
 
 const liveDir = join(root, 'qa', 'live')
-if (!live) skip('3층 라이브', '--live 를 안 줬다')
-else if (!existsSync(join(liveDir, 'package.json'))) skip('3층 라이브', 'qa/live 가 아직 없다')
-else ok = step('3층 라이브', npx, ['playwright', 'test'], liveDir) && ok
+if (!live) {
+  skip('3층 정규', '--live 를 안 줬다')
+  skip('3층 갈래B', '--live 를 안 줬다')
+} else if (!existsSync(join(liveDir, 'package.json'))) skip('3층 라이브', 'qa/live 가 아직 없다')
+else {
+  ok = step('3층 정규', npx, ['playwright', 'test', '--project=chromium'], liveDir) && ok
+  ok = step('3층 갈래B', npx, ['playwright', 'test', '--project=chromium-fault'], liveDir) && ok
+}
 
 console.log('')
 for (const r of rows) console.log(`  ${r.mark.padEnd(5)} ${r.name.padEnd(12)} ${r.note}`)

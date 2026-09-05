@@ -134,6 +134,25 @@ test('무전 슬롯은 user_id 부재로 안다 — track_id 를 파싱하지 �
   assert.equal(room.tracks[0]!.slot, true)
 })
 
+test('입퇴장도 보관본 문을 지난다 — seq 는 그때도 오른다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const seen: string[] = []
+  room.on('track', (t) => seen.push(t.id))
+
+  s.notify(Op.ParticipantEvent, {
+    room_id: 'r1', type: 'joined', user_id: 'u2', version: { epoch: CFG.sfu_id, seq: 2 },
+  })
+  await tick()
+  s.notify(Op.TrackEvent, {
+    action: 'add', room_id: 'r1', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 3 },
+  })
+  await s.drain(Op.Ready, {})
+  assert.deepEqual(seen, ['t-u2-mic'],
+    '입퇴장이 문을 안 지나면 뒤따르는 트랙이 매번 갭으로 보여 영영 안 붙는다')
+})
+
 test('TRACK_EVENT 는 보관본 문을 지나 트랙 이벤트가 된다', async () => {
   const s = stand()
   await connected(s)
@@ -142,10 +161,10 @@ test('TRACK_EVENT 는 보관본 문을 지나 트랙 이벤트가 된다', async
   room.on('track', (t) => seen.push(t.id))
 
   s.notify(Op.TrackEvent, {
-    room_id: 'r1', type: 'add', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 2 },
+    action: 'add', room_id: 'r1', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 2 },
   })
   await s.drain(Op.Ready, {})
-  assert.deepEqual(seen, ['t-u2-mic'])
+  assert.deepEqual(seen, ['t-u2-mic'], '갈래는 action 이다 — type 이 아니다')
 })
 
 test('통지에는 ACK 이 먼저 나간다', async () => {
@@ -153,7 +172,9 @@ test('통지에는 ACK 이 먼저 나간다', async () => {
   await connected(s)
   await joined(s)
   const before = s.sock.sent.length
-  s.notify(Op.ParticipantEvent, { room_id: 'r1', type: 'joined', user_id: 'u9' })
+  s.notify(Op.ParticipantEvent, {
+    room_id: 'r1', type: 'joined', user_id: 'u9', version: { epoch: CFG.sfu_id, seq: 2 },
+  })
   await tick()
   const ack = decode(s.sock.sent[before]!)
   assert.equal(ack.kind, Kind.Ok)
@@ -165,11 +186,15 @@ test('명단은 통지대로 는다', async () => {
   const s = stand()
   await connected(s)
   const room = await joined(s)
-  s.notify(Op.ParticipantEvent, { room_id: 'r1', type: 'joined', user_id: 'u9', select: true })
+  s.notify(Op.ParticipantEvent, {
+    room_id: 'r1', type: 'joined', user_id: 'u9', select: true, version: { epoch: CFG.sfu_id, seq: 2 },
+  })
   await tick()
   assert.deepEqual(room.participants.map((p) => [p.userId, p.mode]), [['u1', 'listen'], ['u9', 'talk']])
 
-  s.notify(Op.ParticipantEvent, { room_id: 'r1', type: 'left', user_id: 'u9' })
+  s.notify(Op.ParticipantEvent, {
+    room_id: 'r1', type: 'left', user_id: 'u9', version: { epoch: CFG.sfu_id, seq: 3 },
+  })
   await tick()
   assert.deepEqual(room.participants.map((p) => p.userId), ['u1'])
 })
@@ -182,7 +207,7 @@ test('낡은 통지는 트랙 이벤트를 만들지 않는다', async () => {
   room.on('track', (t) => seen.push(t.id))
   const before = s.ops().length
   s.notify(Op.TrackEvent, {
-    room_id: 'r1', type: 'add', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 1 },
+    action: 'add', room_id: 'r1', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 1 },
   })
   await tick()
   assert.deepEqual(seen, [], '되감기면 그 사이 트랙이 영영 안 붙는다')
@@ -199,23 +224,67 @@ test('갭은 재동기로 알린다', async () => {
   let resync = 0
   room.on('resync', () => { resync += 1 })
   s.notify(Op.TrackEvent, {
-    room_id: 'r1', type: 'add', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 9 },
+    action: 'add', room_id: 'r1', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 9 },
   })
   await tick()
   assert.equal(resync, 1)
 })
 
-test('서버가 방에서 빼면 닫히고 목록에서 사라진다', async () => {
+test('결말은 cause 가 아니라 목록이 정한다', async () => {
   const s = stand()
   await connected(s)
   const room = await joined(s)
   let cause = ''
+  let stillThere = 0
   room.on('forced', (e) => { cause = e.cause })
-  s.notify(Op.RoomEvent, { room_id: 'r1', type: 'kicked' })
+  room.on('affiliation', () => { stillThere += 1 })
+
+  s.notify(Op.RoomEvent, {
+    type: 'affiliation', room_id: 'r1', cause: 'moderate',
+    affiliation: { sub_rooms: ['r1'], pub_room: null }, version: { epoch: CFG.sfu_id, seq: 2 },
+  })
+  await tick()
+  assert.equal(stillThere, 1, '목록에 남아 있으면 방은 유지다')
+  assert.equal(room.state, 'joined')
+
+  s.notify(Op.RoomEvent, {
+    type: 'affiliation', room_id: 'r1', cause: 'kick',
+    affiliation: { sub_rooms: [], pub_room: null }, version: { epoch: CFG.sfu_id, seq: 3 },
+  })
   await tick()
   assert.equal(cause, 'kick')
   assert.equal(room.state, 'closed')
   assert.equal(s.client.rooms.has('r1'), false)
+})
+
+test('sync_required 는 재동기로 온다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  let resync = 0
+  room.on('resync', () => { resync += 1 })
+  s.notify(Op.RoomEvent, {
+    type: 'sync_required', room_id: 'r1', reason: 'no_media_flow', version: { epoch: CFG.sfu_id, seq: 2 },
+  })
+  await tick()
+  assert.equal(resync, 1)
+})
+
+test('TRACK_STATE 는 트랙 하나의 표시만 고친다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s, { tracks: [MIC_TRACK] })
+  await tick()
+  const track = room.tracks[0]!
+  assert.equal(track.active, true)
+
+  s.notify(Op.TrackState, {
+    type: 'muted', room_id: 'r1', user_id: 'u2', track_id: 't-u2-mic', ssrc: 1001,
+    kind: 'audio', active: false, version: { epoch: CFG.sfu_id, seq: 2 },
+  })
+  await tick()
+  assert.equal(track.active, false, '배열이 아니라 track_id 로 지목한다')
+  assert.equal(room.tracks.length, 1, '지우는 것이 아니다')
 })
 
 test('발언 방이 없으면 발행은 wire 를 안 탄다', async () => {

@@ -15,9 +15,13 @@
 ## 게이트
 
 ```
-npm run gate        # typecheck · arch · build · 1층   (서버 불필요)
-npm run gate:live   # 위 + 3층                          (미디어 서버 필요)
+npm run gate        # typecheck · arch · build · 1층        (서버 불필요)
+npm run gate:live   # 위 + 3층 정규 + 3층 갈래B            (미디어 서버 필요)
 ```
+
+3층 전에 빌드가 강제된다 — SDK 를 고치고 빌드를 잊으면 옛 코드를 시험하고 초록을 받는다.
+갈래B(`qa/live/tests/fault/`)는 정규 게이트와 섞지 않는다. 섞으면 "의도된 빨강"과 "회귀 빨강"이
+같은 색이 되어 게이트가 무의미해진다.
 
 `SKIP` 은 통과가 아니다. 미실행에는 항상 사유가 붙는다.
 

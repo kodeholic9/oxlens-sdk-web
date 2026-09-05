@@ -53,14 +53,14 @@ export class RoomHandle extends Bus<RoomEvents> implements Room {
     return Promise.reject(new NotImplementedError('sendMessage'))
   }
 
-  /** 같은 track_id 가 다시 오면 핸들은 그대로 두고 안쪽만 갈아 끼운다. */
-  adopt(entry: TrackEntry, media: MediaStreamTrack): RemoteTrackHandle {
+  /** 같은 track_id 가 다시 오면 핸들은 그대로 두고 안쪽만 갈아 끼운다. 이벤트는 처음 한 번이다. */
+  adopt(entry: TrackEntry, media: MediaStreamTrack): { track: RemoteTrackHandle; fresh: boolean } {
     const known = this.byTrackId.get(entry.track_id)
-    if (known) { known.update(entry); return known }
+    if (known) { known.update(entry); return { track: known, fresh: false } }
     const handle = new RemoteTrackHandle(entry, media)
     this.byTrackId.set(entry.track_id, handle)
     this.emit('track', handle)
-    return handle
+    return { track: handle, fresh: true }
   }
 
   refresh(entry: TrackEntry): void { this.byTrackId.get(entry.track_id)?.update(entry) }

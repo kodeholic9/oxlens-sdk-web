@@ -260,7 +260,9 @@ export class MediaRegistry {
       const fmtp = m.fmtp.get(pt)
       // 연§6-3 — offer 에 있으면 반드시 싣는다. 구독자 fmtp 의 출처가 이것 하나다.
       if (fmtp !== undefined) entry.fmtp = fmtp
-      if (simulcast) entry.simulcast = true
+      // ★연§6-3 은 안 보내면 서버가 추론한다고 하나(full=true), 내 offer 가 진실을 안다.
+      // 추론에 맡기면 단일 레이어를 시뮬캐스트로 등록해 물리가 첫 RTP 를 영원히 기다린다.
+      entry.simulcast = simulcast
       let rtxPt: number | undefined
       for (const [candidate, apt] of m.rtx) if (apt === pt) rtxPt = candidate
       if (rtxPt !== undefined) entry.rtx_pt = rtxPt

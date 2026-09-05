@@ -127,6 +127,8 @@ test('video 는 codec 과 fmtp 를 반드시 싣는다', async () => {
     '없으면 남의 화면이 검다 — 구독자 fmtp 의 출처가 이것 하나다')
   assert.equal(tracks[0]!.rtx_pt, 103)
   assert.equal(tracks[0]!.rtx_ssrc, 22223)
+  assert.equal(tracks[0]!.simulcast, false,
+    '★추론에 맡기면 단일 레이어가 시뮬캐스트로 등록돼 물리가 첫 RTP 를 영원히 기다린다')
 })
 
 test('등록이 실패하면 그 단만 되돌린다 — 트랜시버는 둔다', async () => {
