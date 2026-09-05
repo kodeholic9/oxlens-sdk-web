@@ -1,0 +1,27 @@
+{
+  "name": "@oxlens/sdk",
+  "version": "1.0.0-alpha.0",
+  "description": "OxLens client SDK — surface first. Contract: context/spec/oxlens_sdk_spec.md over oxlens_client_protocol.md.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "arch": "node tools/arch_check.mjs",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node test/run.mjs",
+    "gate": "node scripts/gate.mjs",
+    "gate:live": "node scripts/gate.mjs --live"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "esbuild": "^0.27.0",
+    "typescript": "^5.4.0"
+  }
+}
