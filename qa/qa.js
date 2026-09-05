@@ -48,6 +48,8 @@ const qa = {
     room.on('track', (t) => note('roomTrack', { room: roomId, id: t.id }))
     room.ptt.on('state', (st) => note('ptt', { room: roomId, phase: st.phase, trusted: st.trusted }))
     room.ptt.on('speaker', (e) => note('speaker', { room: roomId, userId: e.userId }))
+    room.on('resync', () => note('resync', { room: roomId }))
+    room.on('error', (e) => note('roomError', { room: roomId, name: e.name, code: e.code }))
     return { id: room.id, mode: room.mode, server: room.server, participants: room.participants.length }
   },
 
@@ -87,6 +89,15 @@ const qa = {
       participants: p.participants.map((x) => x.userId),
       version: p.version,
     }
+  },
+
+  /**
+   * 장치만 죽인다 — 등록·배관은 살아 있고 RTP 만 멎는다.
+   * ★깨끗한 퇴장은 정체가 아니다(배관이 같이 걷힌다). 서버 감지가 보는 것은 이 형상이다.
+   */
+  killSource() {
+    for (const t of state.client.media.tracks) t.mediaStreamTrack.stop()
+    return state.client.media.tracks.length
   },
 
   async localTracks() {
