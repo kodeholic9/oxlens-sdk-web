@@ -3,7 +3,8 @@
 // 수명은 그 서버 첫 방 입장에 나고 마지막 방 퇴장·미디어 사망·전면 재구축에 닫힌다(연§7-5).
 import { Clock, systemClock } from '../../platform/clock.js'
 import {
-  DataChannelLike, IceState, PeerConnectionLike, PeerFactory, RemoteTrackArrival, TransceiverLike,
+  DataChannelLike, IceState, MediaTrackLike, PeerConnectionLike, PeerFactory, RemoteTrackArrival,
+  TransceiverLike,
 } from '../../platform/webrtc.js'
 import { publishAnswer, Seat, subscribeOffer, unifiedOffer } from '../sdp/build.js'
 import { ServerConfig } from '../sdp/config.js'
@@ -222,6 +223,13 @@ export class PeerLink {
 
   private peerList(): readonly PeerConnectionLike[] {
     return [this.pub, this.sub].filter((p): p is PeerConnectionLike => p !== null)
+  }
+
+  /** 그 m-line 에 실제로 도착한 트랙. 보관본의 mid 와 여기서 맞춘다. */
+  mediaFor(mid: string): MediaTrackLike | null {
+    const pc = this.onePc ? this.pub : this.sub
+    const t = pc?.getTransceivers().find((x) => x.mid === mid)
+    return t?.receiver.track ?? null
   }
 
   /** 남의 트랙이 도착한다. 주인이 훑는다 — 콜백을 주입받지 않는다. */

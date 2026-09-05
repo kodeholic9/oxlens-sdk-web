@@ -1,0 +1,72 @@
+// author: kodeholic (powered by Claude)
+// SDK§4 — 방 핸들. 서버가 뺐으면 closed 이고 client.rooms 에서 빠진다.
+import { TrackEntry } from '../domain/store.js'
+import { Bus } from './emitter.js'
+import { NotImplementedError } from './not-implemented.js'
+import { RemoteTrackHandle } from './remote-track.js'
+import { Participant, Ptt, RemoteTrack, Room, RoomAudio, RoomEvents, RoomState } from './types.js'
+
+export interface RoomHost {
+  leave(roomId: string): Promise<void>
+}
+
+export class RoomHandle extends Bus<RoomEvents> implements Room {
+  state: RoomState = 'joining'
+  participants: readonly Participant[] = []
+  private readonly byTrackId = new Map<string, RemoteTrackHandle>()
+  private muted = false
+  private volume = 1
+
+  constructor(
+    readonly id: string,
+    readonly mode: 'listen' | 'talk',
+    readonly server: string,
+    private readonly host: RoomHost,
+  ) {
+    super()
+  }
+
+  /** 장착 가능한 것만 — 받을 수 없는 트랙은 trackUnreachable 로 따로 간다(연§4-1). */
+  get tracks(): readonly RemoteTrack[] { return [...this.byTrackId.values()] }
+
+  get audio(): RoomAudio {
+    const self = this
+    return {
+      get muted() { return self.muted },
+      get volume() { return self.volume },
+      setMuted(v: boolean) { self.muted = v },
+      setVolume(v: number) { self.volume = Math.min(1, Math.max(0, v)) },
+    }
+  }
+
+  get ptt(): Ptt { throw new NotImplementedError(`room(${this.id}).ptt`) }
+
+  leave(): Promise<void> { return this.host.leave(this.id) }
+  sendMessage(_content: string): Promise<{ msgId: string }> {
+    return Promise.reject(new NotImplementedError('sendMessage'))
+  }
+
+  /** 같은 track_id 가 다시 오면 핸들은 그대로 두고 안쪽만 갈아 끼운다. */
+  adopt(entry: TrackEntry, media: MediaStreamTrack): RemoteTrackHandle {
+    const known = this.byTrackId.get(entry.track_id)
+    if (known) { known.update(entry); return known }
+    const handle = new RemoteTrackHandle(entry, media)
+    this.byTrackId.set(entry.track_id, handle)
+    this.emit('track', handle)
+    return handle
+  }
+
+  refresh(entry: TrackEntry): void { this.byTrackId.get(entry.track_id)?.update(entry) }
+
+  drop(trackId: string): void {
+    const handle = this.byTrackId.get(trackId)
+    if (!handle) return
+    this.byTrackId.delete(trackId)
+    handle.emit('ended')
+  }
+
+  setParticipants(list: readonly Participant[]): void {
+    this.participants = list
+    this.emit('participants', list)
+  }
+}

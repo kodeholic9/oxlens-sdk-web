@@ -1,0 +1,282 @@
+// author: kodeholic (powered by Claude)
+// SDK§3·§4·§6 — 표면 결선. 브라우저 없이 접속→입장→트랙 도착→발행 한 벌을 잰다.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { decode, encode, Kind } from '../src/internal/frame.js'
+import { Op } from '../src/internal/wire.js'
+import { createClient } from '../src/index.js'
+import { OxLensClient, RemoteTrack, Room } from '../src/api/types.js'
+import { CFG, PUBLISH_OFFER } from './_sdp_fixtures.js'
+import { FakeClock, FakeDevices, FakePeers, FakeSocket, tick } from './_fakes.js'
+
+const BIND_OK = {
+  user_id: 'u1', role: 'user', server_ver: 1,
+  heartbeat_interval: 10_000, session_id: 's-1', resume_window_ms: 60_000, pc_mode: '2pc',
+}
+
+const MIC_TRACK = {
+  room_id: 'r1', kind: 'audio' as const, user_id: 'u2', ssrc: 1001,
+  track_id: 't-u2-mic', mid: '0', pt: 111,
+}
+
+interface Stand {
+  client: OxLensClient
+  sock: FakeSocket
+  clock: FakeClock
+  peers: FakePeers
+  devices: FakeDevices
+  ops(): number[]
+  reply(op: number, body?: Record<string, unknown>): void
+  notify(op: number, body: Record<string, unknown>): void
+  drain(op: number, body?: Record<string, unknown>): Promise<void>
+}
+
+function stand(): Stand {
+  const sock = new FakeSocket()
+  const clock = new FakeClock()
+  const peers = new FakePeers(PUBLISH_OFFER)
+  const devices = new FakeDevices()
+  const client = createClient(
+    { base: 'https://hub.example', token: 't' },
+    { connect: () => Promise.resolve(sock), peers, devices, clock },
+  )
+  const seen = new Set<string>()
+  const pending = (op: number): number[] => sock.sent.map(decode)
+    .filter((x) => x.op === op && x.kind === Kind.Request && !seen.has(`${op}:${x.pid}`))
+    .map((x) => { seen.add(`${op}:${x.pid}`); return x.pid })
+  let notifyPid = 500
+  const s: Stand = {
+    client, sock, clock, peers, devices,
+    ops: () => sock.sent.map((b) => decode(b).op),
+    reply: (op, body) => { for (const pid of pending(op)) sock.deliver(encode(Kind.Ok, op, pid, body ?? {})) },
+    notify: (op, body) => { notifyPid += 1; sock.deliver(encode(Kind.Request, op, notifyPid, body)) },
+    async drain(op, body) { for (let i = 0; i < 4; i += 1) { await tick(); s.reply(op, body); await tick() } },
+  }
+  return s
+}
+
+function joinBody(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    room_id: 'r1',
+    participants: [{ user_id: 'u1', select: false }],
+    affiliation: { sub_rooms: ['r1'], pub_room: null },
+    server_config: CFG,
+    tracks: [],
+    version: { epoch: CFG.sfu_id, seq: 1 },
+    ...over,
+  }
+}
+
+async function connected(s: Stand): Promise<void> {
+  const p = s.client.connect()
+  await tick()
+  s.reply(Op.Bind, BIND_OK)
+  await p
+}
+
+async function joined(s: Stand, over?: Record<string, unknown>, opts?: { mode: 'listen' | 'talk' }): Promise<Room> {
+  const p = s.client.join('r1', opts)
+  for (let i = 0; i < 6; i += 1) {
+    await tick()
+    s.reply(Op.Affiliation, {})
+    s.reply(Op.RoomJoin, joinBody(over))
+    s.reply(Op.Ready, {})
+  }
+  return p
+}
+
+test('connect 는 BIND 까지다', async () => {
+  const s = stand()
+  await connected(s)
+  assert.equal(s.client.session.state, 'active')
+  assert.equal(s.client.session.userId, 'u1')
+  assert.equal(s.client.session.pcMode, '2pc')
+})
+
+test('기본 입장은 청취다 — 지령대 모니터링이 기본 경로다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s)
+  const body = decode(s.sock.sent.map(decode).find((f) => f.op === Op.RoomJoin)!.pid === 0
+    ? s.sock.sent[1]! : s.sock.sent[1]!).body as Record<string, unknown>
+  assert.equal(body.select, false, 'wire 기본과 반대다')
+  assert.equal(s.client.rooms.get('r1')!.mode, 'listen')
+  assert.equal(s.client.rooms.get('r1')!.state, 'joined')
+})
+
+test('입장 응답의 초기 트랙은 join 전에 건 리스너가 받는다', async () => {
+  const s = stand()
+  await connected(s)
+  const seen: RemoteTrack[] = []
+  s.client.on('track', (_room, t) => seen.push(t))
+
+  const room = await joined(s, { tracks: [MIC_TRACK] })
+  await tick()
+  assert.equal(seen.length, 1, 'client.on(track) 을 join 전에 걸면 초기 트랙을 안 놓친다')
+  assert.equal(seen[0]!.id, 't-u2-mic')
+  assert.equal(seen[0]!.roomId, 'r1')
+  assert.equal(seen[0]!.userId, 'u2')
+  assert.equal(seen[0]!.slot, false)
+  assert.deepEqual(room.tracks.map((t) => t.id), ['t-u2-mic'])
+})
+
+test('무전 슬롯은 user_id 부재로 안다 — track_id 를 파싱하지 않는다', async () => {
+  const s = stand()
+  await connected(s)
+  const slotTrack = { ...MIC_TRACK, track_id: 'ptt-r1-audio', user_id: undefined }
+  delete (slotTrack as Record<string, unknown>).user_id
+  const room = await joined(s, { tracks: [slotTrack] })
+  await tick()
+  assert.equal(room.tracks[0]!.slot, true)
+})
+
+test('TRACK_EVENT 는 보관본 문을 지나 트랙 이벤트가 된다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const seen: string[] = []
+  room.on('track', (t) => seen.push(t.id))
+
+  s.notify(Op.TrackEvent, {
+    room_id: 'r1', type: 'add', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 2 },
+  })
+  await s.drain(Op.Ready, {})
+  assert.deepEqual(seen, ['t-u2-mic'])
+})
+
+test('통지에는 ACK 이 먼저 나간다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s)
+  const before = s.sock.sent.length
+  s.notify(Op.ParticipantEvent, { room_id: 'r1', type: 'joined', user_id: 'u9' })
+  await tick()
+  const ack = decode(s.sock.sent[before]!)
+  assert.equal(ack.kind, Kind.Ok)
+  assert.equal(ack.op, Op.ParticipantEvent)
+  assert.equal(s.sock.sent[before]!.length, 8, 'ACK 은 빈 body 다')
+})
+
+test('명단은 통지대로 는다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  s.notify(Op.ParticipantEvent, { room_id: 'r1', type: 'joined', user_id: 'u9', select: true })
+  await tick()
+  assert.deepEqual(room.participants.map((p) => [p.userId, p.mode]), [['u1', 'listen'], ['u9', 'talk']])
+
+  s.notify(Op.ParticipantEvent, { room_id: 'r1', type: 'left', user_id: 'u9' })
+  await tick()
+  assert.deepEqual(room.participants.map((p) => p.userId), ['u1'])
+})
+
+test('낡은 통지는 트랙 이벤트를 만들지 않는다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const seen: string[] = []
+  room.on('track', (t) => seen.push(t.id))
+  const before = s.ops().length
+  s.notify(Op.TrackEvent, {
+    room_id: 'r1', type: 'add', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 1 },
+  })
+  await tick()
+  assert.deepEqual(seen, [], '되감기면 그 사이 트랙이 영영 안 붙는다')
+  assert.deepEqual(room.tracks, [])
+  const after = s.sock.sent.map(decode).slice(before)
+  assert.ok(!after.some((f) => f.op === Op.Ready && f.kind === Kind.Request),
+    '낡은 것에 재협상을 걸면 붙어 있는 배관을 헛되이 흔든다')
+})
+
+test('갭은 재동기로 알린다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  let resync = 0
+  room.on('resync', () => { resync += 1 })
+  s.notify(Op.TrackEvent, {
+    room_id: 'r1', type: 'add', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 9 },
+  })
+  await tick()
+  assert.equal(resync, 1)
+})
+
+test('서버가 방에서 빼면 닫히고 목록에서 사라진다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  let cause = ''
+  room.on('forced', (e) => { cause = e.cause })
+  s.notify(Op.RoomEvent, { room_id: 'r1', type: 'kicked' })
+  await tick()
+  assert.equal(cause, 'kick')
+  assert.equal(room.state, 'closed')
+  assert.equal(s.client.rooms.has('r1'), false)
+})
+
+test('발언 방이 없으면 발행은 wire 를 안 탄다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s)
+  await assert.rejects(s.client.media.enableMicrophone(), (e: unknown) => {
+    const err = e as { category: string; code: number; name: string }
+    assert.equal(err.category, 'state')
+    assert.equal(err.code, 0, 'wire 를 안 탔으니 code 는 0 이다')
+    assert.equal(err.name, 'STATE_NO_SPEAKING_ROOM')
+    return true
+  })
+  assert.equal(s.devices.taken.length, 0, '장치도 안 잡는다')
+})
+
+test('발언 방이 있으면 마이크가 등록까지 간다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s, { affiliation: { sub_rooms: ['r1'], pub_room: 'r1' } }, { mode: 'talk' })
+
+  const p = s.client.media.enableMicrophone()
+  for (let i = 0; i < 6; i += 1) {
+    await tick()
+    s.reply(Op.PublishTracks, { tracks: [{ mid: '0', track_id: 'srv-mic' }] })
+  }
+  const track = await p
+  assert.equal(track.state, 'sending')
+  assert.equal(track.owner, 'sdk')
+  assert.equal(track.server, CFG.sfu_id)
+  assert.deepEqual(s.client.media.tracks.map((t) => t.id), [track.id])
+})
+
+test('획득 실패는 device 로 온다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s, { affiliation: { sub_rooms: ['r1'], pub_room: 'r1' } }, { mode: 'talk' })
+  s.devices.fail = 'microphone'
+  await assert.rejects(s.client.media.enableMicrophone(), (e: unknown) => {
+    const err = e as { category: string; details?: Record<string, unknown> }
+    assert.equal(err.category, 'device')
+    assert.equal(err.details?.kind, 'microphone', '어느 kind 에서 막혔는지가 프롬프트를 다시 띄울 자리다')
+    return true
+  })
+})
+
+test('close 는 방을 나가고 전송로와 소켓을 놓는다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s)
+  const p = s.client.close()
+  await s.drain(Op.RoomLeave, {})
+  await p
+  assert.ok(s.ops().includes(Op.RoomLeave),
+    '통보가 먼저다 — 로컬을 먼저 닫으면 서버는 20초 회수로만 안다')
+  assert.equal(s.client.rooms.size, 0)
+  assert.ok(s.peers.made.every((x) => x.closed))
+  assert.deepEqual(s.sock.closedWith, { code: 1000, reason: '' })
+})
+
+test('아직 안쪽이 없는 진입은 조용히 통과하지 않는다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  assert.throws(() => room.ptt, /not implemented/)
+  await assert.rejects(s.client.preview('r1'), /not implemented/)
+  await assert.rejects(s.client.listRooms(), /not implemented/)
+})

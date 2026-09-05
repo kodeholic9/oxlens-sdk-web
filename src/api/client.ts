@@ -1,0 +1,284 @@
+// author: kodeholic (powered by Claude)
+// SDK§3·§4 — 표면과 안쪽을 잇는 자리. 통지는 여기 한 루프에서 보관본으로 흘러 앱 이벤트가 된다.
+import { MediaRegistry } from '../domain/media-registry.js'
+import { Rooms, Server } from '../domain/rooms.js'
+import { Session } from '../domain/session.js'
+import { TrackEntry, Version } from '../domain/store.js'
+import { Notification, Signaling } from '../internal/signaling.js'
+import { PeerLink } from '../internal/transport/link.js'
+import { Op } from '../internal/wire.js'
+import { Clock, systemClock } from '../platform/clock.js'
+import { Devices } from '../platform/media.js'
+import { connectWebSocket, Socket } from '../platform/socket.js'
+import { browserPeers, PeerFactory } from '../platform/webrtc.js'
+import { Bus } from './emitter.js'
+import { toOxLensError } from './errors.js'
+import { MediaSurface } from './media.js'
+import { NotImplementedError } from './not-implemented.js'
+import { RoomHandle } from './room.js'
+import {
+  ClientEvents, ClientOptions, Diagnostics, JoinOptions, Media, OxLensClient,
+  Room, RoomPreview, RoomSummary, SessionInfo,
+} from './types.js'
+
+/** 앱이 갈아 끼울 수 있는 자리 — 1층이 브라우저 없이 이 결선을 잰다. */
+export interface Wiring {
+  readonly connect?: (url: string) => Promise<Socket>
+  readonly peers?: PeerFactory
+  readonly devices?: Devices
+  readonly clock?: Clock
+}
+
+export class Client extends Bus<ClientEvents> implements OxLensClient {
+  private readonly sess: Session
+  private readonly roomsDomain: Rooms
+  private readonly registry: MediaRegistry
+  private readonly surface: MediaSurface
+  private readonly handles = new Map<string, RoomHandle>()
+  private readonly clock: Clock
+  private userId: string | null = null
+  private pcMode: '1pc' | '2pc' | null = null
+  private lastClose: { code: number; name: string } | null = null
+
+  constructor(opts: ClientOptions, wiring: Wiring = {}) {
+    super()
+    this.clock = wiring.clock ?? systemClock
+    const peers = wiring.peers ?? browserPeers
+    const mode = opts.pcMode === '1pc' ? '1pc' : '2pc'
+    this.roomsDomain = new Rooms(() => this.requireSignaling(), { peers, clock: this.clock, pcMode: mode })
+    this.registry = new MediaRegistry(() => this.requireSignaling(), {
+      devices: wiring.devices ?? requireBrowserDevices(),
+      clock: this.clock,
+    })
+    this.surface = new MediaSurface(this.registry, { publishTarget: () => this.publishTarget() })
+    this.sess = new Session({
+      url: wsUrl(opts.base),
+      token: opts.token,
+      pcMode: mode,
+      connect: wiring.connect ?? connectWebSocket,
+      live: { rooms: () => this.roomsDomain.liveRooms(), publish: () => this.registry.liveTracks() },
+      clock: this.clock,
+    })
+  }
+
+  get rooms(): ReadonlyMap<string, Room> { return this.handles }
+  get media(): Media { return this.surface }
+  get speakingRoom(): Room | null {
+    const id = this.roomsDomain.speakingRoom
+    return id === null ? null : this.handles.get(id) ?? null
+  }
+  get diagnostics(): Diagnostics { throw new NotImplementedError('diagnostics') }
+
+  get session(): SessionInfo {
+    return {
+      state: this.sess.state,
+      recovering: this.sess.recovering,
+      userId: this.userId,
+      pcMode: this.pcMode,
+      quality: this.sess.state === 'active' ? 'good' : 'lost',
+      ...(this.lastClose === null ? {} : { reason: this.lastClose }),
+    }
+  }
+
+  async connect(): Promise<void> {
+    try {
+      const bind = await this.sess.connect()
+      this.userId = bind.user_id
+      this.pcMode = bind.pc_mode
+    } catch (e) {
+      throw toOxLensError(e)
+    }
+    void this.pumpNotifications()
+    void this.pumpSession()
+    this.emit('session', this.session)
+  }
+
+  setToken(token: string): void { this.sess.setToken(token) }
+
+  /** SDK§10-6 — 방마다 나가고 그 다음 전송로, 마지막이 소켓이다. */
+  async close(): Promise<void> {
+    for (const id of [...this.handles.keys()]) await this.leave(id).catch(() => {})
+    this.roomsDomain.closeAll()
+    this.sess.close()
+    this.handles.clear()
+  }
+
+  async join(roomId: string, opts: JoinOptions = {}): Promise<Room> {
+    const mode = opts.mode ?? 'listen'
+    let res
+    try {
+      res = await this.roomsDomain.join(roomId, {
+        select: mode === 'talk',
+        ...(opts.role === undefined ? {} : { role: opts.role }),
+      })
+    } catch (e) {
+      throw toOxLensError(e)
+    }
+    const handle = new RoomHandle(roomId, mode, res.server_config.sfu_id, { leave: (id) => this.leave(id) })
+    handle.state = 'joined'
+    handle.setParticipants(res.participants.map((p) => ({
+      userId: p.user_id, role: p.role ?? 255, mode: p.select === false ? 'listen' : 'talk',
+    })))
+    this.handles.set(roomId, handle)
+    // SDK§6-2 — 초기 트랙은 resolve 다음 tick 에 온다. 그 사이 await 를 두면 방 리스너는 놓친다.
+    void Promise.resolve().then(() => { this.harvest(roomId) })
+    return handle
+  }
+
+  async setSpeakingRoom(roomId: string | null): Promise<void> {
+    if (roomId === null) {
+      await this.requireSignaling().request(Op.Affiliation, { pub_deselect: true })
+      return
+    }
+    await this.requireSignaling().request(Op.Affiliation, { pub_select: roomId })
+  }
+
+  preview(_roomId: string): Promise<RoomPreview> { return Promise.reject(new NotImplementedError('preview')) }
+  listRooms(): Promise<readonly RoomSummary[]> { return Promise.reject(new NotImplementedError('listRooms')) }
+
+  private async leave(roomId: string): Promise<void> {
+    const handle = this.handles.get(roomId)
+    if (handle) handle.state = 'leaving'
+    try {
+      await this.roomsDomain.leave(roomId)
+    } finally {
+      if (handle) handle.state = 'closed'
+      this.handles.delete(roomId)
+    }
+  }
+
+  private publishTarget(): { link: PeerLink; roomId: string; sfuId: string } | null {
+    const roomId = this.roomsDomain.speakingRoom
+    if (roomId === null) return null
+    const server = this.roomsDomain.serverOf(roomId)
+    return server === undefined ? null : { link: server.link, roomId, sfuId: server.sfuId }
+  }
+
+  /** 연§7-0-2 — ACK 은 signaling 이 이미 보냈다. 여기는 내용만 다룬다. */
+  private async pumpNotifications(): Promise<void> {
+    const sig = this.sess.signaling
+    if (!sig) return
+    for await (const note of sig.notifications()) {
+      try {
+        this.route(note)
+      } catch (e) {
+        const roomId = String(note.body.room_id ?? '')
+        this.handles.get(roomId)?.emit('error', toOxLensError(e))
+      }
+    }
+  }
+
+  private route(note: Notification): void {
+    const roomId = String(note.body.room_id ?? '')
+    const handle = this.handles.get(roomId)
+    if (!handle) return
+    const version = note.body.version as Version | undefined
+
+    if (note.op === Op.ParticipantEvent) {
+      const type = note.body.type as string
+      const userId = String(note.body.user_id ?? '')
+      if (type === 'joined') {
+        const p = { userId, role: Number(note.body.role ?? 255), mode: note.body.select === false ? 'listen' as const : 'talk' as const }
+        handle.setParticipants([...handle.participants, p])
+        handle.emit('participantJoined', p)
+      } else {
+        handle.setParticipants(handle.participants.filter((p) => p.userId !== userId))
+        handle.emit('participantLeft', { userId })
+      }
+      return
+    }
+
+    if (note.op === Op.TrackEvent && version) {
+      const type = note.body.type as string
+      const tracks = (note.body.tracks ?? []) as TrackEntry[]
+      const verdict = this.roomsDomain.applyEvent(roomId, version,
+        type === 'remove' ? { kind: 'remove', tracks } : { kind: 'add', tracks })
+      if (verdict === 'stale') return
+      if (verdict === 'resync') { handle.emit('resync'); return }
+      if (type === 'remove') for (const t of tracks) handle.drop(t.track_id)
+      const server = this.roomsDomain.serverOf(roomId)
+      if (server) void this.renegotiate(server, roomId)
+      return
+    }
+
+    if (note.op === Op.TrackState && version) {
+      const tracks = (note.body.tracks ?? []) as TrackEntry[]
+      if (this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks }) !== 'ok') return
+      for (const t of tracks) handle.refresh(t)
+      return
+    }
+
+    if (note.op === Op.RoomEvent) {
+      const type = note.body.type as string
+      if (type === 'closed' || type === 'kicked') {
+        handle.state = 'closed'
+        this.handles.delete(roomId)
+        handle.emit('forced', { cause: type === 'kicked' ? 'kick' : 'room_closed' })
+      } else if (type === 'affiliation' && note.body.cause === 'media_lost') {
+        void this.rebuild(handle.server)
+      }
+    }
+  }
+
+  /** 연§9-8 — 받을 것이 바뀌면 그 서버를 다시 협상하고 새 트랙을 걷는다. */
+  private async renegotiate(server: Server, roomId: string): Promise<void> {
+    try {
+      await this.roomsDomain.renegotiate(server)
+      this.harvest(roomId)
+    } catch (e) {
+      this.handles.get(roomId)?.emit('error', toOxLensError(e))
+    }
+  }
+
+  /** 연§7-5-7 — 그 서버 방만 다시 세운다. */
+  private async rebuild(sfuId: string): Promise<void> {
+    const again = await this.roomsDomain.rebuildServer(sfuId)
+    for (const id of again) {
+      const handle = this.handles.get(id)
+      handle?.emit('rebuilding')
+      try {
+        await this.roomsDomain.join(id, { select: this.roomsDomain.speakingRoom === id })
+        handle?.emit('rebuilt')
+      } catch (e) {
+        handle?.emit('error', toOxLensError(e))
+      }
+    }
+  }
+
+  /** 보관본과 실제 도착한 미디어를 맞춰 방에 건다. 장착은 멱등이다. */
+  private harvest(roomId: string): void {
+    const server = this.roomsDomain.serverOf(roomId)
+    const handle = this.handles.get(roomId)
+    if (!server || !handle) return
+    for (const entry of server.store.tracks(roomId)) {
+      const media = server.link.mediaFor(entry.mid!)
+      if (!media) continue
+      const track = handle.adopt(entry, media as unknown as MediaStreamTrack)
+      this.emit('track', handle, track)
+    }
+  }
+
+  private async pumpSession(): Promise<void> {
+    for await (const e of this.sess.listen()) {
+      if (e.kind === 'closed') {
+        this.lastClose = { code: e.info.code, name: e.info.reason }
+        this.emit('closed', { code: e.info.code, name: e.info.reason, retryable: e.retryable })
+      }
+      this.emit('session', this.session)
+    }
+  }
+
+  private requireSignaling(): Signaling {
+    const sig = this.sess.signaling
+    if (!sig) throw new NotImplementedError('연결이 아직 없다 — connect() 먼저')
+    return sig
+  }
+}
+
+function wsUrl(base: string): string {
+  return `${base.replace(/^http/, 'ws').replace(/\/$/, '')}/ws`
+}
+
+function requireBrowserDevices(): Devices {
+  return { capture: () => Promise.reject(new NotImplementedError('브라우저 밖에서는 장치를 못 잡는다')) }
+}

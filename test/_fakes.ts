@@ -88,6 +88,7 @@ import type {
   DataChannelLike, Description, IceState, MediaTrackLike, PeerConnectionLike, PeerFactory,
   RemoteTrackArrival, SignalingState, TransceiverDirection, TransceiverLike,
 } from '../src/platform/webrtc.js'
+import { parse as parseSdp } from '../src/internal/sdp/parse.js'
 
 export interface FakeChannel extends DataChannelLike {
   readonly init: { ordered: boolean; maxRetransmits: number }
@@ -133,6 +134,19 @@ export class FakePeer implements PeerConnectionLike {
     this.calls.push(`setRemote:${desc.type}`)
     this.remoteDescription = desc
     this.signalingState = desc.type === 'offer' ? 'have-remote-offer' : 'stable'
+    // 브라우저는 받은 offer 를 보고 수신 트랜시버를 스스로 만든다(연§9-0).
+    if (desc.type === 'offer' && desc.sdp) {
+      for (const m of parseSdp(desc.sdp).sections) {
+        if (m.kind === 'application') continue
+        if (this.transceivers.some((t) => t.mid === m.mid)) continue
+        this.transceivers.push({
+          mid: m.mid,
+          direction: 'recvonly',
+          sender: { replaceTrack: () => Promise.resolve() },
+          receiver: { track: { id: `rx-${m.mid}`, kind: m.kind, stop() {} } },
+        })
+      }
+    }
     return Promise.resolve()
   }
 
