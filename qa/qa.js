@@ -49,11 +49,17 @@ const qa = {
     room.ptt.on('state', (st) => note('ptt', { room: roomId, phase: st.phase, trusted: st.trusted }))
     room.ptt.on('speaker', (e) => note('speaker', { room: roomId, userId: e.userId }))
     room.on('resync', () => note('resync', { room: roomId }))
+    room.on('message', (m) => note('message', { room: roomId, userId: m.userId, content: m.content }))
     room.on('error', (e) => note('roomError', { room: roomId, name: e.name, code: e.code }))
     return { id: room.id, mode: room.mode, server: room.server, participants: room.participants.length }
   },
 
   async leave(roomId) { await state.client.rooms.get(roomId)?.leave() },
+
+  /** 연§6-5 — 응답의 msg_id 로 내 것을 안다. 에코는 오지 않는다. */
+  async sendMessage(roomId, content) {
+    return state.client.rooms.get(roomId).sendMessage(content)
+  },
 
   async enableMic() {
     const t = await state.client.media.enableMicrophone()

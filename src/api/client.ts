@@ -141,7 +141,10 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     } catch (e) {
       throw toOxLensError(e)
     }
-    const handle = new RoomHandle(roomId, mode, res.server_config.sfu_id, { leave: (id) => this.leave(id) })
+    const handle = new RoomHandle(roomId, mode, res.server_config.sfu_id, {
+      leave: (id) => this.leave(id),
+      sendMessage: (id, content) => this.sendMessage(id, content),
+    })
     handle.state = 'joined'
     const ptt = new PttHandle(
       new FloorRoom(roomId, this.userId ?? '', 'hold'),
@@ -198,6 +201,16 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
   }
 
   /** SDK§10-6 — 게이트 닫기가 먼저다. 전송로를 놓은 뒤 sender 를 만지면 닫힌 연결에 손댄다. */
+  /** 연§6-5 — 응답의 msg_id 로 내 것을 안다(에코가 오지 않는다). */
+  private async sendMessage(roomId: string, content: string): Promise<{ msgId: string }> {
+    try {
+      const res = await this.requireSignaling().request(Op.Message, { room_id: roomId, content })
+      return { msgId: String(res.msg_id) }
+    } catch (e) {
+      throw toOxLensError(e)
+    }
+  }
+
   private async leave(roomId: string): Promise<void> {
     const handle = this.handles.get(roomId)
     if (handle) handle.state = 'leaving'
@@ -329,6 +342,12 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     }
 
     // 연§6-7 — 결말은 cause 가 아니라 목록이 정한다. sub_rooms 에 없으면 방이 닫힌 것이다.
+    // 연§6-5 — 남이 보낸 문자. 신원은 서버가 세션에서 넣은 값이다.
+    if (note.op === Op.Message) {
+      handle.emit('message', { userId: String(note.body.user_id ?? ''), content: String(note.body.content ?? '') })
+      return
+    }
+
     if (note.op === Op.RoomEvent) {
       const type = note.body.type as string
       if (type === 'sync_required') { this.queueResync(roomId); return }

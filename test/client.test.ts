@@ -622,3 +622,26 @@ test('오류 응답에 body 가 실려 와도 반영하지 않는다', async () 
   assert.deepEqual(room.tracks.map((t) => t.id), ['t-u2-mic'],
     '★상태를 안 보면 401 의 빈 방으로 화면이 꺼진다')
 })
+
+
+test('문자는 응답으로 내 것을 알고 남의 것은 통지로 온다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const seen: { userId: string; content: string }[] = []
+  room.on('message', (m) => seen.push(m))
+
+  const p = room.sendMessage('여기 u1')
+  await tick()
+  const sent = decode(s.sock.sent.at(-1)!)
+  assert.equal(sent.op, Op.Message)
+  assert.deepEqual(sent.body, { room_id: 'r1', content: '여기 u1' },
+    '★신원을 안 싣는다 — 서버가 세션에서 넣는다')
+  s.reply(Op.Message, { msg_id: 'm-1' })
+  assert.deepEqual(await p, { msgId: 'm-1' }, '자기 것은 응답으로 안다')
+  assert.deepEqual(seen, [], '★보낸 사람에게는 에코가 오지 않는다')
+
+  s.notify(Op.Message, { room_id: 'r1', user_id: 'u2', content: '들린다' })
+  await tick()
+  assert.deepEqual(seen, [{ userId: 'u2', content: '들린다' }])
+})

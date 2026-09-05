@@ -9,6 +9,7 @@ import { Participant, Ptt, RemoteTrack, Room, RoomAudio, RoomEvents, RoomState }
 
 export interface RoomHost {
   leave(roomId: string): Promise<void>
+  sendMessage(roomId: string, content: string): Promise<{ msgId: string }>
 }
 
 export class RoomHandle extends Bus<RoomEvents> implements Room {
@@ -50,8 +51,10 @@ export class RoomHandle extends Bus<RoomEvents> implements Room {
   attachPtt(handle: Ptt): void { this.pttHandle = handle }
 
   leave(): Promise<void> { return this.host.leave(this.id) }
-  sendMessage(_content: string): Promise<{ msgId: string }> {
-    return Promise.reject(new NotImplementedError('sendMessage'))
+
+  /** 연§6-5 — 보낸 사람에게는 에코가 없다. 자기 것은 응답으로 안다. */
+  sendMessage(content: string): Promise<{ msgId: string }> {
+    return this.host.sendMessage(this.id, content)
   }
 
   /** 같은 track_id 가 다시 오면 핸들은 그대로 두고 안쪽만 갈아 끼운다. 이벤트는 처음 한 번이다. */
