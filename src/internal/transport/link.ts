@@ -3,7 +3,7 @@
 // 수명은 그 서버 첫 방 입장에 나고 마지막 방 퇴장·미디어 사망·전면 재구축에 닫힌다(연§7-5).
 import { Clock, systemClock } from '../../platform/clock.js'
 import {
-  DataChannelLike, IceState, PeerConnectionLike, PeerFactory, RemoteTrackArrival,
+  DataChannelLike, IceState, PeerConnectionLike, PeerFactory, RemoteTrackArrival, TransceiverLike,
 } from '../../platform/webrtc.js'
 import { publishAnswer, Seat, subscribeOffer, unifiedOffer } from '../sdp/build.js'
 import { ServerConfig } from '../sdp/config.js'
@@ -98,6 +98,29 @@ export class PeerLink {
     this.sendVersion += 1
     await pc.setRemoteDescription({ type: 'answer', sdp: answer })
     this.confirmed = answer
+  }
+
+  /**
+   * 보낼 자리를 얻는다. ★1pc 는 m-line 을 늘리지 않는다(연§9-10-3 2-1) —
+   * 세울 때 만든 inactive 트랜시버를 되쓴다. addTransceiver 를 다시 부르면
+   * 최초 한 번만 허용된 클라 offer 경로가 다시 필요해지고 SSRC 도 새로 시작한다.
+   */
+  sender(kind: 'audio' | 'video'): TransceiverLike {
+    const pub = this.require(this.pub)
+    if (this.onePc) {
+      const spare = pub.getTransceivers().find((t) => t.direction === 'inactive' && this.kindOf(t) === kind)
+      if (spare) { spare.direction = 'sendonly'; return spare }
+    }
+    return pub.addTransceiver(kind, { direction: 'sendonly' })
+  }
+
+  /** 연§6-3 — 등록에 실을 ssrc·pt·fmtp 는 내 offer 에서 읽는다. */
+  localOffer(): string | null {
+    return this.pub?.localDescription?.sdp ?? null
+  }
+
+  private kindOf(t: TransceiverLike): string {
+    return t.receiver.track.kind
   }
 
   /** 연§9-8 — 내가 트랙을 더하거나 뺐다. 2pc 는 보내기 연결만 다시 협상한다. */

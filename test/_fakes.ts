@@ -85,7 +85,7 @@ export async function tick(times = 4): Promise<void> {
 
 // ── WebRTC 대역 ──────────────────────────────────────────────────────────────
 import type {
-  DataChannelLike, Description, IceState, PeerConnectionLike, PeerFactory,
+  DataChannelLike, Description, IceState, MediaTrackLike, PeerConnectionLike, PeerFactory,
   RemoteTrackArrival, SignalingState, TransceiverDirection, TransceiverLike,
 } from '../src/platform/webrtc.js'
 
@@ -207,5 +207,31 @@ function pump<T>(): { push(v: T): void; end(): void; iter(): AsyncIterableIterat
         wake = null
       }
     },
+  }
+}
+
+// ── 장치 대역 ────────────────────────────────────────────────────────────────
+import type { CaptureRequest, Devices } from '../src/platform/media.js'
+import { DeviceError } from '../src/platform/media.js'
+
+export class FakeDevices implements Devices {
+  readonly taken: string[] = []
+  readonly stopped: string[] = []
+  fail: string | null = null
+  private n = 0
+
+  capture(req: CaptureRequest): Promise<MediaTrackLike> {
+    if (this.fail === req.kind) {
+      return Promise.reject(new DeviceError(req.kind, 'user', `${req.kind} 를 막았다`))
+    }
+    this.n += 1
+    const id = `${req.kind}-${this.n}`
+    this.taken.push(id)
+    const self = this
+    return Promise.resolve({
+      id,
+      kind: req.kind === 'microphone' ? 'audio' : 'video',
+      stop() { self.stopped.push(id) },
+    })
   }
 }

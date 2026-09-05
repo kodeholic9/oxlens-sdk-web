@@ -99,3 +99,13 @@ export const DC_ONLY_OFFER = [
   'a=sctp-port:5000',
   'a=max-message-size:262144',
 ].join('\r\n')
+
+/** 발행용 — 브라우저가 ssrc 까지 채운 offer. 등록에 실을 값의 출처다(연§6-3). */
+export const PUBLISH_OFFER = BROWSER_OFFER
+  .replace('a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\nm=video',
+    'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\n'
+    + 'a=msid:ox-me mic\r\na=ssrc:11111 cname:me\r\nm=video')
+  .replace('a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\nm=application',
+    'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\n'
+    + 'a=msid:ox-me cam\r\na=ssrc:22222 cname:me\r\na=ssrc:22223 cname:me\r\n'
+    + 'a=ssrc-group:FID 22222 22223\r\nm=application')

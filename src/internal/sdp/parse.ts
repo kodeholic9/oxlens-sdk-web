@@ -16,6 +16,10 @@ export interface MSection {
   readonly rtx: ReadonlyMap<number, number>
   readonly extmap: ReadonlyMap<number, string>
   readonly simulcastSend: boolean
+  /** 브라우저가 정한 값 — 등록에 싣는 ssrc 는 여기서 읽는다(연§6-3). */
+  readonly ssrcs: readonly number[]
+  /** a=ssrc-group:FID 의 짝. 두 번째가 재전송 ssrc 다. */
+  readonly fid: readonly [number, number] | null
 }
 
 export interface ParsedSdp {
@@ -34,6 +38,7 @@ export function parse(sdp: string): ParsedSdp {
     kind: MediaKind; mid: string; direction: Direction; pts: number[]
     rtpmap: Map<number, string>; fmtp: Map<number, string>
     rtx: Map<number, number>; extmap: Map<number, string>; simulcastSend: boolean
+    ssrcs: number[]; fid: [number, number] | null
   }
   let cur: Draft | null = null
   const flush = (): void => { if (cur) sections.push({ ...cur }) }
@@ -48,7 +53,7 @@ export function parse(sdp: string): ParsedSdp {
         direction: 'sendrecv',
         pts: parts.slice(3).map(Number).filter((n) => Number.isFinite(n)),
         rtpmap: new Map(), fmtp: new Map(), rtx: new Map(), extmap: new Map(),
-        simulcastSend: false,
+        simulcastSend: false, ssrcs: [], fid: null,
       }
       continue
     }
@@ -80,7 +85,16 @@ export function parse(sdp: string): ParsedSdp {
     const ext = /^a=extmap:(\d+)(?:\/\w+)? (.+)$/.exec(line)
     if (ext) { cur.extmap.set(Number(ext[1]), ext[2]!.trim()); continue }
 
-    if (line.startsWith('a=simulcast:send')) { cur.simulcastSend = true }
+    if (line.startsWith('a=simulcast:send')) { cur.simulcastSend = true; continue }
+
+    const fid = /^a=ssrc-group:FID (\d+) (\d+)$/.exec(line)
+    if (fid) { cur.fid = [Number(fid[1]), Number(fid[2])]; continue }
+
+    const ssrc = /^a=ssrc:(\d+) /.exec(line)
+    if (ssrc) {
+      const n = Number(ssrc[1])
+      if (!cur.ssrcs.includes(n)) cur.ssrcs.push(n)
+    }
   }
   flush()
   return { bundle, sections }
