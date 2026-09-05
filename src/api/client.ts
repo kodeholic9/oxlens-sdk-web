@@ -353,11 +353,15 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       const type = note.body.type as string
       if (type === 'sync_required') { this.queueResync(roomId); return }
       if (type !== 'affiliation') return
-      if (version && this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [] }) === 'stale') return
-
       const affiliation = note.body.affiliation as { sub_rooms?: string[] } | undefined
       const cause = (note.body.cause ?? 'moderate') as string
+
+      // 연§4-6 견주기는 보관본 갱신을 지키는 규칙이다 — ★방을 내리는 결말에는 걸지 않는다.
+      // 그 뒤에 올 통지가 없어 되감길 것이 없고, 급사 통지(정§15-1)의 version 은 hub 가
+      // 마지막으로 통과시킨 값이라 보관값과 **같다** — 견주면 규칙 2 에 걸려 종결이 삼켜지고
+      // 방은 영영 안 닫힌다. 방을 유지하는 갱신만 견준다.
       if (affiliation?.sub_rooms?.includes(roomId) === true) {
+        if (version && this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [] }) === 'stale') return
         handle.emit('affiliation', { cause: 'moderate' })
         return
       }

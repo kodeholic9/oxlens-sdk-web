@@ -328,6 +328,41 @@ test('결말은 cause 가 아니라 목록이 정한다', async () => {
   assert.equal(s.client.rooms.has('r1'), false)
 })
 
+test('★방을 내리는 결말은 견주기에 걸리지 않는다 — 급사 통지가 삼켜지면 방이 영영 안 닫힌다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  let cause = ''
+  room.on('forced', (e) => { cause = e.cause })
+
+  // 정§15-1 — sfud 급사는 hub 가 알린다. hub 는 seq 를 발급할 수 없어(연§4-6 단일 발급자)
+  // ★마지막으로 통과시킨 값을 그대로 싣는다 — 그것은 클라 보관값과 **같다**.
+  // seq 견주기를 걸면 규칙 2(작거나 같으면 버린다)에 걸려 종결이 통째로 삼켜진다.
+  s.notify(Op.RoomEvent, {
+    type: 'affiliation', room_id: 'r1', cause: 'room_closed',
+    affiliation: { sub_rooms: [], pub_room: null }, version: { epoch: CFG.sfu_id, seq: 1 },
+  })
+  await tick()
+  assert.equal(cause, 'room_closed')
+  assert.equal(room.state, 'closed')
+  assert.equal(s.client.rooms.has('r1'), false)
+})
+
+test('★방을 유지하는 결말은 그대로 견준다 — 낡은 소속 갱신은 버린다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  let stillThere = 0
+  room.on('affiliation', () => { stillThere += 1 })
+  s.notify(Op.RoomEvent, {
+    type: 'affiliation', room_id: 'r1', cause: 'moderate',
+    affiliation: { sub_rooms: ['r1'], pub_room: null }, version: { epoch: CFG.sfu_id, seq: 1 },
+  })
+  await tick()
+  assert.equal(stillThere, 0, '보관값과 같은 seq — 되감기라 버린다')
+  assert.equal(room.state, 'joined')
+})
+
 test('sync_required 도 같은 문으로 간다', async () => {
   const s = stand()
   await connected(s)
