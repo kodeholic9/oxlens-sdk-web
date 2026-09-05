@@ -1,7 +1,7 @@
 // author: kodeholic (powered by Claude)
 // 연§9 — 서버 쪽 SDP 를 클라가 조립해 자기 브라우저에 먹인다.
 // 보내기는 answer, 받기는 offer 다(연§9-0). 방향을 뒤집으면 받기 m-line 이 0개가 된다.
-import { ServerConfig, clockRate, recvExtmap, recvFeedback, sendFeedback, supportsSend } from './config.js'
+import { ServerConfig, URI_MID, clockRate, recvExtmap, recvFeedback, sendFeedback, supportsSend } from './config.js'
 import { MSection, ParsedSdp, clockOf, codecOf, parse, rtxOf } from './parse.js'
 
 /** 연§9-3 — 후보가 하나뿐이라 우선순위는 호스트 고정값이다. */
@@ -178,11 +178,13 @@ export function subscribeOffer(seats: readonly Seat[], cfg: ServerConfig, opts: 
   const sid = opts.session ?? { id: '1', version: 1 }
   const ordered = [...seats].sort((a, b) => Number.parseInt(a.mid, 10) - Number.parseInt(b.mid, 10))
   const lines = header(ordered.map((s) => s.mid), sid)
-  for (const s of ordered) lines.push(...offerSection(s, cfg))
+  for (const s of ordered) lines.push(...offerSection(s, cfg, recvExtmap(cfg, s.kind), true))
   return `${lines.join('\r\n')}\r\n`
 }
 
-function offerSection(s: Seat, cfg: ServerConfig): string[] {
+function offerSection(
+  s: Seat, cfg: ServerConfig, extmap: readonly { id: number; uri: string }[], subscribeCreds: boolean,
+): string[] {
   if (s.pt === undefined) {
     throw new SdpError('missing_pt', `mid=${s.mid} 에 pt 가 없다 — 정책표로 채우지 않는다`)
   }
@@ -198,7 +200,7 @@ function offerSection(s: Seat, cfg: ServerConfig): string[] {
   if (!live) {
     return [
       `m=${s.kind} ${INACTIVE_PORT} UDP/TLS/RTP/SAVPF ${s.pt}`,
-      ...head(cfg, s.mid, true),
+      ...head(cfg, s.mid, subscribeCreds),
       'a=rtcp-mux',
       ...(s.kind === 'video' ? ['a=rtcp-rsize'] : []),
       'a=inactive',
@@ -215,7 +217,7 @@ function offerSection(s: Seat, cfg: ServerConfig): string[] {
   if (s.fmtp !== undefined) attrs.push(`a=fmtp:${s.pt} ${s.fmtp}`)
   for (const fb of recvFeedback(cfg, s.kind, codec)) attrs.push(`a=rtcp-fb:${s.pt} ${fb}`)
   if (withRtx) attrs.push(`a=rtpmap:${s.rtx_pt!} rtx/${hz}`, `a=fmtp:${s.rtx_pt!} apt=${s.pt}`)
-  for (const e of recvExtmap(cfg, s.kind)) attrs.push(`a=extmap:${e.id} ${e.uri}`)
+  for (const e of extmap) attrs.push(`a=extmap:${e.id} ${e.uri}`)
 
   // 연§9-5 — 무전 슬롯은 여러 사람이 돌려쓰므로 stream-id 가 하나다(입술 동기가 한 묶음).
   const stream = s.user_id === undefined
@@ -228,10 +230,91 @@ function offerSection(s: Seat, cfg: ServerConfig): string[] {
 
   return [
     `m=${s.kind} ${cfg.ice.port} UDP/TLS/RTP/SAVPF ${pts.join(' ')}`,
-    ...head(cfg, s.mid, true),
+    ...head(cfg, s.mid, subscribeCreds),
     'a=rtcp-mux',
     ...(s.kind === 'video' ? ['a=rtcp-rsize'] : []),
     'a=sendonly',
+    ...attrs,
+    ...tail(cfg),
+  ]
+}
+
+export interface UnifiedOptions extends SubscribeOptions {
+  /** 연§9-10-1 — 보내기 코덱 줄의 출처. 내 offer 가 아니라 직전 협상이 확정한 answer 다. */
+  readonly confirmed: string | ParsedSdp
+  /** 브라우저가 지금 낸 offer — m-line 구조·extmap 번호·rid 의 출처. */
+  readonly mine: string | ParsedSdp
+}
+
+/**
+ * 연§9-10-1 — 보내기와 받기가 한 BUNDLE 에 섞인 서버 offer.
+ * ICE 자격은 publish 한 벌뿐이다(규격 1). 자격이 둘이면 전송로가 안 선다.
+ */
+export function unifiedOffer(seats: readonly Seat[], cfg: ServerConfig, opts: UnifiedOptions): string {
+  const mine = typeof opts.mine === 'string' ? parse(opts.mine) : opts.mine
+  const confirmed = typeof opts.confirmed === 'string' ? parse(opts.confirmed) : opts.confirmed
+  const sid = opts.session ?? { id: '1', version: 1 }
+  const byMid = new Map(confirmed.sections.map((m) => [m.mid, m]))
+  const ordered = [...seats].sort((a, b) => Number.parseInt(a.mid, 10) - Number.parseInt(b.mid, 10))
+
+  const bundle = [...mine.sections.map((m) => m.mid), ...ordered.map((s) => s.mid)]
+  const lines = header(bundle, sid)
+  for (const m of mine.sections) lines.push(...sendSection(m, byMid.get(m.mid), cfg))
+  for (const s of ordered) lines.push(...offerSection(s, cfg, extmapOf(confirmed, s.kind), false))
+  return `${lines.join('\r\n')}\r\n`
+}
+
+/** 연§9-10-1 — 받기 확장 번호도 그 연결의 확정본을 쓴다. 한 BUNDLE 에 URI 마다 번호가 하나다. */
+function extmapOf(confirmed: ParsedSdp, kind: 'audio' | 'video'): readonly { id: number; uri: string }[] {
+  const m = confirmed.sections.find((s) => s.kind === kind)
+  if (!m) return []
+  return [...m.extmap]
+    .filter(([, uri]) => uri !== URI_MID)
+    .map(([id, uri]) => ({ id, uri }))
+}
+
+function sendSection(m: MSection, confirmed: MSection | undefined, cfg: ServerConfig): string[] {
+  if (m.kind === 'application') {
+    return [
+      `m=application ${cfg.ice.port} UDP/DTLS/SCTP webrtc-datachannel`,
+      ...head(cfg, m.mid, false),
+      'a=sendrecv',
+      'a=sctp-port:5000',
+      'a=max-message-size:65536',
+      ...tail(cfg),
+    ]
+  }
+  if (!confirmed) {
+    throw new SdpError('negotiation', `mid=${m.mid} 의 확정 answer 가 없다 — 코덱 줄의 출처가 없다`)
+  }
+
+  const attrs: string[] = []
+  const pts: number[] = []
+  for (const pt of confirmed.pts) {
+    const rtpmap = confirmed.rtpmap.get(pt)
+    if (rtpmap === undefined) continue
+    pts.push(pt)
+    attrs.push(`a=rtpmap:${pt} ${rtpmap}`)
+    const params = confirmed.fmtp.get(pt)
+    if (params !== undefined) attrs.push(`a=fmtp:${pt} ${params}`)
+    if (!confirmed.rtx.has(pt)) {
+      for (const fb of sendFeedback(cfg, m.kind, codecOf(rtpmap))) attrs.push(`a=rtcp-fb:${pt} ${fb}`)
+    }
+  }
+  if (pts.length === 0) {
+    throw new SdpError('negotiation', `mid=${m.mid} 확정 answer 에 코덱이 없다`)
+  }
+  // 연§9-10-1 — 확장 번호만 내 offer 것이다. 새로 매기면 와이어 번호가 조용히 바뀐다.
+  const declared = new Set(cfg.extmap.map((e) => e.uri))
+  for (const [id, uri] of m.extmap) if (declared.has(uri)) attrs.push(`a=extmap:${id} ${uri}`)
+  if (m.simulcastSend) attrs.push('a=rid:h recv', 'a=rid:l recv', 'a=simulcast:recv h;l')
+
+  return [
+    `m=${m.kind} ${cfg.ice.port} UDP/TLS/RTP/SAVPF ${pts.join(' ')}`,
+    ...head(cfg, m.mid, false),
+    'a=rtcp-mux',
+    ...(m.kind === 'video' ? ['a=rtcp-rsize'] : []),
+    m.direction === 'inactive' ? 'a=inactive' : 'a=recvonly',
     ...attrs,
     ...tail(cfg),
   ]

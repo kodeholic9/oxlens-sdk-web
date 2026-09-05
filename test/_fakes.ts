@@ -82,3 +82,130 @@ export async function tick(times = 4): Promise<void> {
   for (let i = 0; i < times; i += 1) await Promise.resolve()
   await new Promise<void>((r) => { setTimeout(r, 0) })
 }
+
+// ── WebRTC 대역 ──────────────────────────────────────────────────────────────
+import type {
+  DataChannelLike, Description, IceState, PeerConnectionLike, PeerFactory,
+  RemoteTrackArrival, SignalingState, TransceiverDirection, TransceiverLike,
+} from '../src/platform/webrtc.js'
+
+export interface FakeChannel extends DataChannelLike {
+  readonly init: { ordered: boolean; maxRetransmits: number }
+  readonly sent: Uint8Array[]
+  deliver(data: Uint8Array): void
+  markOpen(): void
+}
+
+export class FakePeer implements PeerConnectionLike {
+  readonly calls: string[] = []
+  readonly transceivers: TransceiverLike[] = []
+  channel: FakeChannel | null = null
+  signalingState: SignalingState = 'stable'
+  iceConnectionState: IceState = 'new'
+  localDescription: Description | null = null
+  remoteDescription: Description | null = null
+  closed = false
+
+  private readonly ice = pump<IceState>()
+  private readonly tracks = pump<RemoteTrackArrival>()
+
+  constructor(private readonly offerSdp: string, private readonly answerSdp = 'v=0\r\n') {}
+
+  createOffer(): Promise<Description> {
+    this.calls.push('createOffer')
+    return Promise.resolve({ type: 'offer', sdp: this.offerSdp })
+  }
+
+  createAnswer(): Promise<Description> {
+    this.calls.push('createAnswer')
+    return Promise.resolve({ type: 'answer', sdp: this.answerSdp })
+  }
+
+  setLocalDescription(desc?: Description): Promise<void> {
+    this.calls.push(`setLocal:${desc?.type ?? 'implicit'}`)
+    if (desc?.type === 'rollback') { this.signalingState = 'stable'; return Promise.resolve() }
+    if (desc) this.localDescription = desc
+    this.signalingState = desc?.type === 'offer' ? 'have-local-offer' : 'stable'
+    return Promise.resolve()
+  }
+
+  setRemoteDescription(desc: Description): Promise<void> {
+    this.calls.push(`setRemote:${desc.type}`)
+    this.remoteDescription = desc
+    this.signalingState = desc.type === 'offer' ? 'have-remote-offer' : 'stable'
+    return Promise.resolve()
+  }
+
+  addTransceiver(kind: 'audio' | 'video', init?: { direction: TransceiverDirection }): TransceiverLike {
+    this.calls.push(`addTransceiver:${kind}:${init?.direction ?? 'sendrecv'}`)
+    const t: TransceiverLike = {
+      mid: String(this.transceivers.length),
+      direction: init?.direction ?? 'sendrecv',
+      sender: { replaceTrack: () => Promise.resolve() },
+      receiver: { track: { id: `r${this.transceivers.length}`, kind, stop() {} } },
+    }
+    this.transceivers.push(t)
+    return t
+  }
+
+  getTransceivers(): readonly TransceiverLike[] { return this.transceivers }
+
+  createDataChannel(label: string, init: { ordered: boolean; maxRetransmits: number }): DataChannelLike {
+    this.calls.push(`createDataChannel:${label}`)
+    const msgs = pump<Uint8Array>()
+    let markOpen: () => void = () => {}
+    let markClosed: () => void = () => {}
+    const ch: FakeChannel = {
+      label, init, sent: [],
+      readyState: 'connecting',
+      send: (d) => { ch.sent.push(d) },
+      close: () => { msgs.end(); markClosed() },
+      messages: () => msgs.iter(),
+      opened: new Promise<void>((r) => { markOpen = r }),
+      closed: new Promise<void>((r) => { markClosed = r }),
+      deliver: (d) => { msgs.push(d) },
+      markOpen: () => { (ch as { readyState: string }).readyState = 'open'; markOpen() },
+    }
+    this.channel = ch
+    return ch
+  }
+
+  getStats(): Promise<ReadonlyMap<string, Record<string, unknown>>> {
+    return Promise.resolve(new Map())
+  }
+
+  close(): void { this.calls.push('close'); this.closed = true; this.ice.end(); this.tracks.end() }
+  iceStates(): AsyncIterableIterator<IceState> { return this.ice.iter() }
+  remoteTracks(): AsyncIterableIterator<RemoteTrackArrival> { return this.tracks.iter() }
+
+  /** 브라우저가 상태를 바꿨다. */
+  setIce(state: IceState): void { this.iceConnectionState = state; this.ice.push(state) }
+}
+
+export class FakePeers implements PeerFactory {
+  readonly made: FakePeer[] = []
+  constructor(private readonly offerSdp: string, private readonly answerSdp = 'v=0\r\n') {}
+  create(): PeerConnectionLike {
+    const p = new FakePeer(this.offerSdp, this.answerSdp)
+    this.made.push(p)
+    return p
+  }
+}
+
+function pump<T>(): { push(v: T): void; end(): void; iter(): AsyncIterableIterator<T> } {
+  const queue: T[] = []
+  let wake: (() => void) | null = null
+  let done = false
+  return {
+    push(v) { queue.push(v); wake?.() },
+    end() { done = true; wake?.() },
+    async *iter() {
+      for (;;) {
+        while (queue.length > 0) yield queue.shift()!
+        if (done) return
+        await new Promise<void>((r) => { wake = r })
+        wake = null
+      }
+    },
+  }
+}

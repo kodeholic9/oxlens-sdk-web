@@ -3,7 +3,7 @@
 // 둘 중 하나가 틀린 것이라 그 자리에서 드러나야 한다.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { publishAnswer, SdpError, Seat, subscribeOffer } from '../src/internal/sdp/build.js'
+import { publishAnswer, SdpError, Seat, subscribeOffer, unifiedOffer } from '../src/internal/sdp/build.js'
 import { parse } from '../src/internal/sdp/parse.js'
 import { BROWSER_OFFER, CFG, DC_ONLY_OFFER, FP } from './_sdp_fixtures.js'
 
@@ -339,4 +339,83 @@ test('안 쓰는 m-line 은 port 7 이고 msid·ssrc 가 없다', () => {
 test('ICE 자격은 연결마다 다르다', () => {
   assert.ok(subscribeOffer(SEATS, CFG).includes('a=ice-ufrag:subUf1'))
   assert.ok(publishAnswer(BROWSER_OFFER, CFG).includes('a=ice-ufrag:pubUf1'))
+})
+
+// ── 연§9-10 1pc — 2pc 가 구조로 공짜로 얻는 것을 손으로 지키는 자리 ──────────────
+
+const CONFIRMED = publishAnswer(BROWSER_OFFER, CFG)
+
+test('통합 offer 는 보내기·받기를 한 BUNDLE 에 담는다', () => {
+  const got = parse(unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, {
+    mine: BROWSER_OFFER, confirmed: CONFIRMED,
+  }))
+  assert.deepEqual(got.bundle, ['0', '1', '2', '32'])
+  assert.deepEqual(got.sections.map((m) => m.mid), ['0', '1', '2', '32'])
+})
+
+test('1pc 는 ICE 자격을 publish 한 벌만 쓴다', () => {
+  const sdp = unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, { mine: BROWSER_OFFER, confirmed: CONFIRMED })
+  assert.ok(!sdp.includes('subUf1'), '한 BUNDLE 에 자격이 둘이면 전송로가 안 선다')
+  assert.equal(sdp.split('a=ice-ufrag:pubUf1').length - 1, 4)
+})
+
+test('보내기 방향은 서버 시각으로 뒤집힌다', () => {
+  const sdp = unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, { mine: BROWSER_OFFER, confirmed: CONFIRMED })
+  assert.equal(section(sdp, 0).includes('a=recvonly'), true, '내 트랙은 서버가 받는다')
+  assert.equal(section(sdp, 3).includes('a=sendonly'), true, '남의 트랙은 서버가 보낸다')
+  assert.ok(section(sdp, 2).includes('a=sendrecv'), '데이터 채널은 양방향이다')
+})
+
+test('보내기 코덱 줄은 확정 answer 에서 온다 — 내 offer 목록이 아니다', () => {
+  const mine = BROWSER_OFFER
+    .replace('m=audio 9 UDP/TLS/RTP/SAVPF 111', 'm=audio 9 UDP/TLS/RTP/SAVPF 111 8')
+    .replace('a=rtpmap:111 opus/48000/2', 'a=rtpmap:111 opus/48000/2\r\na=rtpmap:8 PCMA/8000')
+  const audio = section(unifiedOffer([], CFG, { mine, confirmed: CONFIRMED }), 0)
+  assert.ok(!audio.some((l) => l.includes('PCMA')),
+    '내 offer 를 되비추면 answer 가 걸러냈던 코덱이 되살아난다')
+  assert.ok(audio[0]!.endsWith('SAVPF 111'))
+})
+
+test('확정 answer 가 없는 m-line 은 조용히 넘어가지 않는다', () => {
+  assert.throws(() => unifiedOffer([], CFG, { mine: BROWSER_OFFER, confirmed: 'v=0\r\n' }), (e) => {
+    assert.ok(e instanceof SdpError)
+    assert.equal(e.reason, 'negotiation')
+    return true
+  }, '2단계에서 inactive 트랜시버를 안 세우면 여기서 멈춘다')
+})
+
+test('extmap 번호는 내 offer 것이고 받기도 확정본 번호를 쓴다', () => {
+  const mine = BROWSER_OFFER.replace(
+    'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
+    'a=extmap:7 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
+  )
+  const confirmed = publishAnswer(mine, CFG)
+  const sdp = unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, { mine, confirmed })
+  assert.ok(section(sdp, 0).includes('a=extmap:7 urn:ietf:params:rtp-hdrext:ssrc-audio-level'))
+  assert.ok(section(sdp, 3).includes('a=extmap:7 urn:ietf:params:rtp-hdrext:ssrc-audio-level'),
+    '한 BUNDLE 이라 URI 마다 번호가 하나여야 한다')
+})
+
+test('1pc 받기에서도 sdes:mid 는 뺀다', () => {
+  const sdp = unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, { mine: BROWSER_OFFER, confirmed: CONFIRMED })
+  assert.ok(!section(sdp, 3).some((l) => l.includes('sdes:mid')))
+  assert.ok(section(sdp, 0).some((l) => l.includes('sdes:mid')), '보내기에는 남는다')
+})
+
+test('msid 는 따로 줄로 쓰고 ssrc 에는 cname 만 단다', () => {
+  const recv = section(unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, {
+    mine: BROWSER_OFFER, confirmed: CONFIRMED,
+  }), 3)
+  assert.ok(recv.includes('a=msid:ox-u2 t-u2-mic'))
+  assert.ok(recv.includes('a=ssrc:1001 cname:ox-sfu'))
+  assert.ok(!recv.some((l) => l.startsWith('a=ssrc:') && l.includes('msid:')),
+    '합쳐 쓰면 같은 연결의 시뮬캐스트 송신 단이 증발한다')
+})
+
+test('비게 된 보내기 m-line 은 inactive 로 남는다', () => {
+  const mine = BROWSER_OFFER.replace('a=mid:1\r\na=sendrecv', 'a=mid:1\r\na=inactive')
+  const sdp = unifiedOffer([], CFG, { mine, confirmed: publishAnswer(mine, CFG) })
+  const video = section(sdp, 1)
+  assert.ok(video.includes('a=inactive'))
+  assert.ok(parse(sdp).bundle.includes('1'), '없애면 BUNDLE 태그가 옮겨가 전송이 깨진다')
 })
