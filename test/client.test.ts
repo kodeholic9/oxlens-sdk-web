@@ -24,6 +24,7 @@ const MIC_TRACK = {
 }
 
 interface Stand {
+  live(): Promise<void>
   client: OxLensClient
   sock: FakeSocket
   clock: FakeClock
@@ -37,23 +38,40 @@ interface Stand {
 }
 
 function stand(): Stand {
+  const socks: FakeSocket[] = []
   const sock = new FakeSocket()
+  socks.push(sock)
+  let dials = 0
   const clock = new FakeClock()
   const peers = new FakePeers(PUBLISH_OFFER)
   const devices = new FakeDevices()
   const http = new FakeHttp()
   const client = createClient(
     { base: 'https://hub.example', token: 't' },
-    { connect: () => Promise.resolve(sock), peers, devices, clock, http },
+    {
+      // ★재접속마다 새 소켓이다 — 같은 것을 돌려주면 두 번째 BIND 가 닫힌 소켓에 실린다.
+      connect: () => {
+        dials += 1
+        if (dials === 1) return Promise.resolve(sock)
+        const next = new FakeSocket()
+        socks.push(next)
+        return Promise.resolve(next)
+      },
+      peers, devices, clock, http,
+    },
   )
   const seen = new Set<string>()
-  const pending = (op: number): number[] => sock.sent.map(decode)
-    .filter((x) => x.op === op && x.kind === Kind.Request && !seen.has(`${op}:${x.pid}`))
-    .map((x) => { seen.add(`${op}:${x.pid}`); return x.pid })
+  // ★소켓까지 보고 짓는다 — pid 는 소켓마다 0 부터 다시 매겨진다.
+  const live = (): FakeSocket => socks[socks.length - 1]!
+  const pending = (op: number): number[] => live().sent.map(decode)
+    .filter((x) => x.op === op && x.kind === Kind.Request && !seen.has(`${socks.length}:${op}:${x.pid}`))
+    .map((x) => { seen.add(`${socks.length}:${op}:${x.pid}`); return x.pid })
   let notifyPid = 500
   const s: Stand = {
     client, sock, clock, peers, devices, http,
-    ops: () => sock.sent.map((b) => decode(b).op),
+    // 미디어가 살아 있어야 RESUME 을 보낸다 — 죽은 방은 신고 자체를 안 한다(연§7-3-2 4).
+    live: async () => { for (const p of peers.made) p.setIce('connected'); await tick() },
+    ops: () => live().sent.map((b) => decode(b).op),
     reply: (op, body) => { for (const pid of pending(op)) sock.deliver(encode(Kind.Ok, op, pid, body ?? {})) },
     notify: (op, body) => { notifyPid += 1; sock.deliver(encode(Kind.Request, op, notifyPid, body)) },
     async drain(op, body) { for (let i = 0; i < 4; i += 1) { await tick(); s.reply(op, body); await tick() } },

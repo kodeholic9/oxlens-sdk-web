@@ -1,6 +1,7 @@
 // author: kodeholic (powered by Claude)
 // SDK§3·§4 — 표면과 안쪽을 잇는 자리. 통지는 여기 한 루프에서 보관본으로 흘러 앱 이벤트가 된다.
 import { Directory } from '../domain/directory.js'
+import { ResumeOutcome } from '../domain/session.js'
 import { FloorRoom } from '../domain/floor.js'
 import { MediaRegistry } from '../domain/media-registry.js'
 import { Rooms, Server } from '../domain/rooms.js'
@@ -454,11 +455,53 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
 
   private async pumpSession(): Promise<void> {
     for await (const e of this.sess.listen()) {
+      if (e.kind === 'caught_up') {
+        this.catchUp(e.outcome)
+        continue
+      }
       if (e.kind === 'closed') {
         this.lastClose = { code: e.info.code, name: e.info.reason }
         this.emit('closed', { code: e.info.code, name: e.info.reason, retryable: e.retryable })
       }
       this.emit('session', this.session)
+    }
+  }
+
+  /**
+   * 연§6-1 — 이어받은 방은 스냅샷으로 따라잡고, 놓친 방은 ROOM_JOIN 부터 다시 한다.
+   * ★tracks 가 그대로면 미디어를 안 건드린다 — 이어 쓰는 것이 이 op 의 목적이다.
+   */
+  private catchUp(outcome: ResumeOutcome): void {
+    for (const roomId of outcome.resumed) {
+      const shot = outcome.snapshot[roomId] as
+        | { participants?: { user_id: string; role?: number; select?: boolean }[]; tracks?: TrackEntry[]; version?: Version }
+        | undefined
+      const server = this.roomsDomain.serverOf(roomId)
+      const handle = this.handles.get(roomId)
+      if (!shot?.version || !server || !handle) continue
+      // ★version 을 견준 뒤 덮어쓴다. epoch 가 갈리면 보관본을 통째로 버린다(연§4-6).
+      const verdict = server.store.apply('resume', roomId, shot.version, {
+        kind: 'snapshot', tracks: shot.tracks ?? [],
+      })
+      handle.setParticipants((shot.participants ?? []).map((p) => ({
+        userId: p.user_id, role: p.role ?? 255, mode: p.select === false ? 'listen' : 'talk',
+      })))
+      // 받을 것이 달라졌을 때만 다시 조립한다.
+      if (verdict.accepted && (verdict.added.length > 0 || verdict.removed.length > 0)) {
+        void this.renegotiate(server, roomId)
+      }
+    }
+    for (const roomId of outcome.failed) {
+      const handle = this.handles.get(roomId)
+      handle?.emit('rebuilding')
+      void this.roomsDomain.join(roomId, { select: this.roomsDomain.speakingRoom === roomId })
+        .then(() => handle?.emit('rebuilt'))
+        .catch((e: unknown) => handle?.emit('error', toOxLensError(e)))
+    }
+    // 서버가 모르는 트랙은 remove 를 보내지 않는다 — 서버에 없다(연§6-1).
+    for (const id of outcome.publish_failed) {
+      const track = this.registry.all.find((t) => t.trackId === id)
+      if (track) { track.trackId = null; track.server = null; track.state = 'acquired' }
     }
   }
 

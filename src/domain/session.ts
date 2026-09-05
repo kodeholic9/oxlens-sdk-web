@@ -30,8 +30,17 @@ export interface LiveReport {
   publish(): readonly { readonly track_id: string; readonly kind: string }[]
 }
 
+/** 연§6-1 — 이어받은 방마다의 따라잡기 스냅샷. 끊겨 있는 동안 사라진 통지를 대신한다. */
+export interface ResumeOutcome {
+  readonly resumed: readonly string[]
+  readonly failed: readonly string[]
+  readonly publish_failed: readonly string[]
+  readonly snapshot: Readonly<Record<string, unknown>>
+}
+
 export type SessionEvent =
   | { readonly kind: 'active'; readonly bind: BindResult; readonly resumed: boolean }
+  | { readonly kind: 'caught_up'; readonly outcome: ResumeOutcome }
   | { readonly kind: 'resuming' }
   | { readonly kind: 'rebuild'; readonly why: 'no_session' | 'window_expired' | 'resume_failed' }
   | { readonly kind: 'closed'; readonly info: CloseInfo; readonly retryable: boolean }
@@ -141,7 +150,17 @@ export class Session {
       return
     }
     try {
-      await this.sig!.request(Op.Resume, { rooms, publish })
+      const res = await this.sig!.request(Op.Resume, { rooms, publish })
+      // ★응답을 반영하지 않으면 재접속이 복구가 아니라 "보냈다는 사실" 로 끝난다.
+      this.push({
+        kind: 'caught_up',
+        outcome: {
+          resumed: (res.resumed ?? []) as string[],
+          failed: (res.failed ?? []) as string[],
+          publish_failed: (res.publish_failed ?? []) as string[],
+          snapshot: (res.snapshot ?? {}) as Record<string, unknown>,
+        },
+      })
     } catch (e) {
       if (e instanceof RequestFailed) this.push({ kind: 'rebuild', why: 'resume_failed' })
       else throw e
