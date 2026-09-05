@@ -225,6 +225,20 @@ export class PeerLink {
     return [this.pub, this.sub].filter((p): p is PeerConnectionLike => p !== null)
   }
 
+  /**
+   * SDK§11-2 — 그 ssrc 에 매인 계수만 골라 준다.
+   * ★한 연결의 전량을 주면 부르는 쪽이 다시 고르게 되고, 그 고르기가 두 곳에 생긴다.
+   */
+  async statsFor(ssrc: number, direction: 'inbound' | 'outbound'): Promise<Map<string, Record<string, unknown>>> {
+    const pc = direction === 'inbound' && !this.onePc ? this.sub : this.pub
+    const out = new Map<string, Record<string, unknown>>()
+    if (!pc) return out
+    for (const [id, row] of await pc.getStats()) {
+      if (row.ssrc === ssrc) out.set(id, row)
+    }
+    return out
+  }
+
   /** 그 m-line 에 실제로 도착한 트랙. 보관본의 mid 와 여기서 맞춘다. */
   mediaFor(mid: string): MediaTrackLike | null {
     const pc = this.onePc ? this.pub : this.sub

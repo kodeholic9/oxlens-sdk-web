@@ -63,7 +63,7 @@ test('FAULT-03 floor 없이는 소리가 안 나간다 — PTT 게이트가 실�
   await p.call('release', ROOM)
   await expect.poll(() => p.call<{ phase: string }>('ptt', ROOM).then((s) => s.phase)).toBe('no_permission')
 
-  const local = await p.call<{ state: string; duplex: string }[]>('localTracks')
+  const local = await p.call<{ state: string; duplex: string; packets: number | null }[]>('localTracks')
   const half = local.find((t) => t.duplex === 'half')
   expect(half, '반이중 마이크는 등록된 채 남는다').toBeDefined()
   expect(half!.state, '★허가가 없으면 sending 이 아니다 — 등록만 되어 있다').toBe('registered')

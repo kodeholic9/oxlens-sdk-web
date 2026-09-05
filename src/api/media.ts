@@ -42,7 +42,13 @@ export class LocalTrackHandle implements LocalTrack {
     return Promise.reject(new NotImplementedError('replaceSource'))
   }
   setEncoding(): Promise<void> { return Promise.reject(new NotImplementedError('setEncoding')) }
-  getStats(): Promise<RTCStatsReport> { return Promise.reject(new NotImplementedError('track.getStats')) }
+  /** SDK§11-2 — 양단 비교의 한쪽. 시뮬캐스트면 ssrc 가 0 이라 계수가 비어 온다. */
+  async getStats(): Promise<RTCStatsReport> {
+    const ssrc = this.inner.ssrc
+    if (ssrc === null || this.inner.link === null) return new Map() as unknown as RTCStatsReport
+    const rows = await this.inner.link.statsFor(ssrc, 'outbound')
+    return rows as unknown as RTCStatsReport
+  }
   on(): this { return this }
   off(): this { return this }
   once(): this { return this }

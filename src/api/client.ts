@@ -345,7 +345,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     for (const entry of server.store.tracks(roomId)) {
       const media = server.link.mediaFor(entry.mid!)
       if (!media) continue
-      const { track, fresh } = handle.adopt(entry, media as unknown as MediaStreamTrack)
+      const { track, fresh } = handle.adopt(entry, media as unknown as MediaStreamTrack, server.link)
       if (fresh) this.emit('track', handle, track)
     }
   }

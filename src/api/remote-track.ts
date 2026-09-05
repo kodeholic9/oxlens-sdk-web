@@ -1,6 +1,7 @@
 // author: kodeholic (powered by Claude)
 // 연§4-1 · SDK§6-2 — 받는 트랙 하나. 정체는 track_id 이고 무전 슬롯은 user_id 가 없다.
 import { TrackEntry } from '../domain/store.js'
+import { PeerLink } from '../internal/transport/link.js'
 import { MediaTrackLike } from '../platform/webrtc.js'
 import { Bus } from './emitter.js'
 import { NotImplementedError } from './not-implemented.js'
@@ -10,7 +11,11 @@ export class RemoteTrackHandle extends Bus<RemoteTrackEvents> implements RemoteT
   volume = 1
   private attached = new Set<HTMLMediaElement>()
 
-  constructor(private entry: TrackEntry, readonly mediaStreamTrack: MediaStreamTrack) {
+  constructor(
+    private entry: TrackEntry,
+    readonly mediaStreamTrack: MediaStreamTrack,
+    private readonly link: PeerLink,
+  ) {
     super()
   }
 
@@ -50,7 +55,12 @@ export class RemoteTrackHandle extends Bus<RemoteTrackEvents> implements RemoteT
 
   setLayer(_req: LayerRequest): Promise<void> { return Promise.reject(new NotImplementedError('setLayer')) }
   setReceive(_opts: ReceiveOptions): Promise<void> { return Promise.reject(new NotImplementedError('setReceive')) }
-  getStats(): Promise<RTCStatsReport> { return Promise.reject(new NotImplementedError('getStats')) }
+
+  /** SDK§11-2 — 이 트랙의 수신 계수. 판정은 절대값이 아니라 두 스냅샷의 차분이다. */
+  async getStats(): Promise<RTCStatsReport> {
+    const rows = await this.link.statsFor(this.entry.ssrc, 'inbound')
+    return rows as unknown as RTCStatsReport
+  }
 }
 
 export function trackOf(media: MediaTrackLike): MediaStreamTrack {

@@ -79,10 +79,19 @@ const qa = {
     return { status: res.status, count: (await res.json()).rooms?.length ?? null }
   },
 
-  localTracks() {
-    return state.client.media.tracks.map((t) => ({
-      id: t.id, kind: t.kind, state: t.state, duplex: t.duplex, owner: t.owner, server: t.server ?? null,
-    }))
+  async localTracks() {
+    const out = []
+    for (const t of state.client.media.tracks) {
+      let packets = null
+      for (const row of (await t.getStats()).values()) {
+        if (row.type === 'outbound-rtp') packets = row.packetsSent ?? null
+      }
+      out.push({
+        id: t.id, kind: t.kind, state: t.state, duplex: t.duplex, owner: t.owner,
+        server: t.server ?? null, packets,
+      })
+    }
+    return out
   },
 
   rooms() {
@@ -93,15 +102,28 @@ const qa = {
     }))
   },
 
-  /** 트랙 단위 권위 ② — 실제로 받는가. 캐시를 피하려면 2초 이상 간격을 둔다. */
+  /**
+   * 트랙 단위 권위 ② — ★실제로 받는가. 절대값이 아니라 두 스냅샷의 차분으로 판정한다.
+   * `packets`·`bytes` 는 그 ssrc 의 inbound-rtp 에서 온다 — 트랙이 붙은 것과 흐르는 것은 다르다.
+   */
   async trackStats() {
     const out = []
     for (const [id, { track, roomId }] of state.tracks) {
       const el = state.elements.get(id)
+      let packets = null
+      let bytes = null
+      let framesDecoded = null
+      for (const row of (await track.getStats()).values()) {
+        if (row.type !== 'inbound-rtp') continue
+        packets = row.packetsReceived ?? null
+        bytes = row.bytesReceived ?? null
+        framesDecoded = row.framesDecoded ?? null
+      }
       out.push({
         id, roomId, kind: track.kind, active: track.active,
         muted: track.mediaStreamTrack.muted,
         readyState: track.mediaStreamTrack.readyState,
+        packets, bytes, framesDecoded,
         ...(el ? { videoWidth: el.videoWidth, videoHeight: el.videoHeight, currentTime: el.currentTime } : {}),
       })
     }

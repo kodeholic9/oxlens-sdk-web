@@ -1,6 +1,7 @@
 // author: kodeholic (powered by Claude)
 // SDK§4 — 방 핸들. 서버가 뺐으면 closed 이고 client.rooms 에서 빠진다.
 import { TrackEntry } from '../domain/store.js'
+import { PeerLink } from '../internal/transport/link.js'
 import { Bus } from './emitter.js'
 import { NotImplementedError } from './not-implemented.js'
 import { RemoteTrackHandle } from './remote-track.js'
@@ -54,10 +55,10 @@ export class RoomHandle extends Bus<RoomEvents> implements Room {
   }
 
   /** 같은 track_id 가 다시 오면 핸들은 그대로 두고 안쪽만 갈아 끼운다. 이벤트는 처음 한 번이다. */
-  adopt(entry: TrackEntry, media: MediaStreamTrack): { track: RemoteTrackHandle; fresh: boolean } {
+  adopt(entry: TrackEntry, media: MediaStreamTrack, link: PeerLink): { track: RemoteTrackHandle; fresh: boolean } {
     const known = this.byTrackId.get(entry.track_id)
     if (known) { known.update(entry); return { track: known, fresh: false } }
-    const handle = new RemoteTrackHandle(entry, media)
+    const handle = new RemoteTrackHandle(entry, media, link)
     this.byTrackId.set(entry.track_id, handle)
     this.emit('track', handle)
     return { track: handle, fresh: true }

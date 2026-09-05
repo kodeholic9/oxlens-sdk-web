@@ -33,6 +33,10 @@ export interface LocalTrack {
   trackId: string | null
   server: string | null
   room: string | null
+  /** 브라우저가 정한 값. 시뮬캐스트면 0 이라 계수를 못 고른다(연§6-3). */
+  ssrc: number | null
+  /** 계수를 물어볼 자리(SDK§11-2). 등록이 풀리면 없다. */
+  link: PeerLink | null
 }
 
 export class PublishError extends Error {
@@ -122,6 +126,8 @@ export class MediaRegistry {
     track.trackId = registered.find((r) => r.mid === transceiver.mid)?.track_id ?? registered[0]?.track_id ?? null
     track.server = to.sfuId
     track.room = to.roomId
+    track.link = to.link
+    track.ssrc = typeof line.entry.ssrc === 'number' && line.entry.ssrc !== 0 ? line.entry.ssrc : null
     track.state = 'registered'
     if (track.owner === 'app') track.owner = 'sdk'
 
@@ -156,6 +162,8 @@ export class MediaRegistry {
     track.trackId = null
     track.server = null
     track.room = null
+    track.link = null
+    track.ssrc = null
     if (track.transceiver) {
       await track.transceiver.sender.replaceTrack(null).catch(() => {})
       track.transceiver.direction = 'inactive'
@@ -224,6 +232,8 @@ export class MediaRegistry {
       trackId: null,
       server: null,
       room: null,
+      ssrc: null,
+      link: null,
     }
     this.tracks.set(track.id, track)
     return track
