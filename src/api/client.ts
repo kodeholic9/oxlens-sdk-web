@@ -1,9 +1,11 @@
 // author: kodeholic (powered by Claude)
 // SDK§3·§4 — 표면과 안쪽을 잇는 자리. 통지는 여기 한 루프에서 보관본으로 흘러 앱 이벤트가 된다.
+import { FloorRoom } from '../domain/floor.js'
 import { MediaRegistry } from '../domain/media-registry.js'
 import { Rooms, Server } from '../domain/rooms.js'
 import { Session } from '../domain/session.js'
 import { TrackEntry, Version } from '../domain/store.js'
+import { decode as decodeMbcp, SVC_MBCP, unframe } from '../internal/mbcp.js'
 import { Notification, Signaling } from '../internal/signaling.js'
 import { PeerLink } from '../internal/transport/link.js'
 import { Op } from '../internal/wire.js'
@@ -15,11 +17,15 @@ import { Bus } from './emitter.js'
 import { toOxLensError } from './errors.js'
 import { MediaSurface } from './media.js'
 import { NotImplementedError } from './not-implemented.js'
+import { PttHandle, roomOf } from './ptt.js'
 import { RoomHandle } from './room.js'
 import {
   ClientEvents, ClientOptions, Diagnostics, JoinOptions, Media, OxLensClient,
   Room, RoomPreview, RoomSummary, SessionInfo,
 } from './types.js'
+
+/** 연§8-4 타이머들이 도는 눈금. 재전송 간격(0.5초)보다 촘촘해야 한다. */
+const TICK_MS = 100
 
 /** 앱이 갈아 끼울 수 있는 자리 — 1층이 브라우저 없이 이 결선을 잰다. */
 export interface Wiring {
@@ -35,6 +41,9 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
   private readonly registry: MediaRegistry
   private readonly surface: MediaSurface
   private readonly handles = new Map<string, RoomHandle>()
+  private readonly ptts = new Map<string, PttHandle>()
+  private readonly pumping = new Set<string>()
+  private ticking = false
   private readonly clock: Clock
   private userId: string | null = null
   private pcMode: '1pc' | '2pc' | null = null
@@ -98,6 +107,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
   /** SDK§10-6 — 방마다 나가고 그 다음 전송로, 마지막이 소켓이다. */
   async close(): Promise<void> {
     for (const id of [...this.handles.keys()]) await this.leave(id).catch(() => {})
+    this.ptts.clear()
     this.roomsDomain.closeAll()
     this.sess.close()
     this.handles.clear()
@@ -116,6 +126,19 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     }
     const handle = new RoomHandle(roomId, mode, res.server_config.sfu_id, { leave: (id) => this.leave(id) })
     handle.state = 'joined'
+    const ptt = new PttHandle(
+      new FloorRoom(roomId, this.userId ?? '', 'hold'),
+      this.registry,
+      {
+        target: (id) => this.targetOf(id),
+        selectSpeaking: (id) => this.setSpeakingRoom(id),
+      },
+      this.clock,
+    )
+    this.ptts.set(roomId, ptt)
+    handle.attachPtt(ptt)
+    this.pumpFloor(roomId)
+    this.startTicker()
     handle.setParticipants(res.participants.map((p) => ({
       userId: p.user_id, role: p.role ?? 255, mode: p.select === false ? 'listen' : 'talk',
     })))
@@ -144,14 +167,58 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     } finally {
       if (handle) handle.state = 'closed'
       this.handles.delete(roomId)
+      this.ptts.get(roomId)?.reset('left')
+      this.ptts.delete(roomId)
     }
   }
 
   private publishTarget(): { link: PeerLink; roomId: string; sfuId: string } | null {
     const roomId = this.roomsDomain.speakingRoom
-    if (roomId === null) return null
+    return roomId === null ? null : this.targetOf(roomId)
+  }
+
+  private targetOf(roomId: string): { link: PeerLink; roomId: string; sfuId: string } | null {
     const server = this.roomsDomain.serverOf(roomId)
     return server === undefined ? null : { link: server.link, roomId, sfuId: server.sfuId }
+  }
+
+  /** 연§11 — 발언권 권위는 DC 단일이다. 방 가르기는 0x1D 가 한다. */
+  private pumpFloor(roomId: string): void {
+    const server = this.roomsDomain.serverOf(roomId)
+    if (!server) return
+    const sfuId = server.sfuId
+    if (this.pumping.has(sfuId)) return
+    const channel = server.link.channel
+    if (!channel) return
+    this.pumping.add(sfuId)
+    void (async () => {
+      for await (const raw of channel.messages()) {
+        const wrapped = unframe(raw)
+        // 연§11-6 — svc 0x02 는 확장이다. 보내지도 읽지도 않는다.
+        if (!wrapped || wrapped.svc !== SVC_MBCP) continue
+        const msg = decodeMbcp(wrapped.payload)
+        if (!msg) continue
+        const room = roomOf(msg)
+        if (room === undefined) continue
+        this.ptts.get(room)?.deliver(msg)
+      }
+      this.pumping.delete(sfuId)
+      // 연§7-7-8 — DC 가 끊겼다. 그 서버 방의 표시를 믿을 수 없다.
+      for (const [id, ptt] of this.ptts) if (this.handles.get(id)?.server === sfuId) ptt.setTrusted(false)
+    })()
+  }
+
+  /** 연§8-4 — 재전송·T132·큐 폴링이 도는 유일한 시계다. */
+  private startTicker(): void {
+    if (this.ticking) return
+    this.ticking = true
+    void (async () => {
+      while (this.ptts.size > 0) {
+        await this.clock.sleep(TICK_MS)
+        for (const ptt of this.ptts.values()) ptt.tick()
+      }
+      this.ticking = false
+    })()
   }
 
   /** 연§7-0-2 — ACK 은 signaling 이 이미 보냈다. 여기는 내용만 다룬다. */

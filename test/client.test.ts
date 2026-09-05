@@ -6,6 +6,10 @@ import { decode, encode, Kind } from '../src/internal/frame.js'
 import { Op } from '../src/internal/wire.js'
 import { createClient } from '../src/index.js'
 import { OxLensClient, RemoteTrack, Room } from '../src/api/types.js'
+import {
+  decode as decodeMbcp, encode as encodeMbcp, frame, short as mbcpShort, str as mbcpStr,
+  text as mbcpText, Tlv, Type, unframe,
+} from '../src/internal/mbcp.js'
 import { CFG, PUBLISH_OFFER } from './_sdp_fixtures.js'
 import { FakeClock, FakeDevices, FakePeers, FakeSocket, tick } from './_fakes.js'
 
@@ -276,7 +280,121 @@ test('아직 안쪽이 없는 진입은 조용히 통과하지 않는다', async
   const s = stand()
   await connected(s)
   const room = await joined(s)
-  assert.throws(() => room.ptt, /not implemented/)
+  assert.throws(() => room.ptt.keepWarm(0), /not implemented/)
+  await assert.rejects(room.ptt.enableVideo(), /not implemented/)
   await assert.rejects(s.client.preview('r1'), /not implemented/)
   await assert.rejects(s.client.listRooms(), /not implemented/)
+})
+
+test('발언권은 DC 로 오간다 — 권위가 하나다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s, { affiliation: { sub_rooms: ['r1'], pub_room: 'r1' } }, { mode: 'talk' })
+  const dc = s.peers.made[0]!.channel!
+  dc.markOpen()
+
+  const phases: string[] = []
+  room.ptt.on('state', (st) => phases.push(st.phase))
+
+  const p = room.ptt.press()
+  for (let i = 0; i < 6; i += 1) {
+    await tick()
+    s.reply(Op.Affiliation, {})
+    s.reply(Op.PublishTracks, { tracks: [{ mid: '0', track_id: 'srv-ptt' }] })
+  }
+  await p
+
+  const sent = dc.sent.map((b) => decodeMbcp(unframe(b)!.payload)!)
+  assert.deepEqual(sent.map((m) => m.type), [Type.Request], 'WS 가 아니라 DC 로 간다')
+  assert.equal(mbcpText(sent[0]!, Tlv.Room), 'r1')
+  assert.equal(room.ptt.state.phase, 'pending_request')
+
+  dc.deliver(frame(encodeMbcp({
+    type: Type.Granted, ack: true,
+    fields: [mbcpShort(Tlv.Duration, 30), mbcpStr(Tlv.Room, 'r1')],
+  })))
+  await tick()
+
+  assert.equal(room.ptt.state.phase, 'has_permission')
+  assert.equal(room.ptt.state.remainingSec, 30)
+  const ack = dc.sent.map((b) => decodeMbcp(unframe(b)!.payload)!).at(-1)!
+  assert.equal(ack.type, Type.Ack, 'A 비트가 선 것에는 반드시 ACK 이다')
+  assert.ok(phases.includes('has_permission'))
+})
+
+test('반이중 마이크는 허가 동안만 송신한다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s, { affiliation: { sub_rooms: ['r1'], pub_room: 'r1' } }, { mode: 'talk' })
+  s.peers.made[0]!.channel!.markOpen()
+
+  const p = room.ptt.press()
+  for (let i = 0; i < 6; i += 1) {
+    await tick()
+    s.reply(Op.Affiliation, {})
+    s.reply(Op.PublishTracks, { tracks: [{ mid: '0', track_id: 'srv-ptt' }] })
+  }
+  await p
+  const mic = s.client.media.tracks[0]!
+  assert.equal(mic.duplex, 'half')
+  assert.equal(mic.state, 'registered', '허가 없이 소리가 나가지 않는다')
+
+  s.peers.made[0]!.channel!.deliver(frame(encodeMbcp({
+    type: Type.Granted, ack: false, fields: [mbcpStr(Tlv.Room, 'r1')],
+  })))
+  await tick()
+  assert.equal(mic.state, 'sending')
+})
+
+test('발성 감지(svc 0x02)는 읽지 않는다 — 이 문서 밖이다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const dc = s.peers.made[0]!.channel!
+  dc.markOpen()
+
+  const seen: string[] = []
+  room.ptt.on('speaker', (e) => seen.push(String(e.userId)))
+  const taken = encodeMbcp({
+    type: Type.Taken, ack: false,
+    fields: [mbcpShort(Tlv.Seq, 1), mbcpStr(4, 'u2'), mbcpStr(Tlv.Room, 'r1')],
+  })
+  dc.deliver(frame(taken, 0x02))
+  await tick()
+  assert.deepEqual(seen, [], '확장 svc 를 MBCP 로 읽으면 안 된다')
+
+  dc.deliver(frame(taken))
+  await tick()
+  assert.deepEqual(seen, ['u2'])
+})
+
+test('방을 안 실은 프레임은 어느 방에도 안 간다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const dc = s.peers.made[0]!.channel!
+  dc.markOpen()
+
+  const seen: string[] = []
+  room.ptt.on('speaker', (e) => seen.push(String(e.userId)))
+  dc.deliver(frame(encodeMbcp({
+    type: Type.Taken, ack: false, fields: [mbcpShort(Tlv.Seq, 1), mbcpStr(4, 'u2')],
+  })))
+  await tick()
+  assert.deepEqual(seen, [], '다방에서 어느 방 것인지가 이 값 하나로 갈린다')
+})
+
+test('DC 가 끊기면 그 서버 방의 표시를 못 믿는다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const dc = s.peers.made[0]!.channel!
+  dc.markOpen()
+  await tick()
+  assert.equal(room.ptt.state.trusted, true)
+
+  dc.close()
+  await tick()
+  assert.equal(room.ptt.state.trusted, false, '미디어 지표로는 안 잡히는 자리다')
+  assert.equal(room.ptt.state.canRequest, false)
 })

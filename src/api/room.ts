@@ -39,7 +39,14 @@ export class RoomHandle extends Bus<RoomEvents> implements Room {
     }
   }
 
-  get ptt(): Ptt { throw new NotImplementedError(`room(${this.id}).ptt`) }
+  private pttHandle: Ptt | null = null
+
+  get ptt(): Ptt {
+    if (this.pttHandle === null) throw new NotImplementedError(`room(${this.id}).ptt`)
+    return this.pttHandle
+  }
+
+  attachPtt(handle: Ptt): void { this.pttHandle = handle }
 
   leave(): Promise<void> { return this.host.leave(this.id) }
   sendMessage(_content: string): Promise<{ msgId: string }> {
