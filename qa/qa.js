@@ -5,6 +5,7 @@ import { createClient } from '../dist/index.js'
 const state = {
   client: null,
   base: null,
+  token: null,
   tracks: new Map(),
   events: [],
   elements: new Map(),
@@ -21,6 +22,7 @@ function note(kind, detail) {
 const qa = {
   async connect({ base, token }) {
     state.base = base
+    state.token = token
     const client = createClient({ base, token })
     state.client = client
     client.on('track', (room, t) => {
@@ -69,6 +71,12 @@ const qa = {
   ptt(roomId) {
     const st = state.client.rooms.get(roomId)?.ptt.state
     return st ? { phase: st.phase, trusted: st.trusted, canRequest: st.canRequest, remainingSec: st.remainingSec ?? null } : null
+  },
+
+  /** 연§5-1 클라 경로를 페이지 origin 에서 그대로 부른다 — SDK 의 preview·listRooms·재동기가 탈 길이다. */
+  async httpRooms() {
+    const res = await fetch(`${state.base}/rooms`, { headers: { Authorization: `Bearer ${state.token}` } })
+    return { status: res.status, count: (await res.json()).rooms?.length ?? null }
   },
 
   localTracks() {
