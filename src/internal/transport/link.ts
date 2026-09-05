@@ -177,19 +177,28 @@ export class PeerLink {
     return { extmap: [...extmap].map(([uri, id]) => ({ id, uri })), codecs }
   }
 
-  /** SDK§10-2 — 모든 PC 가 붙어 있어야 살아 있다. 판정 시점은 부르는 쪽이 정한다. */
-  alive(now = this.clock.now()): boolean {
-    const pcs = [this.pub, this.sub].filter((p): p is PeerConnectionLike => p !== null)
+  /**
+   * SDK§10-2 — 모든 PC 가 connected·completed 여야 살아 있다.
+   * ★살아 있지 않은 것과 죽은 것은 다르다 — checking 은 아직 판정 전이라 둘 다 거짓이다.
+   */
+  alive(): boolean {
+    const pcs = this.peerList()
+    return pcs.length > 0 && pcs.every((pc) => LIVE.includes(pc.iceConnectionState))
+  }
+
+  /** SDK§10-2 — failed, 또는 disconnected 가 유예를 넘겼다. 판정 시점은 부르는 쪽이 정한다. */
+  dead(now = this.clock.now()): boolean {
+    const pcs = this.peerList()
     if (pcs.length === 0) return false
-    for (const pc of pcs) {
-      const state = pc.iceConnectionState
-      if (state === 'failed' || state === 'closed') return false
-      if (LIVE.includes(state)) continue
+    return pcs.some((pc) => {
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') return true
       const since = this.droppedAt.get(pc)
-      if (since !== undefined && now - since >= this.grace) return false
-      if (since === undefined && state !== 'new' && state !== 'checking') return false
-    }
-    return true
+      return since !== undefined && now - since >= this.grace
+    })
+  }
+
+  private peerList(): readonly PeerConnectionLike[] {
+    return [this.pub, this.sub].filter((p): p is PeerConnectionLike => p !== null)
   }
 
   /** 남의 트랙이 도착한다. 주인이 훑는다 — 콜백을 주입받지 않는다. */

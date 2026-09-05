@@ -164,7 +164,8 @@ test('SDK§10-2 — 모든 PC 가 붙어 있어야 살아 있다', async () => {
   peers.made[0]!.setIce('connected')
   peers.made[1]!.setIce('checking')
   await tick()
-  assert.equal(link.alive(), true, 'checking 은 아직 판정 전이다')
+  assert.equal(link.alive(), false, 'checking 은 아직 붙은 것이 아니다')
+  assert.equal(link.dead(), false, '그렇다고 죽은 것도 아니다 — 판정 전이다')
 
   peers.made[1]!.setIce('completed')
   await tick()
@@ -172,7 +173,8 @@ test('SDK§10-2 — 모든 PC 가 붙어 있어야 살아 있다', async () => {
 
   peers.made[1]!.setIce('failed')
   await tick()
-  assert.equal(link.alive(), false, '한쪽만 죽어도 죽은 것이다')
+  assert.equal(link.alive(), false, '한쪽만 죽어도 살아 있지 않다')
+  assert.equal(link.dead(), true)
 })
 
 test('disconnected 는 이어진 시간으로 판정한다', async () => {
@@ -183,13 +185,14 @@ test('disconnected 는 이어진 시간으로 판정한다', async () => {
 
   peers.made[0]!.setIce('disconnected')
   await tick()
-  assert.equal(link.alive(clock.now()), true, '순간 끊김을 죽음으로 보면 안 된다')
-  assert.equal(link.alive(clock.now() + DISCONNECT_GRACE_MS - 1), true)
-  assert.equal(link.alive(clock.now() + DISCONNECT_GRACE_MS), false)
+  assert.equal(link.dead(clock.now()), false, '순간 끊김을 죽음으로 보면 안 된다')
+  assert.equal(link.dead(clock.now() + DISCONNECT_GRACE_MS - 1), false)
+  assert.equal(link.dead(clock.now() + DISCONNECT_GRACE_MS), true)
 
   peers.made[0]!.setIce('connected')
   await tick()
-  assert.equal(link.alive(clock.now() + DISCONNECT_GRACE_MS * 10), true, '돌아오면 계수가 풀린다')
+  assert.equal(link.dead(clock.now() + DISCONNECT_GRACE_MS * 10), false, '돌아오면 계수가 풀린다')
+  assert.equal(link.alive(), true)
 })
 
 test('닫으면 받기부터 놓고 다시 못 쓴다', async () => {
