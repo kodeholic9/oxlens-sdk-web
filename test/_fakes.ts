@@ -249,3 +249,21 @@ export class FakeDevices implements Devices {
     })
   }
 }
+
+// ── HTTP 대역 ────────────────────────────────────────────────────────────────
+import type { Http, HttpResponse } from '../src/platform/http.js'
+
+export class FakeHttp implements Http {
+  readonly calls: { url: string; headers: Record<string, string> }[] = []
+  /** 경로 접미사 → 응답. 없으면 404 다(조용히 빈 것을 주지 않는다). */
+  readonly routes = new Map<string, unknown>()
+  status = 200
+
+  get(url: string, headers: Readonly<Record<string, string>>): Promise<HttpResponse> {
+    this.calls.push({ url, headers: { ...headers } })
+    for (const [suffix, body] of this.routes) {
+      if (url.endsWith(suffix)) return Promise.resolve({ status: this.status, body })
+    }
+    return Promise.resolve({ status: 404, body: null })
+  }
+}

@@ -73,10 +73,20 @@ const qa = {
     return st ? { phase: st.phase, trusted: st.trusted, canRequest: st.canRequest, remainingSec: st.remainingSec ?? null } : null
   },
 
-  /** 연§5-1 클라 경로를 페이지 origin 에서 그대로 부른다 — SDK 의 preview·listRooms·재동기가 탈 길이다. */
-  async httpRooms() {
-    const res = await fetch(`${state.base}/rooms`, { headers: { Authorization: `Bearer ${state.token}` } })
-    return { status: res.status, count: (await res.json()).rooms?.length ?? null }
+  /** 연§5-3 — SDK 표면으로 부른다. 페이지 origin 이 hub 와 다르면 CORS 가 없으면 막힌다. */
+  async listRooms() {
+    const rooms = await state.client.listRooms()
+    return rooms.map((r) => ({ roomId: r.roomId, userCount: r.userCount }))
+  },
+
+  /** 연§5-5 ① — 정원을 먹지 않고 명단에 오르지 않는다. */
+  async preview(roomId) {
+    const p = await state.client.preview(roomId)
+    return {
+      roomId: p.roomId, userCount: p.userCount,
+      participants: p.participants.map((x) => x.userId),
+      version: p.version,
+    }
   },
 
   async localTracks() {

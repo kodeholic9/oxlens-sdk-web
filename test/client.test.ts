@@ -11,7 +11,7 @@ import {
   text as mbcpText, Tlv, Type, unframe,
 } from '../src/internal/mbcp.js'
 import { CFG, PUBLISH_OFFER } from './_sdp_fixtures.js'
-import { FakeClock, FakeDevices, FakePeers, FakeSocket, tick } from './_fakes.js'
+import { FakeClock, FakeDevices, FakeHttp, FakePeers, FakeSocket, tick } from './_fakes.js'
 
 const BIND_OK = {
   user_id: 'u1', role: 'user', server_ver: 1,
@@ -29,6 +29,7 @@ interface Stand {
   clock: FakeClock
   peers: FakePeers
   devices: FakeDevices
+  http: FakeHttp
   ops(): number[]
   reply(op: number, body?: Record<string, unknown>): void
   notify(op: number, body: Record<string, unknown>): void
@@ -40,9 +41,10 @@ function stand(): Stand {
   const clock = new FakeClock()
   const peers = new FakePeers(PUBLISH_OFFER)
   const devices = new FakeDevices()
+  const http = new FakeHttp()
   const client = createClient(
     { base: 'https://hub.example', token: 't' },
-    { connect: () => Promise.resolve(sock), peers, devices, clock },
+    { connect: () => Promise.resolve(sock), peers, devices, clock, http },
   )
   const seen = new Set<string>()
   const pending = (op: number): number[] => sock.sent.map(decode)
@@ -50,7 +52,7 @@ function stand(): Stand {
     .map((x) => { seen.add(`${op}:${x.pid}`); return x.pid })
   let notifyPid = 500
   const s: Stand = {
-    client, sock, clock, peers, devices,
+    client, sock, clock, peers, devices, http,
     ops: () => sock.sent.map((b) => decode(b).op),
     reply: (op, body) => { for (const pid of pending(op)) sock.deliver(encode(Kind.Ok, op, pid, body ?? {})) },
     notify: (op, body) => { notifyPid += 1; sock.deliver(encode(Kind.Request, op, notifyPid, body)) },
@@ -76,6 +78,17 @@ async function connected(s: Stand): Promise<void> {
   await tick()
   s.reply(Op.Bind, BIND_OK)
   await p
+}
+
+async function joined2(s: Stand, roomId: string): Promise<Room> {
+  const p = s.client.join(roomId)
+  for (let i = 0; i < 6; i += 1) {
+    await tick()
+    s.reply(Op.Affiliation, {})
+    s.reply(Op.RoomJoin, joinBody({ room_id: roomId, affiliation: { sub_rooms: ['r1', roomId], pub_room: null } }))
+    s.reply(Op.Ready, {})
+  }
+  return p
 }
 
 async function joined(s: Stand, over?: Record<string, unknown>, opts?: { mode: 'listen' | 'talk' }): Promise<Room> {
@@ -217,17 +230,57 @@ test('낡은 통지는 트랙 이벤트를 만들지 않는다', async () => {
     '낡은 것에 재협상을 걸면 붙어 있는 배관을 헛되이 흔든다')
 })
 
-test('갭은 재동기로 알린다', async () => {
+test('갭이면 그 방을 통짜로 다시 받는다', async () => {
   const s = stand()
   await connected(s)
   const room = await joined(s)
   let resync = 0
   room.on('resync', () => { resync += 1 })
+  s.http.routes.set('/rooms/r1?tracks=1', {
+    room_id: 'r1', name: 'r1', capacity: 10, user_count: 1, created_at: 0, rec: false,
+    participants: [{ user_id: 'u1' }, { user_id: 'u2' }],
+    version: { epoch: CFG.sfu_id, seq: 9 },
+    tracks: [MIC_TRACK],
+  })
+
   s.notify(Op.TrackEvent, {
     action: 'add', room_id: 'r1', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 9 },
   })
-  await tick()
+  await s.drain(Op.Ready, {})
+
   assert.equal(resync, 1)
+  const call = s.http.calls.at(-1)!
+  assert.ok(call.url.endsWith('/rooms/r1?tracks=1'), '★tracks=1 은 명시적으로 요구한다')
+  assert.equal(call.headers['X-OxLens-Session'], 's-1',
+    '★세션 헤더로 부른다 — 그래야 입장 중인 방의 mid 가 채워진다')
+  assert.deepEqual(room.tracks.map((t) => t.id), ['t-u2-mic'], '갭 뒤 보관본이 통째로 맞춰진다')
+  assert.deepEqual(room.participants.map((p) => p.userId), ['u1', 'u2'])
+})
+
+test('여러 방이 어긋나도 조립은 한 번이다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s)
+  await joined2(s, 'r2')
+  for (const id of ['r1', 'r2']) {
+    s.http.routes.set(`/rooms/${id}?tracks=1`, {
+      room_id: id, name: id, capacity: 10, user_count: 1, created_at: 0, rec: false,
+      participants: [], version: { epoch: CFG.sfu_id, seq: 20 }, tracks: [],
+    })
+  }
+  const before = s.sock.sent.filter((b) => decode(b).op === Op.Ready).length
+
+  for (const id of ['r1', 'r2']) {
+    s.notify(Op.TrackEvent, {
+      action: 'add', room_id: id, tracks: [], version: { epoch: CFG.sfu_id, seq: 9 },
+    })
+  }
+  await s.drain(Op.Ready, {})
+
+  assert.equal(s.http.calls.filter((c) => c.url.includes('tracks=1')).length, 2)
+  const rounds = s.peers.made[1]!.calls.filter((c) => c === 'setRemote:offer').length
+  assert.equal(rounds, 3, '★입장 둘 + 재동기 한 번 — 방마다 조립하면 중간 상태로 협상이 돈다')
+  assert.ok(s.sock.sent.filter((b) => decode(b).op === Op.Ready).length > before)
 })
 
 test('결말은 cause 가 아니라 목록이 정한다', async () => {
@@ -257,17 +310,59 @@ test('결말은 cause 가 아니라 목록이 정한다', async () => {
   assert.equal(s.client.rooms.has('r1'), false)
 })
 
-test('sync_required 는 재동기로 온다', async () => {
+test('sync_required 도 같은 문으로 간다', async () => {
   const s = stand()
   await connected(s)
   const room = await joined(s)
   let resync = 0
   room.on('resync', () => { resync += 1 })
+  s.http.routes.set('/rooms/r1?tracks=1', {
+    room_id: 'r1', name: 'r1', capacity: 10, user_count: 1, created_at: 0, rec: false,
+    participants: [], version: { epoch: CFG.sfu_id, seq: 5 }, tracks: [],
+  })
   s.notify(Op.RoomEvent, {
     type: 'sync_required', room_id: 'r1', reason: 'no_media_flow', version: { epoch: CFG.sfu_id, seq: 2 },
   })
-  await tick()
+  await s.drain(Op.Ready, {})
   assert.equal(resync, 1)
+  assert.ok(s.http.calls.some((c) => c.url.includes('tracks=1')))
+})
+
+test('미리보기는 방에 안 들어가고 본다', async () => {
+  const s = stand()
+  await connected(s)
+  s.http.routes.set('/rooms/lobby', {
+    room_id: 'lobby', name: '로비', capacity: 50, user_count: 2, created_at: 17, rec: false,
+    participants: [{ user_id: 'a', select: false }, { user_id: 'b', select: true }],
+    version: { epoch: 'e', seq: 3 },
+  })
+  const p = await s.client.preview('lobby')
+  assert.equal(p.roomId, 'lobby')
+  assert.equal(p.userCount, 2)
+  assert.deepEqual(p.participants.map((x) => [x.userId, x.mode]), [['a', 'listen'], ['b', 'talk']])
+  assert.equal(s.client.rooms.size, 0, '정원을 먹지 않고 명단에 오르지 않는다')
+  assert.equal(s.http.calls.at(-1)!.headers.Authorization, 'Bearer t', '미리보기는 토큰 축이다')
+  assert.ok(!s.http.calls.at(-1)!.url.includes('tracks'), '기본은 tracks=0 이다 — payload 가 크다')
+})
+
+test('방 목록에는 참가자 이름이 없다', async () => {
+  const s = stand()
+  await connected(s)
+  s.http.routes.set('/rooms', {
+    rooms: [{ room_id: 'r1', name: 'n', capacity: 10, user_count: 3, created_at: 1, rec: true }],
+    total: 1,
+  })
+  const list = await s.client.listRooms()
+  assert.deepEqual(list, [{ roomId: 'r1', name: 'n', capacity: 10, userCount: 3, createdAt: 1, rec: true }])
+})
+
+test('HTTP 실패는 표면 오류로 온다', async () => {
+  const s = stand()
+  await connected(s)
+  await assert.rejects(s.client.preview('nope'), (e: unknown) => {
+    assert.equal((e as { category: string }).category, 'bug')
+    return true
+  })
 })
 
 test('TRACK_STATE 는 트랙 하나의 표시만 고친다', async () => {
@@ -351,8 +446,7 @@ test('아직 안쪽이 없는 진입은 조용히 통과하지 않는다', async
   const room = await joined(s)
   assert.throws(() => room.ptt.keepWarm(0), /not implemented/)
   await assert.rejects(room.ptt.enableVideo(), /not implemented/)
-  await assert.rejects(s.client.preview('r1'), /not implemented/)
-  await assert.rejects(s.client.listRooms(), /not implemented/)
+  await assert.rejects(s.client.media.switchDevice('audioinput', null), /not implemented/)
 })
 
 test('발언권은 DC 로 오간다 — 권위가 하나다', async () => {
@@ -466,4 +560,65 @@ test('DC 가 끊기면 그 서버 방의 표시를 못 믿는다', async () => {
   await tick()
   assert.equal(room.ptt.state.trusted, false, '미디어 지표로는 안 잡히는 자리다')
   assert.equal(room.ptt.state.canRequest, false)
+})
+
+test('재동기가 실패하면 보관본을 안 건드리고 앱에 알린다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s, { tracks: [MIC_TRACK] })
+  await tick()
+  const errors: string[] = []
+  room.on('error', (e) => errors.push(e.name))
+
+  // 라우트를 안 등록하면 404 다 — 조용히 빈 것을 주지 않는다.
+  s.notify(Op.RoomEvent, {
+    type: 'sync_required', room_id: 'r1', reason: 'no_media_flow', version: { epoch: CFG.sfu_id, seq: 2 },
+  })
+  await s.drain(Op.Ready, {})
+
+  assert.equal(errors.length, 1, '못 받았으면 못 받았다고 알린다')
+  assert.deepEqual(room.tracks.map((t) => t.id), ['t-u2-mic'],
+    '★못 받은 응답으로 보관본을 비우면 화면이 통째로 꺼진다')
+})
+
+test('낡은 재동기 응답은 버린다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s, { tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 7 } })
+  await tick()
+  s.http.routes.set('/rooms/r1?tracks=1', {
+    room_id: 'r1', name: 'r1', capacity: 10, user_count: 1, created_at: 0, rec: false,
+    participants: [], version: { epoch: CFG.sfu_id, seq: 3 }, tracks: [],
+  })
+  s.notify(Op.RoomEvent, {
+    type: 'sync_required', room_id: 'r1', reason: 'x', version: { epoch: CFG.sfu_id, seq: 8 },
+  })
+  await s.drain(Op.Ready, {})
+
+  assert.deepEqual(room.tracks.map((t) => t.id), ['t-u2-mic'],
+    '★계약은 하나다 — 낡은 응답은 버린다. 안 그러면 되감긴 상태로 조립한다')
+})
+
+test('오류 응답에 body 가 실려 와도 반영하지 않는다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s, { tracks: [MIC_TRACK] })
+  await tick()
+  const errors: string[] = []
+  room.on('error', (e) => errors.push(e.name))
+
+  // ★401 인데 방처럼 생긴 body 가 온다 — 상태를 안 보면 그대로 반영된다.
+  s.http.status = 401
+  s.http.routes.set('/rooms/r1?tracks=1', {
+    room_id: 'r1', name: 'r1', capacity: 10, user_count: 0, created_at: 0, rec: false,
+    participants: [], version: { epoch: CFG.sfu_id, seq: 99 }, tracks: [],
+  })
+  s.notify(Op.RoomEvent, {
+    type: 'sync_required', room_id: 'r1', reason: 'x', version: { epoch: CFG.sfu_id, seq: 2 },
+  })
+  await s.drain(Op.Ready, {})
+
+  assert.equal(errors.length, 1)
+  assert.deepEqual(room.tracks.map((t) => t.id), ['t-u2-mic'],
+    '★상태를 안 보면 401 의 빈 방으로 화면이 꺼진다')
 })

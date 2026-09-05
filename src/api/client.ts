@@ -1,5 +1,6 @@
 // author: kodeholic (powered by Claude)
 // SDK§3·§4 — 표면과 안쪽을 잇는 자리. 통지는 여기 한 루프에서 보관본으로 흘러 앱 이벤트가 된다.
+import { Directory } from '../domain/directory.js'
 import { FloorRoom } from '../domain/floor.js'
 import { MediaRegistry } from '../domain/media-registry.js'
 import { Rooms, Server } from '../domain/rooms.js'
@@ -10,6 +11,7 @@ import { Notification, Signaling } from '../internal/signaling.js'
 import { PeerLink } from '../internal/transport/link.js'
 import { Op } from '../internal/wire.js'
 import { Clock, systemClock } from '../platform/clock.js'
+import { browserHttp, Http } from '../platform/http.js'
 import { Devices } from '../platform/media.js'
 import { connectWebSocket, Socket } from '../platform/socket.js'
 import { browserPeers, PeerFactory } from '../platform/webrtc.js'
@@ -33,6 +35,7 @@ export interface Wiring {
   readonly peers?: PeerFactory
   readonly devices?: Devices
   readonly clock?: Clock
+  readonly http?: Http
 }
 
 export class Client extends Bus<ClientEvents> implements OxLensClient {
@@ -42,16 +45,22 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
   private readonly surface: MediaSurface
   private readonly handles = new Map<string, RoomHandle>()
   private readonly ptts = new Map<string, PttHandle>()
+  private readonly directory: Directory
+  /** 연§5-5 — 여러 방을 다 받은 뒤 한 번 조립한다. 방마다 조립하면 왕복이 방 수만큼 난다. */
+  private readonly desynced = new Set<string>()
+  private resyncing = false
   private readonly pumping = new Set<string>()
   private ticking = false
   private readonly clock: Clock
   private userId: string | null = null
   private pcMode: '1pc' | '2pc' | null = null
   private lastClose: { code: number; name: string } | null = null
+  private token: string
 
   constructor(opts: ClientOptions, wiring: Wiring = {}) {
     super()
     this.clock = wiring.clock ?? systemClock
+    this.token = opts.token
     const peers = wiring.peers ?? browserPeers
     const mode = opts.pcMode === '1pc' ? '1pc' : '2pc'
     this.roomsDomain = new Rooms(() => this.requireSignaling(), { peers, clock: this.clock, pcMode: mode })
@@ -60,6 +69,11 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       clock: this.clock,
     })
     this.surface = new MediaSurface(this.registry, { publishTarget: () => this.publishTarget() })
+    this.directory = new Directory(
+      opts.base.replace(/\/$/, ''),
+      { token: () => this.token, sessionId: () => this.sess.info?.session_id ?? null },
+      wiring.http ?? browserHttp,
+    )
     this.sess = new Session({
       url: wsUrl(opts.base),
       token: opts.token,
@@ -102,7 +116,10 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     this.emit('session', this.session)
   }
 
-  setToken(token: string): void { this.sess.setToken(token) }
+  setToken(token: string): void {
+    this.token = token
+    this.sess.setToken(token)
+  }
 
   /** SDK§10-6 — 방마다 나가고 그 다음 전송로, 마지막이 소켓이다. */
   async close(): Promise<void> {
@@ -156,8 +173,29 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     await this.requireSignaling().request(Op.Affiliation, { pub_select: roomId })
   }
 
-  preview(_roomId: string): Promise<RoomPreview> { return Promise.reject(new NotImplementedError('preview')) }
-  listRooms(): Promise<readonly RoomSummary[]> { return Promise.reject(new NotImplementedError('listRooms')) }
+  /** 연§5-5 ① — 정원을 먹지 않고 명단에 오르지 않는다. 들어갈지 정하려고 보는 것이다. */
+  async preview(roomId: string): Promise<RoomPreview> {
+    try {
+      const d = await this.directory.preview(roomId)
+      return {
+        ...summaryOf(d),
+        version: d.version,
+        participants: d.participants.map((p) => ({
+          userId: p.user_id, role: p.role ?? 255, mode: p.select === false ? 'listen' : 'talk',
+        })),
+      }
+    } catch (e) {
+      throw toOxLensError(e)
+    }
+  }
+
+  async listRooms(): Promise<readonly RoomSummary[]> {
+    try {
+      return (await this.directory.list()).rooms.map(summaryOf)
+    } catch (e) {
+      throw toOxLensError(e)
+    }
+  }
 
   /** SDK§10-6 — 게이트 닫기가 먼저다. 전송로를 놓은 뒤 sender 를 만지면 닫힌 연결에 손댄다. */
   private async leave(roomId: string): Promise<void> {
@@ -247,7 +285,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     if (note.op === Op.ParticipantEvent && version) {
       const verdict = this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [] })
       if (verdict === 'stale') return
-      if (verdict === 'resync') { handle.emit('resync'); return }
+      if (verdict === 'resync') { this.queueResync(roomId); return }
       const type = note.body.type as string
       const userId = String(note.body.user_id ?? '')
       if (type === 'joined') {
@@ -268,7 +306,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       const verdict = this.roomsDomain.applyEvent(roomId, version,
         action === 'remove' ? { kind: 'remove', tracks } : { kind: 'add', tracks })
       if (verdict === 'stale') return
-      if (verdict === 'resync') { handle.emit('resync'); return }
+      if (verdict === 'resync') { this.queueResync(roomId); return }
       if (action === 'remove') for (const t of tracks) handle.drop(t.track_id)
       const server = this.roomsDomain.serverOf(roomId)
       if (server) void this.renegotiate(server, roomId)
@@ -293,7 +331,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     // 연§6-7 — 결말은 cause 가 아니라 목록이 정한다. sub_rooms 에 없으면 방이 닫힌 것이다.
     if (note.op === Op.RoomEvent) {
       const type = note.body.type as string
-      if (type === 'sync_required') { handle.emit('resync'); return }
+      if (type === 'sync_required') { this.queueResync(roomId); return }
       if (type !== 'affiliation') return
       if (version && this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [] }) === 'stale') return
 
@@ -319,6 +357,51 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       this.harvest(roomId)
     } catch (e) {
       this.handles.get(roomId)?.emit('error', toOxLensError(e))
+    }
+  }
+
+  /**
+   * SDK§10-3 — 갭을 봤거나 서버가 어긋남을 알렸다. 그 방을 통짜로 다시 받는다.
+   * ★여러 방이면 다 반영한 뒤 한 번 조립한다 — 방마다 조립하면 중간 상태로 협상이 돈다.
+   * ★낡은 응답은 버린다. 계약은 그 하나이고 개수·간격은 구현 몫이다.
+   */
+  private queueResync(roomId: string): void {
+    this.desynced.add(roomId)
+    if (this.resyncing) return
+    this.resyncing = true
+    void (async () => {
+      const touched = new Map<string, Server>()
+      // ★한 판이 도는 동안 더 어긋난 방이 생기면 같은 판에서 마저 받는다 — 조립은 그 뒤 한 번이다.
+      while (this.desynced.size > 0) {
+        const rooms = [...this.desynced]
+        this.desynced.clear()
+        for (const id of rooms) await this.refill(id, touched)
+      }
+      this.resyncing = false
+      for (const [, server] of touched) {
+        const first = [...server.rooms][0]
+        if (first !== undefined) await this.renegotiate(server, first)
+      }
+    })()
+  }
+
+  private async refill(roomId: string, touched: Map<string, Server>): Promise<void> {
+    const server = this.roomsDomain.serverOf(roomId)
+    const handle = this.handles.get(roomId)
+    if (!server || !handle) return
+    try {
+      const detail = await this.directory.resync(roomId)
+      // ★낡은 응답은 버린다 — 계약은 그 하나이고 개수·간격은 구현 몫이다.
+      const verdict = server.store.apply('http', roomId, detail.version, {
+        kind: 'snapshot', tracks: detail.tracks ?? [],
+      })
+      if (verdict.accepted) touched.set(server.sfuId, server)
+      handle.setParticipants(detail.participants.map((p) => ({
+        userId: p.user_id, role: p.role ?? 255, mode: p.select === false ? 'listen' : 'talk',
+      })))
+      handle.emit('resync')
+    } catch (e) {
+      handle.emit('error', toOxLensError(e))
     }
   }
 
@@ -364,6 +447,15 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     const sig = this.sess.signaling
     if (!sig) throw new NotImplementedError('연결이 아직 없다 — connect() 먼저')
     return sig
+  }
+}
+
+function summaryOf(r: {
+  room_id: string; name: string; capacity: number; user_count: number; created_at: number; rec: boolean
+}): RoomSummary {
+  return {
+    roomId: r.room_id, name: r.name, capacity: r.capacity,
+    userCount: r.user_count, createdAt: r.created_at, rec: r.rec,
   }
 }
 
