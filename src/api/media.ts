@@ -2,12 +2,13 @@
 // SDK§6-1 — 발행 표면. 길은 둘이다: 고수준 enable*(획득+발행) · 저수준 acquire → publish.
 import { LocalTrack as InnerTrack, MediaRegistry } from '../domain/media-registry.js'
 import { Devices as DevicePort, CaptureKind } from '../platform/media.js'
+import { MediaTrackLike } from '../platform/webrtc.js'
 import { Playback } from '../domain/playback.js'
 import { DevicesHandle } from './devices.js'
 import { toOxLensError } from './errors.js'
 import { NotImplementedError } from './not-implemented.js'
 import {
-  AcquireOptions, AudioPlayback, CameraOptions, Devices, LocalTrack, Media, MicrophoneOptions,
+  AcquireOptions, AudioPlayback, CameraOptions, DeviceKind, Devices, LocalTrack, Media, MicrophoneOptions,
   OxLensError, PermissionState, ScreenOptions, TrackKind, TrackSource,
 } from './types.js'
 
@@ -40,8 +41,10 @@ export class LocalTrackHandle implements LocalTrack {
   stop(): Promise<void> { return this.reg.stop(this.inner) }
   setMuted(muted: boolean): Promise<void> { return this.reg.set(this.inner, { muted }) }
   setDuplex(duplex: 'full' | 'half'): Promise<void> { return this.reg.set(this.inner, { duplex }) }
-  replaceSource(_t: MediaStreamTrack | null): Promise<void> {
-    return Promise.reject(new NotImplementedError('replaceSource'))
+  /** SDK§6-1 — SSRC·등록·발언권을 보존한다. 반이중은 게이트가 닫혀 있으면 보관만 한다. */
+  replaceSource(t: MediaStreamTrack | null): Promise<void> {
+    return this.reg.replaceSource(this.inner, t as unknown as MediaTrackLike | null)
+      .catch((e: unknown) => { throw toOxLensError(e) })
   }
   setEncoding(): Promise<void> { return Promise.reject(new NotImplementedError('setEncoding')) }
   /** SDK§11-2 — 양단 비교의 한쪽. 시뮬캐스트면 ssrc 가 0 이라 계수가 비어 온다. */
@@ -129,7 +132,20 @@ export class MediaSurface implements Media {
     }
   }
 
-  switchDevice(): Promise<void> { return Promise.reject(new NotImplementedError('switchDevice')) }
+  /**
+   * SDK§6-4 — `deviceId` 는 명시 선택(고정), `null` 은 자동(OS 기본 추종)으로 돌아간다.
+   * ★고른 값을 `devices.preferred` 에 남긴다 — 다음 획득이 그것을 쓴다.
+   * `audiooutput` 은 잡는 장치가 아니라 ★내는 자리라 재생 쪽으로 간다.
+   */
+  async switchDevice(kind: DeviceKind, deviceId: string | null): Promise<void> {
+    this.deviceList.prefer(kind, deviceId)
+    if (kind === 'audiooutput') return this.playback.setSink(deviceId)
+    try {
+      await this.reg.switchDevice(kind === 'audioinput' ? 'microphone' : 'camera', deviceId)
+    } catch (e) {
+      throw toOxLensError(e)
+    }
+  }
 
   /** SDK§12-1 — `setSinkId` 가 있는 플랫폼만. 없으면 조용히 넘긴다(앱 실패로 만들지 않는다). */
   audioOutput(deviceId: string | null): Promise<void> { return this.playback.setSink(deviceId) }

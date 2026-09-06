@@ -499,7 +499,17 @@ test('아직 안쪽이 없는 진입은 조용히 통과하지 않는다', async
   const room = await joined(s)
   assert.throws(() => room.ptt.keepWarm(0), /not implemented/)
   await assert.rejects(room.ptt.enableVideo(), /not implemented/)
-  await assert.rejects(s.client.media.switchDevice('audioinput', null), /not implemented/)
+  await assert.rejects(s.client.media.publish({} as MediaStreamTrack, { source: 'camera' }), /not implemented/)
+})
+
+test('switchDevice 는 고른 값을 preferred 에 남긴다 — 다음 획득이 그것을 쓴다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s)
+  await s.client.media.switchDevice('audioinput', 'mic-a')
+  assert.equal(s.client.media.devices.preferred.audioinput, 'mic-a')
+  await s.client.media.switchDevice('audioinput', null)
+  assert.equal(s.client.media.devices.preferred.audioinput, undefined)
 })
 
 test('발언권은 DC 로 오간다 — 권위가 하나다', async () => {

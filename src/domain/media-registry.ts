@@ -37,6 +37,12 @@ export interface LocalTrack {
   ssrc: number | null
   /** 계수를 물어볼 자리(SDK§11-2). 등록이 풀리면 없다. */
   link: PeerLink | null
+  /**
+   * SDK§6-1 — 외부 소스가 걸린 동안 SDK 가 ★**살려 두는** 자기 장치 트랙.
+   * `replaceSource(null)` 이 여기로 돌아온다. 살려 두지 않으면 복귀에 장치를 다시 잡아야 하고
+   * 프롬프트가 또 뜬다(그 자리가 `cold` 미적용의 이유이기도 하다).
+   */
+  ownMedia: MediaTrackLike | null
 }
 
 export class PublishError extends Error {
@@ -178,6 +184,9 @@ export class MediaRegistry {
   async stop(track: LocalTrack): Promise<void> {
     await this.remove(track)
     if (track.owner !== 'external') track.media.stop()
+    // 외부 소스가 걸린 동안 살려 둔 자기 장치 트랙도 여기서 놓는다 — 안 놓으면 마이크가 켜진 채 남는다.
+    track.ownMedia?.stop()
+    track.ownMedia = null
     track.state = 'idle'
     this.tracks.delete(track.id)
   }
@@ -210,6 +219,57 @@ export class MediaRegistry {
     }
   }
 
+  /**
+   * SDK§6-1 런타임 전환 — `Encoder.source` 를 바꾸는 것이라 ★**SSRC·등록·발언권을 보존**한다
+   * (재협상도 재등록도 없다). 처리기 on/off 토글의 자리다.
+   *
+   * ★**반이중은 게이트가 닫혀 있으면 보관만 한다** — 허가 없이 소리가 나가면 안 된다(§6-5).
+   * ★외부 트랙을 넣으면 `owner:'external'`(장치 수명 관리 대상 아님), `null` 이면 살려 둔
+   * 자기 장치 트랙으로 돌아오며 `owner:'sdk'` 다.
+   */
+  async replaceSource(track: LocalTrack, media: MediaTrackLike | null): Promise<void> {
+    if (media === null) {
+      if (track.owner !== 'external' || !track.ownMedia) return
+      const own = track.ownMedia
+      track.ownMedia = null
+      if (track.media !== own) track.media.stop()
+      track.media = own
+      track.owner = 'sdk'
+    } else {
+      if (track.media === media) return
+      if (track.owner !== 'external') track.ownMedia = track.media
+      else track.media.stop()
+      track.media = media
+      track.owner = 'external'
+    }
+    ;(track.media as { enabled?: boolean }).enabled = !track.muted
+    const closed = track.duplex === 'half' && track.state !== 'sending'
+    if (!track.transceiver || closed) return
+    await track.transceiver.sender.replaceTrack(track.media)
+  }
+
+  /**
+   * SDK§6-4 장치 전환 — ★**대상은 `owner:'sdk'` 트랙만**이다.
+   *
+   * `app` 은 앱 것이고 `external` 은 등록·전송만 하는 소스라 ★**무시가 아니라 대상이 아니다**
+   * (SDK 가 남의 장치 수명을 만지지 않는다). 새 장치를 잡은 **뒤에** 옛 것을 놓는다 —
+   * 먼저 놓으면 실패했을 때 소리가 끊긴 채 남는다.
+   * ★`replaceSource` 와 달리 소유권은 `sdk` 그대로다(장치를 바꾼 것이지 소스를 넘긴 게 아니다).
+   */
+  async switchDevice(kind: CaptureKind, deviceId: string | null): Promise<void> {
+    const want = kind === 'microphone' ? 'audio' : 'video'
+    for (const track of this.all) {
+      if (track.owner !== 'sdk' || track.kind !== want) continue
+      const media = await this.opts.devices.capture({ kind, ...(deviceId === null ? {} : { deviceId }) })
+      const old = track.media
+      track.media = media
+      ;(media as { enabled?: boolean }).enabled = !track.muted
+      const closed = track.duplex === 'half' && track.state !== 'sending'
+      if (track.transceiver && !closed) await track.transceiver.sender.replaceTrack(media)
+      old.stop()
+    }
+  }
+
   /** SDK§6-5 — 반이중 게이트. 발언권이 열고 닫는다. */
   async gate(track: LocalTrack, open: boolean): Promise<void> {
     if (track.duplex !== 'half' || !track.transceiver) return
@@ -225,6 +285,7 @@ export class MediaRegistry {
       source: SOURCE_OF[kind],
       state: 'acquired',
       owner,
+      ownMedia: null,
       duplex: 'full',
       muted: false,
       media,
