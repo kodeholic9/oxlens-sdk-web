@@ -225,14 +225,33 @@ function pump<T>(): { push(v: T): void; end(): void; iter(): AsyncIterableIterat
 }
 
 // ── 장치 대역 ────────────────────────────────────────────────────────────────
-import type { CaptureRequest, Devices } from '../src/platform/media.js'
+import type { CaptureRequest, Devices, PlatformDeviceInfo, PlatformPermission } from '../src/platform/media.js'
 import { DeviceError } from '../src/platform/media.js'
 
 export class FakeDevices implements Devices {
   readonly taken: string[] = []
   readonly stopped: string[] = []
   fail: string | null = null
+  list: PlatformDeviceInfo[] = []
+  perm: Record<string, PlatformPermission> = {}
   private n = 0
+  private watchers = new Set<() => void>()
+
+  enumerate(): Promise<ReadonlyArray<PlatformDeviceInfo>> { return Promise.resolve(this.list) }
+
+  onChange(fn: () => void): () => void {
+    this.watchers.add(fn)
+    return () => this.watchers.delete(fn)
+  }
+
+  permission(name: 'microphone' | 'camera'): Promise<PlatformPermission> {
+    return Promise.resolve(this.perm[name] ?? 'unknown')
+  }
+
+  plug(list: PlatformDeviceInfo[]): void {
+    this.list = list
+    for (const fn of this.watchers) fn()
+  }
 
   capture(req: CaptureRequest): Promise<MediaTrackLike> {
     if (this.fail === req.kind) {

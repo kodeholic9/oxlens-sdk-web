@@ -1,12 +1,13 @@
 // author: kodeholic (powered by Claude)
 // SDK§6-1 — 발행 표면. 길은 둘이다: 고수준 enable*(획득+발행) · 저수준 acquire → publish.
 import { LocalTrack as InnerTrack, MediaRegistry } from '../domain/media-registry.js'
-import { CaptureKind } from '../platform/media.js'
+import { Devices as DevicePort, CaptureKind } from '../platform/media.js'
+import { DevicesHandle } from './devices.js'
 import { toOxLensError } from './errors.js'
 import { NotImplementedError } from './not-implemented.js'
 import {
   AcquireOptions, AudioPlayback, CameraOptions, Devices, LocalTrack, Media, MicrophoneOptions,
-  OxLensError, ScreenOptions, TrackKind, TrackSource,
+  OxLensError, PermissionState, ScreenOptions, TrackKind, TrackSource,
 } from './types.js'
 
 /** 발언 방이 없으면 wire 를 안 탄다 — code 0 이다(SDK§6-1). */
@@ -57,7 +58,19 @@ export class LocalTrackHandle implements LocalTrack {
 export class MediaSurface implements Media {
   private readonly handles = new Map<InnerTrack, LocalTrackHandle>()
 
-  constructor(private readonly reg: MediaRegistry, private readonly host: MediaHost) {}
+  private readonly deviceList: DevicesHandle
+
+  constructor(
+    private readonly reg: MediaRegistry,
+    private readonly host: MediaHost,
+    port: DevicePort,
+  ) {
+    this.deviceList = new DevicesHandle(port)
+    this.deviceList.watch()
+    this.port = port
+  }
+
+  private readonly port: DevicePort
 
   get tracks(): readonly LocalTrack[] { return this.reg.all.map((t) => this.wrap(t)) }
 
@@ -103,11 +116,25 @@ export class MediaSurface implements Media {
     return this.wrap(got!)
   }
 
-  get devices(): Devices { throw new NotImplementedError('media.devices') }
+  get devices(): Devices { return this.deviceList }
   get audio(): AudioPlayback { throw new NotImplementedError('media.audio') }
   switchDevice(): Promise<void> { return Promise.reject(new NotImplementedError('switchDevice')) }
   audioOutput(): Promise<void> { return Promise.reject(new NotImplementedError('audioOutput')) }
-  permissions(): Promise<never> { return Promise.reject(new NotImplementedError('permissions')) }
+
+  /**
+   * SDK§2-3 — 브라우저가 모르면 `unknown` 이다. ★모른다고 `prompt` 로 지어내지 않는다:
+   * 앱이 그 값을 보고 프롬프트를 띄울지 정하는데, 지어낸 값은 헛 프롬프트를 만든다.
+   */
+  async permissions(): Promise<{ readonly microphone: PermissionState; readonly camera: PermissionState }> {
+    const [microphone, camera] = await Promise.all([
+      this.port.permission('microphone'),
+      this.port.permission('camera'),
+    ])
+    return { microphone, camera }
+  }
+
+  /** 방을 닫을 때 장치 감시를 놓는다 — 주인이 쥐고 주인이 놓는다. */
+  close(): void { this.deviceList.close() }
 
   private wrap(inner: InnerTrack): LocalTrackHandle {
     let h = this.handles.get(inner)

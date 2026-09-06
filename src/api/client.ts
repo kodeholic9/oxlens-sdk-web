@@ -42,6 +42,7 @@ export interface Wiring {
 export class Client extends Bus<ClientEvents> implements OxLensClient {
   private readonly sess: Session
   private readonly roomsDomain: Rooms
+  private readonly devicePort: Devices
   private readonly registry: MediaRegistry
   private readonly surface: MediaSurface
   private readonly handles = new Map<string, RoomHandle>()
@@ -65,11 +66,12 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     const peers = wiring.peers ?? browserPeers
     const mode = opts.pcMode === '1pc' ? '1pc' : '2pc'
     this.roomsDomain = new Rooms(() => this.requireSignaling(), { peers, clock: this.clock, pcMode: mode })
+    this.devicePort = wiring.devices ?? requireBrowserDevices()
     this.registry = new MediaRegistry(() => this.requireSignaling(), {
-      devices: wiring.devices ?? requireBrowserDevices(),
+      devices: this.devicePort,
       clock: this.clock,
     })
-    this.surface = new MediaSurface(this.registry, { publishTarget: () => this.publishTarget() })
+    this.surface = new MediaSurface(this.registry, { publishTarget: () => this.publishTarget() }, this.devicePort)
     this.directory = new Directory(
       opts.base.replace(/\/$/, ''),
       { token: () => this.token, sessionId: () => this.sess.info?.session_id ?? null },
@@ -540,5 +542,10 @@ function wsUrl(base: string): string {
 }
 
 function requireBrowserDevices(): Devices {
-  return { capture: () => Promise.reject(new NotImplementedError('브라우저 밖에서는 장치를 못 잡는다')) }
+  return {
+    capture: () => Promise.reject(new NotImplementedError('브라우저 밖에서는 장치를 못 잡는다')),
+    enumerate: () => Promise.resolve([]),
+    onChange: () => () => {},
+    permission: () => Promise.resolve('unknown' as const),
+  }
 }
