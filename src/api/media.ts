@@ -183,6 +183,9 @@ export class MediaSurface implements Media {
   /** 방을 닫을 때 장치 감시를 놓는다 — 주인이 쥐고 주인이 놓는다. */
   close(): void { this.deviceList.close() }
 
+  /** 같은 안쪽 트랙은 늘 같은 핸들이다 — 두 핸들로 갈리면 앱이 어느 쪽을 믿을지 모른다. */
+  handleOf(inner: InnerTrack): LocalTrackHandle { return this.wrap(inner) }
+
   private wrap(inner: InnerTrack): LocalTrackHandle {
     let h = this.handles.get(inner)
     if (!h) { h = new LocalTrackHandle(inner, this.reg); this.handles.set(inner, h) }

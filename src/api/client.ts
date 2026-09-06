@@ -174,6 +174,8 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       {
         target: (id) => this.targetOf(id),
         selectSpeaking: (id) => this.setSpeakingRoom(id),
+        slotVideoCodec: (id) => this.slotVideoCodec(id),
+        wrap: (inner) => this.surface.handleOf(inner),
       },
       this.clock,
     )
@@ -234,6 +236,20 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
   }
 
   /** 연§6-3 `SUBSCRIBE_LAYER` — 응답은 빈 body 다. 대상별 실패는 실패가 아니다(조용히 건너뛴다). */
+  /**
+   * 연§6-3 — ★"그 방의 무전 코덱" 은 슬롯 트랙이 알려준다. 보관본에서 읽는다.
+   * ★없으면 `null` 이고, 그때는 첫 화자가 정하는 자리다(추론하지 않는다).
+   */
+  private slotVideoCodec(roomId: string): { codec: string; fmtp?: string } | null {
+    const server = this.roomsDomain.serverOf(roomId)
+    if (!server) return null
+    for (const t of server.store.tracks(roomId)) {
+      if (t.kind !== 'video' || t.duplex !== 'half' || t.codec === undefined) continue
+      return { codec: t.codec, ...(t.fmtp === undefined ? {} : { fmtp: t.fmtp }) }
+    }
+    return null
+  }
+
   /** SDK§11-1 — 보관본 + 그 서버의 전송로. 계수는 `PeerLink` 가 ssrc 로 골라 준다. */
   private subscribedTracks(): Array<{ entry: TrackEntry; link: PeerLink | null }> {
     const out: Array<{ entry: TrackEntry; link: PeerLink | null }> = []

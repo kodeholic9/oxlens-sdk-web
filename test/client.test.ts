@@ -493,11 +493,14 @@ test('close 는 방을 나가고 전송로와 소켓을 놓는다', async () => 
   assert.deepEqual(s.sock.closedWith, { code: 1000, reason: '' })
 })
 
-test('아직 안쪽이 없는 진입은 조용히 통과하지 않는다', async () => {
+test('설계상 막은 진입은 조용히 통과하지 않는다 — 오디오는 SDK 가 낸다', async () => {
   const s = stand()
   await connected(s)
-  const room = await joined(s)
-  await assert.rejects(room.ptt.enableVideo(), /not implemented/)
+  const room = await joined(s, { tracks: [MIC_TRACK] })
+  await tick()
+  const track = room.tracks.find((t) => t.kind === 'audio')!
+  // ★미구현이 아니라 **설계**다 — 앱이 <audio> 를 열 개 여는 길을 막았다(SDK§6-2).
+  assert.throws(() => track.attach({} as HTMLMediaElement), /not implemented/)
 })
 
 test('진단은 못 모은 칸을 지어내지 않는다 — state 만 늘 있다', async () => {

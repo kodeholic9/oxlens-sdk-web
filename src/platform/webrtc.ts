@@ -45,6 +45,12 @@ export interface TransceiverLike {
   direction: TransceiverDirection
   readonly sender: SenderLike
   readonly receiver: { readonly track: MediaTrackLike }
+  /**
+   * 연§6-3 — 무전 video 는 그 방 슬롯 코덱과 같아야 한다. ★**보내기 전에 맞춘다**
+   * (찍어 보고 `1006` 으로 배우지 않는다). offer 의 코덱 줄을 정하는 유일한 자리다.
+   * 브라우저가 안 주면 없다 — 그때는 서버 순서를 따른다.
+   */
+  setCodecPreferences?(codecs: ReadonlyArray<{ mimeType: string; sdpFmtpLine?: string }>): void
 }
 
 /** 연§3-3 — 이름은 "unreliable" 하나, 순서 보장을 끄고 재전송하지 않는다. */
@@ -147,7 +153,15 @@ function wrap(pc: RTCPeerConnection): PeerConnectionLike {
     createAnswer: () => pc.createAnswer() as Promise<Description>,
     setLocalDescription: (desc) => pc.setLocalDescription(desc as RTCLocalSessionDescriptionInit),
     setRemoteDescription: (desc) => pc.setRemoteDescription(desc as RTCSessionDescriptionInit),
-    addTransceiver: (kind, init) => pc.addTransceiver(kind, init as RTCRtpTransceiverInit) as TransceiverLike,
+    addTransceiver: (kind, init) => {
+      const t = pc.addTransceiver(kind, init as RTCRtpTransceiverInit)
+      const wrapped = t as unknown as TransceiverLike & {
+        setCodecPreferences?: (c: ReadonlyArray<{ mimeType: string; sdpFmtpLine?: string }>) => void
+      }
+      // ★`RTCRtpSender.getCapabilities` 가 없는 판이면 선호를 못 정한다 — 없는 대로 둔다.
+      if (typeof t.setCodecPreferences !== 'function') delete wrapped.setCodecPreferences
+      return wrapped as TransceiverLike
+    },
     getTransceivers: () => pc.getTransceivers() as readonly TransceiverLike[],
     createDataChannel: (label, init) => wrapChannel(pc.createDataChannel(label, init)),
     getStats: async () => {

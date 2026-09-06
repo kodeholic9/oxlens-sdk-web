@@ -106,13 +106,21 @@ export class PeerLink {
    * 세울 때 만든 inactive 트랜시버를 되쓴다. addTransceiver 를 다시 부르면
    * 최초 한 번만 허용된 클라 offer 경로가 다시 필요해지고 SSRC 도 새로 시작한다.
    */
-  sender(kind: 'audio' | 'video'): TransceiverLike {
+  /**
+   * 보낼 자리 하나. ★`prefer` 를 주면 그 코덱을 offer 의 첫 줄로 세운다(연§6-3 무전 video).
+   *
+   * ★`1pc` 의 예비 트랜시버를 재사용할 때는 선호를 못 정한다 — 이미 협상된 m-line 이라
+   * 코덱 줄이 서 있다. 그때는 서버가 `1006` 으로 가른다(찍어 보는 것이 아니라 못 맞추는 것이다).
+   */
+  sender(kind: 'audio' | 'video', prefer?: { codec: string; fmtp?: string }): TransceiverLike {
     const pub = this.require(this.pub)
     if (this.onePc) {
       const spare = pub.getTransceivers().find((t) => t.direction === 'inactive' && this.kindOf(t) === kind)
       if (spare) { spare.direction = 'sendonly'; return spare }
     }
-    return pub.addTransceiver(kind, { direction: 'sendonly' })
+    const t = pub.addTransceiver(kind, { direction: 'sendonly' })
+    if (prefer !== undefined) applyPreference(t, kind, prefer)
+    return t
   }
 
   /** 연§6-3 — 등록에 실을 ssrc·pt·fmtp 는 내 offer 에서 읽는다. */
@@ -292,4 +300,38 @@ export class PeerLink {
       }
     })()
   }
+}
+
+/**
+ * 연§6-3 — 그 코덱을 맨 앞으로 민다. ★**빼지 않고 순서만 바꾼다** — 빼면 협상이 통째로 실패할 수
+ * 있고, 서버는 첫 줄을 쓴다. `fmtp` 까지 맞는 것이 있으면 그것을 먼저 세운다(H264 는 프로파일에서 갈린다).
+ * 브라우저가 능력표나 선호 설정을 안 주면 ★조용히 넘긴다 — 그때는 서버 순서다.
+ */
+function applyPreference(
+  t: TransceiverLike,
+  kind: 'audio' | 'video',
+  prefer: { codec: string; fmtp?: string },
+): void {
+  const caps = (globalThis as { RTCRtpSender?: { getCapabilities?: (k: string) => { codecs: Codec[] } | null } })
+    .RTCRtpSender?.getCapabilities?.(kind)
+  applyPreferenceForTest(t, caps?.codecs ?? null, prefer)
+}
+
+interface Codec { mimeType: string; sdpFmtpLine?: string }
+
+/** 순수 부분 — 능력표와 선호만 받는다. 브라우저 없이 1층이 판정한다. */
+export function applyPreferenceForTest(
+  t: TransceiverLike,
+  codecs: readonly Codec[] | null,
+  prefer: { codec: string; fmtp?: string },
+): void {
+  if (codecs === null || codecs.length === 0 || !t.setCodecPreferences) return
+  const want = prefer.codec.toLowerCase()
+  const score = (c: Codec): number => {
+    if (!c.mimeType.toLowerCase().endsWith(`/${want}`)) return 0
+    return prefer.fmtp !== undefined && c.sdpFmtpLine === prefer.fmtp ? 2 : 1
+  }
+  const sorted = [...codecs].sort((a, b) => score(b) - score(a))
+  if (score(sorted[0] ?? { mimeType: '' }) === 0) return
+  t.setCodecPreferences(sorted)
 }

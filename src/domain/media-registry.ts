@@ -122,10 +122,15 @@ export class MediaRegistry {
    * 연§7-4-1~§7-4-4 — 트랜시버 → 협상 → 등록 → 송신.
    * ★②가 성공한 뒤 ③에서 실패하면 remove 를 보내 되돌린다. 안 하면 유령 등록이 상한을 먹는다.
    */
-  async publish(track: LocalTrack, to: PublishTarget): Promise<LocalTrack> {
+  async publish(
+    track: LocalTrack,
+    to: PublishTarget,
+    prefer?: { codec: string; fmtp?: string },
+  ): Promise<LocalTrack> {
     if (track.state !== 'acquired' && track.state !== 'idle') return track
 
-    const transceiver = to.link.sender(track.kind)
+    // 연§6-3 — 무전 video 는 그 방 슬롯 코덱과 같아야 한다. ★보내기 전에 맞춘다.
+    const transceiver = to.link.sender(track.kind, prefer)
     track.transceiver = transceiver
     await to.link.renegotiatePublish()
     track.state = 'staged'

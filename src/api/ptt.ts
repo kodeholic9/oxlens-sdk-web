@@ -13,18 +13,27 @@ import { NotImplementedError } from './not-implemented.js'
 /** 정책서 §4 `micColdAfterMs` — 무발화 뒤 `cold` 진입. 실측 20260624 기준값이다. */
 const COLD_AFTER_MS = 30_000
 import {
-  CameraOptions, MicPower, MicrophoneOptions, Ptt, PttEvents, PttState, TransmitSource,
+  CameraOptions, LocalTrack as ApiLocalTrack, MicPower, MicrophoneOptions, Ptt, PttEvents,
+  PttState, TransmitSource,
 } from './types.js'
 
 export interface PttHost {
   /** 이 방으로 발행이 걸릴 자리. 발언 방이 아니면 SDK 가 먼저 옮긴다(연§7-7-1). */
   target(roomId: string): { link: PeerLink; roomId: string; sfuId: string } | null
   selectSpeaking(roomId: string): Promise<void>
+  /**
+   * 연§6-3 — ★**"그 방의 무전 코덱" 은 슬롯 트랙이 알려준다.** 보관본에서 `room_id` 가 그 방이고
+   * `duplex:'half'`·`kind:'video'` 인 항목의 `codec`+`fmtp` 다. ★없으면 첫 화자가 정한다.
+   */
+  slotVideoCodec(roomId: string): { codec: string; fmtp?: string } | null
+  /** 안쪽 트랙을 앱이 쥘 표면으로 — 같은 트랙이 두 핸들로 갈리지 않게 한 곳에서만 감싼다. */
+  wrap(inner: LocalTrack): ApiLocalTrack
 }
 
 export class PttHandle extends Bus<PttEvents> implements Ptt {
   input: 'hold' | 'toggle' = 'hold'
   private mic: LocalTrack | null = null
+  private cam: LocalTrack | null = null
   /** SDK§5-4 — `hot`(허가 중) → `hot_standby`(트랙 유지) → `cold`(장치 반납). */
   private power: MicPower = 'hot_standby'
   /** 정책서 `micColdAfterMs` 기본 30초. `keepWarm(ms)` 가 이 값을 민다(0 = 기본). */
@@ -159,8 +168,34 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
     this.registry.forget(media[0]!)
     this.setPower('hot_standby')
   }
-  enableVideo(_opts?: CameraOptions & { track?: MediaStreamTrack }): Promise<never> {
-    return Promise.reject(new NotImplementedError('ptt.enableVideo'))
+  /**
+   * 연§6-3 — 반이중 영상. ★**그 방 슬롯 코덱에 맞춰 등록한다.**
+   *
+   * ★슬롯이 있으면 **보내기 전에 읽고 맞춘다** — 찍어 보고 `1006` 으로 배우지 않는다.
+   * 슬롯이 없으면 ★**내가 정하는 것**이고, 뒤에 오는 화자들이 나를 따른다.
+   * 송출은 허가 동안만이다 — 등록 즉시 게이트가 닫히고(`duplex:'half'`), 발언권이 연다(§6-5).
+   */
+  async enableVideo(opts?: CameraOptions & { track?: MediaStreamTrack }): Promise<ApiLocalTrack> {
+    if (this.cam !== null) return this.host.wrap(this.cam)
+    const to = this.host.target(this.floor.roomId)
+    if (to === null) throw new NotImplementedError(`room(${this.floor.roomId}) 전송로가 없다`)
+
+    const slot = this.host.slotVideoCodec(this.floor.roomId)
+    const track = opts?.track === undefined
+      ? (await this.registry.acquire([{ kind: 'camera' }]))[0]!
+      : this.registry.adopt(opts.track as unknown as MediaTrackLike, 'camera')
+    track.duplex = 'half'
+    try {
+      await this.registry.publish(track, to, slot ?? undefined)
+    } catch (e) {
+      // ★앱이 준 트랙은 SDK 가 정지하지 않는다 — 등록만 되돌린다.
+      await this.registry.stop(track)
+      throw e
+    }
+    this.cam = track
+    // 허가 중이면 곧바로 열어 준다 — 마이크가 이미 열려 있는데 영상만 막히면 반쪽이다.
+    if (this.power === 'hot') await this.registry.gate(track, true)
+    return this.host.wrap(track)
   }
 
   /** 판정 결과를 집행한다 — 보낼 것, 게이트, 앱 이벤트 차례다. */
