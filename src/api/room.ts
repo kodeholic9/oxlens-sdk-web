@@ -10,6 +10,17 @@ import { Participant, Ptt, RemoteTrack, Room, RoomAudio, RoomEvents, RoomState }
 export interface RoomHost {
   leave(roomId: string): Promise<void>
   sendMessage(roomId: string, content: string): Promise<{ msgId: string }>
+  /** 연§6-3 `SUBSCRIBE_LAYER` — 여러 대상을 한 번에 보낼 수 있다(부분 갱신). */
+  subscribeLayer(roomId: string, targets: readonly LayerTarget[]): Promise<void>
+}
+
+/** 연§6-3 — wire 그대로. 생략한 필드는 ★안 바꾼다(부분 갱신). */
+export interface LayerTarget {
+  readonly track_id: string
+  readonly spatial?: number
+  readonly temporal?: number
+  readonly paused?: boolean
+  readonly priority?: number
 }
 
 export class RoomHandle extends Bus<RoomEvents> implements Room {
@@ -61,7 +72,7 @@ export class RoomHandle extends Bus<RoomEvents> implements Room {
   adopt(entry: TrackEntry, media: MediaStreamTrack, link: PeerLink): { track: RemoteTrackHandle; fresh: boolean } {
     const known = this.byTrackId.get(entry.track_id)
     if (known) { known.update(entry); return { track: known, fresh: false } }
-    const handle = new RemoteTrackHandle(entry, media, link)
+    const handle = new RemoteTrackHandle(entry, media, link, this.host)
     this.byTrackId.set(entry.track_id, handle)
     this.emit('track', handle)
     return { track: handle, fresh: true }

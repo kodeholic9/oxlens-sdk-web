@@ -21,7 +21,7 @@ import { toOxLensError } from './errors.js'
 import { MediaSurface } from './media.js'
 import { NotImplementedError } from './not-implemented.js'
 import { PttHandle, roomOf } from './ptt.js'
-import { RoomHandle } from './room.js'
+import { LayerTarget, RoomHandle } from './room.js'
 import {
   ClientEvents, ClientOptions, Diagnostics, JoinOptions, Media, OxLensClient,
   Room, RoomPreview, RoomSummary, SessionInfo,
@@ -145,6 +145,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     const handle = new RoomHandle(roomId, mode, res.server_config.sfu_id, {
       leave: (id) => this.leave(id),
       sendMessage: (id, content) => this.sendMessage(id, content),
+      subscribeLayer: (id, targets) => this.subscribeLayer(id, targets),
     })
     handle.state = 'joined'
     const ptt = new PttHandle(
@@ -207,6 +208,15 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     try {
       const res = await this.requireSignaling().request(Op.Message, { room_id: roomId, content })
       return { msgId: String(res.msg_id) }
+    } catch (e) {
+      throw toOxLensError(e)
+    }
+  }
+
+  /** 연§6-3 `SUBSCRIBE_LAYER` — 응답은 빈 body 다. 대상별 실패는 실패가 아니다(조용히 건너뛴다). */
+  private async subscribeLayer(roomId: string, targets: readonly LayerTarget[]): Promise<void> {
+    try {
+      await this.requireSignaling().request(Op.SubscribeLayer, { room_id: roomId, targets })
     } catch (e) {
       throw toOxLensError(e)
     }

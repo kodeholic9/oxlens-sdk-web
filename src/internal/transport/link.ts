@@ -246,6 +246,18 @@ export class PeerLink {
     return t?.receiver.track ?? null
   }
 
+  /**
+   * 그 트랙을 받고 있는 수신기. SDK§12 — 재생 지연 손잡이가 거기 달려 있다.
+   *
+   * ★`mid` 가 아니라 트랙 자체로 찾는다 — 부르는 쪽(`RemoteTrack`)이 쥔 것이 트랙이고,
+   * 보관본의 `mid` 를 한 번 더 거치면 그 사이에 재협상이 들면 어긋난다.
+   */
+  receiverOf(track: MediaTrackLike): RTCRtpReceiver | null {
+    const pc = this.onePc ? this.pub : this.sub
+    const t = pc?.getTransceivers().find((x) => x.receiver.track === track)
+    return (t?.receiver as RTCRtpReceiver | undefined) ?? null
+  }
+
   /** 남의 트랙이 도착한다. 주인이 훑는다 — 콜백을 주입받지 않는다. */
   async *remoteTracks(): AsyncIterableIterator<RemoteTrackArrival> {
     const pc = this.onePc ? this.pub : this.sub
