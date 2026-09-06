@@ -6,9 +6,9 @@ import { MediaTrackLike } from '../platform/webrtc.js'
 import { Playback } from '../domain/playback.js'
 import { DevicesHandle } from './devices.js'
 import { toOxLensError } from './errors.js'
-import { NotImplementedError } from './not-implemented.js'
 import {
-  AcquireOptions, AudioPlayback, CameraOptions, DeviceKind, Devices, LocalTrack, Media, MicrophoneOptions,
+  AcquireOptions, AudioEncodingOptions, AudioPlayback, CameraOptions, DeviceKind, Devices, LocalTrack,
+  Media, MicrophoneOptions, VideoEncodingOptions,
   OxLensError, PermissionState, ScreenOptions, TrackKind, TrackSource,
 } from './types.js'
 
@@ -46,7 +46,15 @@ export class LocalTrackHandle implements LocalTrack {
     return this.reg.replaceSource(this.inner, t as unknown as MediaTrackLike | null)
       .catch((e: unknown) => { throw toOxLensError(e) })
   }
-  setEncoding(): Promise<void> { return Promise.reject(new NotImplementedError('setEncoding')) }
+  /** SDK§6-3 — 값만이다. 레이어 구조는 발행 시점에 정해져 못 바꾼다(stop → 재발행). */
+  setEncoding(encoding: AudioEncodingOptions | VideoEncodingOptions): Promise<void> {
+    const v = encoding as VideoEncodingOptions & AudioEncodingOptions
+    return this.reg.setEncoding(this.inner, {
+      ...(v.maxBitrate === undefined ? {} : { maxBitrate: v.maxBitrate }),
+      ...(v.degradationPreference === undefined ? {} : { degradationPreference: v.degradationPreference }),
+      ...(v.layers === undefined ? {} : { layers: v.layers }),
+    }).catch((e: unknown) => { throw toOxLensError(e) })
+  }
   /** SDK§11-2 — 양단 비교의 한쪽. 시뮬캐스트면 ssrc 가 0 이라 계수가 비어 온다. */
   async getStats(): Promise<RTCStatsReport> {
     const ssrc = this.inner.ssrc

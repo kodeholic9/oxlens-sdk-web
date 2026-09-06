@@ -52,6 +52,14 @@ export class PublishError extends Error {
   }
 }
 
+/** SDK§6-3 — 인코딩 값. 구조는 여기 없다. */
+export interface EncodingChange {
+  readonly maxBitrate?: number
+  readonly maxFramerate?: number
+  readonly degradationPreference?: string
+  readonly layers?: ReadonlyArray<{ maxBitrate?: number; maxFramerate?: number; active?: boolean }>
+}
+
 export interface PublishTarget {
   readonly link: PeerLink
   readonly roomId: string
@@ -279,6 +287,36 @@ export class MediaRegistry {
       if (track.transceiver && !closed) await track.transceiver.sender.replaceTrack(media)
       old.stop()
     }
+  }
+
+  /**
+   * SDK§6-3 — 인코딩 ★**값만** 바꾼다(`maxBitrate`·`maxFramerate`·레이어 `active`).
+   *
+   * ★레이어 **구조**(시뮬캐스트 개수·`rid`·`scaleResolutionDownBy` 의 단 배치)는
+   * `addTransceiver({sendEncodings})` 때뿐이라 ★**여기서 못 바꾼다** — 바꾸려면 `stop` → 재발행이다
+   * (W3C webrtc-pc 사실). 그래서 층 수가 다른 `layers` 가 와도 ★있는 단에만 얹는다.
+   * ★발행 전이면 얹을 자리가 없다 — 조용히 넘긴다(값은 발행 때 `sendEncodings` 가 든다).
+   */
+  async setEncoding(track: LocalTrack, encoding: EncodingChange): Promise<void> {
+    const sender = track.transceiver?.sender
+    if (!sender?.getParameters || !sender.setParameters) return
+    const params = sender.getParameters()
+    const encodings = params.encodings ?? []
+    if (encodings.length === 0) return
+    if (encoding.layers) {
+      // ★`layers` 는 낮은 단부터다(l, h) — `getParameters` 순서와 같은 축으로 맞춘다.
+      encodings.forEach((enc, i) => {
+        const want = encoding.layers?.[i]
+        if (!want) return
+        if (want.maxBitrate !== undefined) enc.maxBitrate = want.maxBitrate
+        if (want.maxFramerate !== undefined) enc.maxFramerate = want.maxFramerate
+        if (want.active !== undefined) enc.active = want.active
+      })
+    }
+    if (encoding.maxBitrate !== undefined) for (const enc of encodings) enc.maxBitrate = encoding.maxBitrate
+    if (encoding.maxFramerate !== undefined) for (const enc of encodings) enc.maxFramerate = encoding.maxFramerate
+    if (encoding.degradationPreference !== undefined) params.degradationPreference = encoding.degradationPreference
+    await sender.setParameters({ ...params, encodings })
   }
 
   /** SDK§6-5 — 반이중 게이트. 발언권이 열고 닫는다. */

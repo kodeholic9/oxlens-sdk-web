@@ -22,8 +22,22 @@ export interface MediaTrackLike {
   stop(): void
 }
 
+/** SDK§6-3 — 인코딩 **값**의 자리. 레이어 **구조**는 발행 시점에 정해져 여기서 못 바꾼다. */
+export interface SendParameters {
+  encodings?: Array<{
+    rid?: string
+    active?: boolean
+    maxBitrate?: number
+    maxFramerate?: number
+    scaleResolutionDownBy?: number
+  }>
+  degradationPreference?: string
+}
+
 export interface SenderLike {
   replaceTrack(track: MediaTrackLike | null): Promise<void>
+  getParameters?(): SendParameters
+  setParameters?(params: SendParameters): Promise<void>
 }
 
 export interface TransceiverLike {
