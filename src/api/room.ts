@@ -9,6 +9,8 @@ import { Participant, Ptt, RemoteTrack, Room, RoomAudio, RoomEvents, RoomState }
 
 export interface RoomHost {
   leave(roomId: string): Promise<void>
+  /** SDK§6-2 — 이 방의 수신 오디오는 SDK 가 낸다. 값만 들고 있으면 아무 소리도 안 바뀐다. */
+  setRoomAudio(roomId: string, patch: { muted?: boolean; volume?: number }): void
   sendMessage(roomId: string, content: string): Promise<{ msgId: string }>
   /** 연§6-3 `SUBSCRIBE_LAYER` — 여러 대상을 한 번에 보낼 수 있다(부분 갱신). */
   subscribeLayer(roomId: string, targets: readonly LayerTarget[]): Promise<void>
@@ -47,8 +49,11 @@ export class RoomHandle extends Bus<RoomEvents> implements Room {
     return {
       get muted() { return self.muted },
       get volume() { return self.volume },
-      setMuted(v: boolean) { self.muted = v },
-      setVolume(v: number) { self.volume = Math.min(1, Math.max(0, v)) },
+      setMuted(v: boolean) { self.muted = v; self.host.setRoomAudio(self.id, { muted: v }) },
+      setVolume(v: number) {
+        self.volume = Math.min(1, Math.max(0, v))
+        self.host.setRoomAudio(self.id, { volume: self.volume })
+      },
     }
   }
 

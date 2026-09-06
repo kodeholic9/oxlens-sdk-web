@@ -2,6 +2,7 @@
 // SDK§6-1 — 발행 표면. 길은 둘이다: 고수준 enable*(획득+발행) · 저수준 acquire → publish.
 import { LocalTrack as InnerTrack, MediaRegistry } from '../domain/media-registry.js'
 import { Devices as DevicePort, CaptureKind } from '../platform/media.js'
+import { Playback } from '../domain/playback.js'
 import { DevicesHandle } from './devices.js'
 import { toOxLensError } from './errors.js'
 import { NotImplementedError } from './not-implemented.js'
@@ -64,6 +65,7 @@ export class MediaSurface implements Media {
     private readonly reg: MediaRegistry,
     private readonly host: MediaHost,
     port: DevicePort,
+    private readonly playback: Playback,
   ) {
     this.deviceList = new DevicesHandle(port)
     this.deviceList.watch()
@@ -117,9 +119,20 @@ export class MediaSurface implements Media {
   }
 
   get devices(): Devices { return this.deviceList }
-  get audio(): AudioPlayback { throw new NotImplementedError('media.audio') }
+
+  /** SDK§12-1 — 브라우저 autoplay 정책의 표면. `false` 면 앱이 제스처 핸들러에서 `startAudio()`. */
+  get audio(): AudioPlayback {
+    const play = this.playback
+    return {
+      get playbackAllowed() { return play.playbackAllowed },
+      startAudio: () => play.startAudio(),
+    }
+  }
+
   switchDevice(): Promise<void> { return Promise.reject(new NotImplementedError('switchDevice')) }
-  audioOutput(): Promise<void> { return Promise.reject(new NotImplementedError('audioOutput')) }
+
+  /** SDK§12-1 — `setSinkId` 가 있는 플랫폼만. 없으면 조용히 넘긴다(앱 실패로 만들지 않는다). */
+  audioOutput(deviceId: string | null): Promise<void> { return this.playback.setSink(deviceId) }
 
   /**
    * SDK§2-3 — 브라우저가 모르면 `unknown` 이다. ★모른다고 `prompt` 로 지어내지 않는다:

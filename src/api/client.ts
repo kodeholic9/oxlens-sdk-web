@@ -1,6 +1,7 @@
 // author: kodeholic (powered by Claude)
 // SDK§3·§4 — 표면과 안쪽을 잇는 자리. 통지는 여기 한 루프에서 보관본으로 흘러 앱 이벤트가 된다.
 import { Directory } from '../domain/directory.js'
+import { Playback } from '../domain/playback.js'
 import { ResumeOutcome } from '../domain/session.js'
 import { FloorRoom } from '../domain/floor.js'
 import { MediaRegistry } from '../domain/media-registry.js'
@@ -13,6 +14,7 @@ import { PeerLink } from '../internal/transport/link.js'
 import { Op } from '../internal/wire.js'
 import { Clock, systemClock } from '../platform/clock.js'
 import { browserHttp, Http } from '../platform/http.js'
+import { AudioOut, browserAudio, headlessAudio } from '../platform/audio.js'
 import { Devices } from '../platform/media.js'
 import { connectWebSocket, Socket } from '../platform/socket.js'
 import { browserPeers, PeerFactory } from '../platform/webrtc.js'
@@ -35,6 +37,7 @@ export interface Wiring {
   readonly connect?: (url: string) => Promise<Socket>
   readonly peers?: PeerFactory
   readonly devices?: Devices
+  readonly audioOut?: AudioOut
   readonly clock?: Clock
   readonly http?: Http
 }
@@ -42,6 +45,7 @@ export interface Wiring {
 export class Client extends Bus<ClientEvents> implements OxLensClient {
   private readonly sess: Session
   private readonly roomsDomain: Rooms
+  private readonly playback: Playback
   private readonly devicePort: Devices
   private readonly registry: MediaRegistry
   private readonly surface: MediaSurface
@@ -67,11 +71,14 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     const mode = opts.pcMode === '1pc' ? '1pc' : '2pc'
     this.roomsDomain = new Rooms(() => this.requireSignaling(), { peers, clock: this.clock, pcMode: mode })
     this.devicePort = wiring.devices ?? requireBrowserDevices()
+    this.playback = new Playback(wiring.audioOut ?? defaultAudioOut())
+    // SDK§12-1 — 허용이 바뀌면 앱에 알린다. ★주인이 훑는다(콜백을 넘기지 않는다).
+    void this.drainPlayback()
     this.registry = new MediaRegistry(() => this.requireSignaling(), {
       devices: this.devicePort,
       clock: this.clock,
     })
-    this.surface = new MediaSurface(this.registry, { publishTarget: () => this.publishTarget() }, this.devicePort)
+    this.surface = new MediaSurface(this.registry, { publishTarget: () => this.publishTarget() }, this.devicePort, this.playback)
     this.directory = new Directory(
       opts.base.replace(/\/$/, ''),
       { token: () => this.token, sessionId: () => this.sess.info?.session_id ?? null },
@@ -148,6 +155,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       leave: (id) => this.leave(id),
       sendMessage: (id, content) => this.sendMessage(id, content),
       subscribeLayer: (id, targets) => this.subscribeLayer(id, targets),
+      setRoomAudio: (id, patch) => this.playback.setRoom(id, patch),
     })
     handle.state = 'joined'
     const ptt = new PttHandle(
@@ -216,6 +224,10 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
   }
 
   /** 연§6-3 `SUBSCRIBE_LAYER` — 응답은 빈 body 다. 대상별 실패는 실패가 아니다(조용히 건너뛴다). */
+  private async drainPlayback(): Promise<void> {
+    for await (const allowed of this.playback.changes()) this.emit('audioPlayback', allowed)
+  }
+
   private async subscribeLayer(roomId: string, targets: readonly LayerTarget[]): Promise<void> {
     try {
       await this.requireSignaling().request(Op.SubscribeLayer, { room_id: roomId, targets })
@@ -333,7 +345,9 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
         action === 'remove' ? { kind: 'remove', tracks } : { kind: 'add', tracks })
       if (verdict === 'stale') return
       if (verdict === 'resync') { this.queueResync(roomId); return }
-      if (action === 'remove') for (const t of tracks) handle.drop(t.track_id)
+      if (action === 'remove') {
+        for (const t of tracks) { handle.drop(t.track_id); this.playback.remove(t.track_id) }
+      }
       const server = this.roomsDomain.serverOf(roomId)
       if (server) void this.renegotiate(server, roomId)
       return
@@ -465,6 +479,11 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       const media = server.link.mediaFor(entry.mid!)
       if (!media) continue
       const { track, fresh } = handle.adopt(entry, media as unknown as MediaStreamTrack, server.link)
+      // SDK§6-2 — ★수신 오디오는 SDK 가 낸다. 앱이 `<audio>` 를 열 개 열지 않게 하는 결정이라
+      //   여기서 재생을 건다(video 는 앱이 `attach` 로 붙인다).
+      if (fresh && entry.kind === 'audio') {
+        void this.playback.add(entry.track_id, entry.room_id, media)
+      }
       if (fresh) this.emit('track', handle, track)
     }
   }
@@ -548,4 +567,9 @@ function requireBrowserDevices(): Devices {
     onChange: () => () => {},
     permission: () => Promise.resolve('unknown' as const),
   }
+}
+
+/** 브라우저 밖(시험·노드)에서는 소리를 낼 곳이 없다 — 조용히 도는 판을 준다. */
+function defaultAudioOut(): AudioOut {
+  return typeof document === 'undefined' ? headlessAudio : browserAudio
 }

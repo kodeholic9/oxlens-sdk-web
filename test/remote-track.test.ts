@@ -11,6 +11,7 @@ function hostOf(sent: Sent[]): RoomHost {
     leave: async () => {},
     sendMessage: async () => ({ msgId: 'm' }),
     subscribeLayer: async (roomId, targets) => { sent.push({ roomId, targets }) },
+    setRoomAudio: () => {},
   }
 }
 
