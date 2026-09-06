@@ -85,6 +85,7 @@ export class Rooms {
     return [...this.servers.values()].filter((s) => s.link.dead(now)).map((s) => s.sfuId)
   }
 
+  /** SDK§7-1 — `AFFILIATION`·JOIN·LEAVE 응답의 `pub_room` 변화가 이 값 하나로 드러난다. */
   get speakingRoom(): string | null { return this.pubRoom?.room ?? null }
   get joined(): readonly string[] { return [...this.state].filter(([, s]) => s === 'joined').map(([r]) => r) }
 

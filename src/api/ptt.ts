@@ -34,7 +34,8 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
   input: 'hold' | 'toggle' = 'hold'
   private mic: LocalTrack | null = null
   private cam: LocalTrack | null = null
-  /** SDK§5-4 — `hot`(허가 중) → `hot_standby`(트랙 유지) → `cold`(장치 반납). */
+  /** SDK§5-4 — `hot`(허가 중) → `hot_standby`(트랙 유지) → `cold`(장치 반납).
+   *  SDK§7-3 — `trusted`·`draining` 은 이 표면이 내는 「지금 왜 이런가」 상태다. */
   private power: MicPower = 'hot_standby'
   /** 정책서 `micColdAfterMs` 기본 30초. `keepWarm(ms)` 가 이 값을 민다(0 = 기본). */
   private coldAfterMs = COLD_AFTER_MS

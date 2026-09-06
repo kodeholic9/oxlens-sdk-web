@@ -363,6 +363,11 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     }
   }
 
+  /**
+   * SDK§7-1 — ★**wire 통지 → 표면 사건**의 번역표가 사는 자리다. 그 절의 행마다 아래 분기가
+   * 하나씩 대응한다(`PARTICIPANT_EVENT`·`TRACK_EVENT`·`TRACK_STATE`·`ROOM_EVENT`·`MESSAGE`).
+   * ★여기서 이름을 바꾸면 앱이 듣던 사건이 소리 없이 사라진다 — 표면 어휘의 권위는 그 절이다.
+   */
   private route(note: Notification): void {
     const roomId = String(note.body.room_id ?? '')
     const handle = this.handles.get(roomId)
@@ -585,6 +590,8 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
         .catch((e: unknown) => handle?.emit('error', toOxLensError(e)))
     }
     // 서버가 모르는 트랙은 remove 를 보내지 않는다 — 서버에 없다(연§6-1).
+    // SDK§7-1 — `RESUME.publish_failed`(연§6-1) → `LocalTrack.ended{reason:'server_lost'}`.
+    // ★조용히 지우지 않는다 — 앱이 다시 `enable` 할 근거가 이 사건 하나다.
     for (const id of outcome.publish_failed) {
       const track = this.registry.all.find((t) => t.trackId === id)
       if (track) { track.trackId = null; track.server = null; track.state = 'acquired' }
