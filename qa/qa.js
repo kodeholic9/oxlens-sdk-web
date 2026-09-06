@@ -164,6 +164,36 @@ const qa = {
 
   events(kind) { return kind ? state.events.filter((e) => e.kind === kind) : state.events },
 
+  // SDK§6-2 — 수신 오디오는 SDK 가 낸다. ★그 계약을 3층이 볼 자리다.
+  //   패킷 차분(trackStats)은 "온다" 까지고, 실제로 소리가 나는지는 재생 요소가 말한다.
+  //   판정 재료만 낸다 — 참·거짓은 spec 이 정한다.
+  audioOut() {
+    const els = [...document.querySelectorAll('audio')]
+    return {
+      count: els.length,
+      playing: els.filter((el) => !el.paused && el.srcObject !== null).length,
+      muted: els.filter((el) => el.muted).length,
+      volumes: els.map((el) => el.volume),
+      allowed: state.client ? state.client.media.audio.playbackAllowed : null,
+    }
+  },
+
+  async startAudio() { await state.client.media.audio.startAudio() },
+
+  roomAudio(roomId, patch) {
+    const r = state.client.rooms.get(roomId)
+    if (patch.muted !== undefined) r.audio.setMuted(patch.muted)
+    if (patch.volume !== undefined) r.audio.setVolume(patch.volume)
+    return { muted: r.audio.muted, volume: r.audio.volume }
+  },
+
+  async devices(kind) {
+    const list = await state.client.media.devices.list(kind ? { kind } : undefined)
+    return list.map((d) => ({ deviceId: d.deviceId, kind: d.kind, groupId: d.groupId }))
+  },
+
+  permissions() { return state.client.media.permissions() },
+
   async teardown() {
     if (!state.client) return
     await state.client.close()
