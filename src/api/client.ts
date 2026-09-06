@@ -2,6 +2,7 @@
 // SDK§3·§4 — 표면과 안쪽을 잇는 자리. 통지는 여기 한 루프에서 보관본으로 흘러 앱 이벤트가 된다.
 import { Directory } from '../domain/directory.js'
 import { Playback } from '../domain/playback.js'
+import { DiagnosticsHandle } from './diagnostics.js'
 import { ResumeOutcome } from '../domain/session.js'
 import { FloorRoom } from '../domain/floor.js'
 import { MediaRegistry } from '../domain/media-registry.js'
@@ -45,6 +46,7 @@ export interface Wiring {
 export class Client extends Bus<ClientEvents> implements OxLensClient {
   private readonly sess: Session
   private readonly roomsDomain: Rooms
+  private readonly diag: DiagnosticsHandle
   private readonly playback: Playback
   private readonly devicePort: Devices
   private readonly registry: MediaRegistry
@@ -74,6 +76,14 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     this.playback = new Playback(wiring.audioOut ?? defaultAudioOut())
     // SDK§12-1 — 허용이 바뀌면 앱에 알린다. ★주인이 훑는다(콜백을 넘기지 않는다).
     void this.drainPlayback()
+    // SDK§11-1 — 조립 분담. ★모르는 값은 `null` 로 채우지 않고 **뺀다**(연§6-6).
+    this.diag = new DiagnosticsHandle({
+      publishing: () => this.registry.all,
+      subscribed: () => this.subscribedTracks(),
+      state: () => this.probeState(),
+      devices: () => this.surface.devices.list().then((l) => l.map((d) => ({ ...d }))),
+      permissions: () => this.surface.permissions().then((p) => ({ ...p })),
+    })
     this.registry = new MediaRegistry(() => this.requireSignaling(), {
       devices: this.devicePort,
       clock: this.clock,
@@ -100,7 +110,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     const id = this.roomsDomain.speakingRoom
     return id === null ? null : this.handles.get(id) ?? null
   }
-  get diagnostics(): Diagnostics { throw new NotImplementedError('diagnostics') }
+  get diagnostics(): Diagnostics { return this.diag }
 
   get session(): SessionInfo {
     return {
@@ -224,6 +234,31 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
   }
 
   /** 연§6-3 `SUBSCRIBE_LAYER` — 응답은 빈 body 다. 대상별 실패는 실패가 아니다(조용히 건너뛴다). */
+  /** SDK§11-1 — 보관본 + 그 서버의 전송로. 계수는 `PeerLink` 가 ssrc 로 골라 준다. */
+  private subscribedTracks(): Array<{ entry: TrackEntry; link: PeerLink | null }> {
+    const out: Array<{ entry: TrackEntry; link: PeerLink | null }> = []
+    for (const [roomId] of this.handles) {
+      const server = this.roomsDomain.serverOf(roomId)
+      if (!server) continue
+      for (const entry of server.store.tracks(roomId)) {
+        out.push({ entry, link: server.link })
+      }
+    }
+    return out
+  }
+
+  /** ★`state` 는 **항상** 있다 — 못 모은 칸이 없다는 뜻이 아니라, 이건 늘 아는 값이다. */
+  private probeState(): Record<string, unknown> {
+    return {
+      session: { state: this.sess.state, userId: this.userId, pcMode: this.pcMode },
+      rooms: [...this.handles.values()].map((r) => ({
+        room_id: r.id, mode: r.mode, state: r.state, server: r.server,
+        ptt: { phase: r.ptt.state.phase, mic: r.ptt.state.mic },
+      })),
+      speakingRoom: this.roomsDomain.speakingRoom,
+    }
+  }
+
   private async drainPlayback(): Promise<void> {
     for await (const allowed of this.playback.changes()) this.emit('audioPlayback', allowed)
   }

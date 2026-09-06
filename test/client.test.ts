@@ -498,7 +498,15 @@ test('아직 안쪽이 없는 진입은 조용히 통과하지 않는다', async
   await connected(s)
   const room = await joined(s)
   await assert.rejects(room.ptt.enableVideo(), /not implemented/)
-  assert.throws(() => s.client.diagnostics.probe(), /not implemented/)
+})
+
+test('진단은 못 모은 칸을 지어내지 않는다 — state 만 늘 있다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s)
+  const p = await s.client.diagnostics.probe()
+  assert.ok(p.state, 'state 는 항상이다')
+  assert.equal('network' in p, false, '못 모은 칸은 null 이 아니라 없다(연§6-6)')
 })
 
 test('switchDevice 는 고른 값을 preferred 에 남긴다 — 다음 획득이 그것을 쓴다', async () => {
