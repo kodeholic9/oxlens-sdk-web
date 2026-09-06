@@ -319,6 +319,23 @@ export class MediaRegistry {
     await sender.setParameters({ ...params, encodings })
   }
 
+  /**
+   * SDK§5-4 데우기 — ★**자기 장치 트랙을 새것으로 갈아 끼운다**(소유권은 `sdk` 그대로).
+   *
+   * `replaceSource` 와 다르다: 그쪽은 소스를 앱에 넘기는 것이고 이쪽은 ★같은 소유로 장치만
+   * 다시 잡은 것이다. ★게이트가 닫혀 있으면 sender 에 얹지 않는다 — 허가 없이 소리가 나가면 안 된다.
+   */
+  async replaceSourceOwn(track: LocalTrack, media: MediaTrackLike): Promise<void> {
+    track.media = media
+    ;(media as { enabled?: boolean }).enabled = !track.muted
+    const closed = track.duplex === 'half' && track.state !== 'sending'
+    if (!track.transceiver || closed) return
+    await track.transceiver.sender.replaceTrack(media)
+  }
+
+  /** 장부에서만 뺀다 — ★장치는 안 놓는다(그 트랙이 다른 자리로 옮겨 갔을 때 쓴다). */
+  forget(track: LocalTrack): void { this.tracks.delete(track.id) }
+
   /** SDK§6-5 — 반이중 게이트. 발언권이 열고 닫는다. */
   async gate(track: LocalTrack, open: boolean): Promise<void> {
     if (track.duplex !== 'half' || !track.transceiver) return

@@ -9,7 +9,12 @@ import { PeerLink } from '../internal/transport/link.js'
 import { Clock } from '../platform/clock.js'
 import { Bus } from './emitter.js'
 import { NotImplementedError } from './not-implemented.js'
-import { CameraOptions, MicrophoneOptions, Ptt, PttEvents, PttState, TransmitSource } from './types.js'
+
+/** 정책서 §4 `micColdAfterMs` — 무발화 뒤 `cold` 진입. 실측 20260624 기준값이다. */
+const COLD_AFTER_MS = 30_000
+import {
+  CameraOptions, MicPower, MicrophoneOptions, Ptt, PttEvents, PttState, TransmitSource,
+} from './types.js'
 
 export interface PttHost {
   /** 이 방으로 발행이 걸릴 자리. 발언 방이 아니면 SDK 가 먼저 옮긴다(연§7-7-1). */
@@ -20,6 +25,12 @@ export interface PttHost {
 export class PttHandle extends Bus<PttEvents> implements Ptt {
   input: 'hold' | 'toggle' = 'hold'
   private mic: LocalTrack | null = null
+  /** SDK§5-4 — `hot`(허가 중) → `hot_standby`(트랙 유지) → `cold`(장치 반납). */
+  private power: MicPower = 'hot_standby'
+  /** 정책서 `micColdAfterMs` 기본 30초. `keepWarm(ms)` 가 이 값을 민다(0 = 기본). */
+  private coldAfterMs = COLD_AFTER_MS
+  /** 진행 중인 식힘을 끊는 손잡이 — 다시 뜨거워지면 그 자리에서 접는다. */
+  private cooling: AbortController | null = null
   private lastSource: TransmitSource | undefined
 
   constructor(
@@ -42,7 +53,7 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
       canRequest: f.canRequest,
       draining: f.draining,
       trusted: f.trusted,
-      mic: 'hot',
+      mic: this.power,
       ...(f.remainingSec === undefined ? {} : { remainingSec: f.remainingSec }),
       ...(f.grantedPriority === undefined ? {} : { priority: f.grantedPriority }),
       ...(f.queue === undefined ? {} : { queue: f.queue }),
@@ -72,6 +83,7 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
       throw e
     }
     this.mic = track!
+    this.setPower('hot_standby')
     this.run(this.floor.armed())
   }
 
@@ -79,6 +91,8 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
   async press(opts?: { source?: TransmitSource }): Promise<void> {
     this.lastSource = opts?.source ?? 'user'
     if (this.mic === null) await this.enable()
+    // ★식었으면 먼저 데운다 — 재획득 360~640ms 가 첫 음절을 먹는다(§5-4).
+    await this.warm()
     await this.host.selectSpeaking(this.floor.roomId)
     this.run(this.floor.press(this.clock.now()))
   }
@@ -99,7 +113,52 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
 
   reset(cause: Parameters<FloorRoom['reset']>[0]): void { this.run(this.floor.reset(cause)) }
 
-  keepWarm(_ms: number): void { throw new NotImplementedError('keepWarm') }
+  /**
+   * SDK§5-4 — `cold` 진입을 미룬다. `0` 은 기본값(정책서 `micColdAfterMs`)이다.
+   *
+   * ★`cold` 에서 `press()` 하면 재획득에 360~640ms 라 **첫 음절이 잘린다**(실측 20260624).
+   * 곧 말할 것을 아는 앱(무전기 버튼을 쥔 손)이 그 값을 늘려 그 손실을 없앤다.
+   */
+  keepWarm(ms: number): void {
+    this.coldAfterMs = ms > 0 ? ms : COLD_AFTER_MS
+    if (this.power === 'hot_standby') this.armCooling()
+  }
+
+  /**
+   * SDK§5-4 — 무발화가 이어지면 장치를 반납한다. ★`owner:'sdk'` 트랙만 내려간다.
+   *
+   * 앱·외부 소유 동안 반납하면 ★**앱 처리기 파이프라인이 30초 뒤 끊긴다**(review01 §2-1).
+   * 무시가 아니라 대상이 아니다.
+   */
+  private armCooling(): void {
+    this.cooling?.abort()
+    if (this.mic === null || this.mic.owner !== 'sdk') return
+    const stop = new AbortController()
+    this.cooling = stop
+    void (async () => {
+      await this.clock.sleep(this.coldAfterMs, stop.signal)
+      if (stop.signal.aborted || this.mic === null || this.mic.owner !== 'sdk') return
+      // ★게이트는 이미 닫혀 있다(허가가 없다) — 장치만 놓는다. 등록·SSRC 는 그대로다.
+      this.mic.media.stop()
+      this.power = 'cold'
+    })()
+  }
+
+  /** 허가가 서면 뜨겁다 — 식힘을 접는다. 놓으면 다시 식기 시작한다. */
+  private setPower(next: MicPower): void {
+    if (next === 'hot') { this.cooling?.abort(); this.cooling = null }
+    this.power = next
+    if (next === 'hot_standby') this.armCooling()
+  }
+
+  /** ★`cold` 면 새로 잡아 `Encoder.source` 로 보관한다 — sender 에 얹는 것은 허가 때다(§6-5). */
+  private async warm(): Promise<void> {
+    if (this.power !== 'cold' || this.mic === null) return
+    const media = await this.registry.acquire([{ kind: 'microphone' }])
+    await this.registry.replaceSourceOwn(this.mic, media[0]!.media)
+    this.registry.forget(media[0]!)
+    this.setPower('hot_standby')
+  }
   enableVideo(_opts?: CameraOptions & { track?: MediaStreamTrack }): Promise<never> {
     return Promise.reject(new NotImplementedError('ptt.enableVideo'))
   }
@@ -113,6 +172,8 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
       dc.send(frame(encode(msg)))
     }
     if (out.gate !== undefined && this.mic !== null) void this.registry.gate(this.mic, out.gate)
+    // SDK§5-4 — 게이트가 곧 전원 축이다. 열려 있으면 뜨겁고, 닫히면 그때부터 식기 시작한다.
+    if (out.gate !== undefined) this.setPower(out.gate ? 'hot' : 'hot_standby')
     for (const s of out.signals) {
       if (s.kind === 'speaker') {
         this.emit('speaker', { userId: s.userId, trackIds: [] })

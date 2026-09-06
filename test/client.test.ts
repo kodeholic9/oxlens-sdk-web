@@ -497,7 +497,6 @@ test('아직 안쪽이 없는 진입은 조용히 통과하지 않는다', async
   const s = stand()
   await connected(s)
   const room = await joined(s)
-  assert.throws(() => room.ptt.keepWarm(0), /not implemented/)
   await assert.rejects(room.ptt.enableVideo(), /not implemented/)
   assert.throws(() => s.client.diagnostics.probe(), /not implemented/)
 })
