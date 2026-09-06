@@ -89,15 +89,25 @@ export class MediaSurface implements Media {
     }
   }
 
-  async publish(track: LocalTrack | MediaStreamTrack, _opts?: unknown): Promise<LocalTrack> {
-    if (!(track instanceof LocalTrackHandle)) {
-      throw new NotImplementedError('publish(MediaStreamTrack) — 예외 경로')
-    }
+  /**
+   * SDK§6-1 — 두 갈래다. `LocalTrack` 은 `acquire` 가 만든 것을 올리고,
+   * ★`MediaStreamTrack` 은 **예외 경로**(캔버스·파일·외부 캡처)라 `owner:'external'` 로 올린다.
+   * 후자는 장치 수명 관리 대상이 아니다 — 처리기 on/off 는 이 길이 아니라 `track.replaceSource` 다.
+   */
+  async publish(
+    track: LocalTrack | MediaStreamTrack,
+    opts?: { readonly source: TrackSource },
+  ): Promise<LocalTrack> {
     const to = this.host.publishTarget()
     if (to === null) throw noSpeakingRoom()
+    const inner = track instanceof LocalTrackHandle
+      ? track.inner
+      : this.reg.adopt(track as unknown as MediaTrackLike, captureOf(opts?.source))
     try {
-      return this.wrap(await this.reg.publish(track.inner, to))
+      return this.wrap(await this.reg.publish(inner, to))
     } catch (e) {
+      // ★외부 트랙은 SDK 가 정지하지 않는다(앱 것이다) — 등록만 되돌린다.
+      if (!(track instanceof LocalTrackHandle)) await this.reg.stop(inner).catch(() => {})
       throw toOxLensError(e)
     }
   }
@@ -180,4 +190,9 @@ function kindsOf(opts: AcquireOptions): { kind: CaptureKind; deviceId?: string }
     out.push({ kind, ...(req.deviceId === undefined ? {} : { deviceId: req.deviceId }) })
   }
   return out
+}
+
+/** `TrackSource` → 획득 종류. 외부 트랙은 잡지 않으므로 ★등록 표기용이다. */
+function captureOf(source: TrackSource | undefined): CaptureKind {
+  return source === 'screen' ? 'screen' : source === 'microphone' ? 'microphone' : 'camera'
 }

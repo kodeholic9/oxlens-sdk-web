@@ -100,6 +100,17 @@ export class MediaRegistry {
   }
 
   /**
+   * SDK§6-1 예외 경로 — SDK 가 소스를 못 잡는 것(캔버스·파일·외부 캡처)을 등록에 올린다.
+   *
+   * ★`owner:'external'` 이다 — 등록·전송만 하고 ★**장치 수명 관리 대상이 아니다**
+   * (`cold`·`switchDevice`·재획득·`silence` 가 안 걸린다. 무시가 아니라 대상이 아니다).
+   * 소스가 죽는 것은 앱이 안다 — SDK 는 `device_lost` 를 내지 않는다.
+   */
+  adopt(media: MediaTrackLike, kind: CaptureKind): LocalTrack {
+    return this.enroll(media, kind, 'external')
+  }
+
+  /**
    * 연§7-4-1~§7-4-4 — 트랜시버 → 협상 → 등록 → 송신.
    * ★②가 성공한 뒤 ③에서 실패하면 remove 를 보내 되돌린다. 안 하면 유령 등록이 상한을 먹는다.
    */

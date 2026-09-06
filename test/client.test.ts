@@ -499,7 +499,7 @@ test('아직 안쪽이 없는 진입은 조용히 통과하지 않는다', async
   const room = await joined(s)
   assert.throws(() => room.ptt.keepWarm(0), /not implemented/)
   await assert.rejects(room.ptt.enableVideo(), /not implemented/)
-  await assert.rejects(s.client.media.publish({} as MediaStreamTrack, { source: 'camera' }), /not implemented/)
+  assert.throws(() => s.client.diagnostics.probe(), /not implemented/)
 })
 
 test('switchDevice 는 고른 값을 preferred 에 남긴다 — 다음 획득이 그것을 쓴다', async () => {

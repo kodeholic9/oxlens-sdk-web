@@ -2,6 +2,7 @@
 // SDK§5 — 발언 표면. 상태기(domain/floor)가 판정하고 여기서 DC 송신과 마이크 게이트를 집행한다.
 import { FloorRoom, Outcome } from '../domain/floor.js'
 import { LocalTrack, MediaRegistry } from '../domain/media-registry.js'
+import { MediaTrackLike } from '../platform/webrtc.js'
 import { Tlv, encode, frame, text } from '../internal/mbcp.js'
 import { Message } from '../internal/mbcp.js'
 import { PeerLink } from '../internal/transport/link.js'
@@ -56,11 +57,13 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
   /** SDK§5 — 이 서버에 반이중 마이크를 세운다. 부르지 않아도 press 가 한다. */
   async enable(opts?: MicrophoneOptions & { track?: MediaStreamTrack }): Promise<void> {
     if (this.mic !== null) return
-    if (opts?.track !== undefined) throw new NotImplementedError('ptt.enable({track})')
     const to = this.host.target(this.floor.roomId)
     if (to === null) throw new NotImplementedError(`room(${this.floor.roomId}) 전송로가 없다`)
 
-    const [track] = await this.registry.acquire([{ kind: 'microphone' }])
+    // ★앱 트랙을 주면 `owner:'external'` — 등록·전송만 하고 장치 수명은 앱 것이다(SDK§6-1).
+    const track = opts?.track === undefined
+      ? (await this.registry.acquire([{ kind: 'microphone' }]))[0]
+      : this.registry.adopt(opts.track as unknown as MediaTrackLike, 'microphone')
     track!.duplex = 'half'
     try {
       await this.registry.publish(track!, to)
