@@ -27,7 +27,7 @@ import { PttHandle, roomOf } from './ptt.js'
 import { LayerTarget, RoomHandle } from './room.js'
 import {
   ClientEvents, ClientOptions, Diagnostics, JoinOptions, Media, OxLensClient,
-  Room, RoomPreview, RoomSummary, SessionInfo,
+  Participant, Room, RoomPreview, RoomSummary, SessionInfo,
 } from './types.js'
 
 /** 연§8-4 타이머들이 도는 눈금. 재전송 간격(0.5초)보다 촘촘해야 한다. */
@@ -41,6 +41,21 @@ export interface Wiring {
   readonly audioOut?: AudioOut
   readonly clock?: Clock
   readonly http?: Http
+}
+
+const PT_NAMES = ['user', 'recorder', 'bot'] as const
+
+/** 연§4-4 명단 원소 — 종류·신원은 서버가 토큰에서 채운 값이다(클라 선언이 아니다). */
+function participantOf(p: {
+  user_id: string; role?: number; select?: boolean; participant_type?: number; metadata?: unknown
+}): Participant {
+  return {
+    userId: p.user_id,
+    role: p.role ?? 255,
+    mode: p.select === false ? 'listen' : 'talk',
+    participantType: PT_NAMES[p.participant_type ?? 0] ?? 'user',
+    ...(p.metadata === undefined ? {} : { metadata: p.metadata }),
+  }
 }
 
 export class Client extends Bus<ClientEvents> implements OxLensClient {
@@ -183,9 +198,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     handle.attachPtt(ptt)
     this.pumpFloor(roomId)
     this.startTicker()
-    handle.setParticipants(res.participants.map((p) => ({
-      userId: p.user_id, role: p.role ?? 255, mode: p.select === false ? 'listen' : 'talk',
-    })))
+    handle.setParticipants(res.participants.map(participantOf))
     this.handles.set(roomId, handle)
     // SDK§6-2 — 초기 트랙은 resolve 다음 tick 에 온다. 그 사이 await 를 두면 방 리스너는 놓친다.
     void Promise.resolve().then(() => { this.harvest(roomId) })
@@ -207,9 +220,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       return {
         ...summaryOf(d),
         version: d.version,
-        participants: d.participants.map((p) => ({
-          userId: p.user_id, role: p.role ?? 255, mode: p.select === false ? 'listen' : 'talk',
-        })),
+        participants: d.participants.map(participantOf),
       }
     } catch (e) {
       throw toOxLensError(e)
@@ -383,7 +394,10 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       const type = note.body.type as string
       const userId = String(note.body.user_id ?? '')
       if (type === 'joined') {
-        const p = { userId, role: Number(note.body.role ?? 255), mode: note.body.select === false ? 'listen' as const : 'talk' as const }
+        const p = participantOf({
+          user_id: userId, role: Number(note.body.role ?? 255), select: note.body.select !== false,
+          participant_type: Number(note.body.participant_type ?? 0), metadata: note.body.metadata,
+        })
         handle.setParticipants([...handle.participants, p])
         handle.emit('participantJoined', p)
       } else {
@@ -502,9 +516,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
         kind: 'snapshot', tracks: detail.tracks ?? [],
       })
       if (verdict.accepted) touched.set(server.sfuId, server)
-      handle.setParticipants(detail.participants.map((p) => ({
-        userId: p.user_id, role: p.role ?? 255, mode: p.select === false ? 'listen' : 'talk',
-      })))
+      handle.setParticipants(detail.participants.map(participantOf))
       handle.emit('resync')
     } catch (e) {
       handle.emit('error', toOxLensError(e))
@@ -574,9 +586,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       const verdict = server.store.apply('resume', roomId, shot.version, {
         kind: 'snapshot', tracks: shot.tracks ?? [],
       })
-      handle.setParticipants((shot.participants ?? []).map((p) => ({
-        userId: p.user_id, role: p.role ?? 255, mode: p.select === false ? 'listen' : 'talk',
-      })))
+      handle.setParticipants((shot.participants ?? []).map(participantOf))
       // 받을 것이 달라졌을 때만 다시 조립한다.
       if (verdict.accepted && (verdict.added.length > 0 || verdict.removed.length > 0)) {
         void this.renegotiate(server, roomId)

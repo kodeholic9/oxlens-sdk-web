@@ -61,13 +61,15 @@ export async function roomHeadcount(roomId: string): Promise<number | null> {
 }
 
 /** 연§5-1 — 토큰 발급은 앱 백엔드 몫이다. 하니스가 그 자리를 맡는다. */
-export async function userToken(userId: string, priority = 0): Promise<string> {
+export async function userToken(userId: string, opts: { participantType?: number; hidden?: boolean } = {}): Promise<string> {
   const res = await fetch(`${BASE}/auth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       api_key: 'ox_k_demo', api_secret: 'ox_s_demo',
-      user_id: userId, role: 'user', floor_priority: priority,
+      user_id: userId,
+      participant_type: opts.participantType ?? 0,
+      hidden: opts.hidden ?? false,
     }),
   })
   if (!res.ok) throw new Error(`token ${res.status}`)

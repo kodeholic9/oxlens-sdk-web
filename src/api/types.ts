@@ -120,11 +120,12 @@ export interface ClientOptions {
 export type ClientEvents = {
   session: (s: SessionInfo) => void
   /**
-   * 새 토큰이 필요하다. 'expired' = 2003 을 받았다(재접속 BIND 연§7-3-2-1, 또는 HTTP 401) · 'revoked' = Close 4004(연§10-3).
+   * 새 토큰이 필요하다 — 2003 을 받았다(재접속 BIND 연§7-3-2-1, 또는 HTTP 401).
    * 앱이 setToken 을 부를 때까지 SDK 는 기다린다. resume_window_ms 를 넘기면 미디어를 닫고 closed{retryable:true}. §3-2
    * ★최초 connect() 의 2003 은 이 이벤트가 아니라 reject 다(연§7-2-3).
+   * ★Close 4004(SESSION_REVOKED)는 여기가 아니다 — 운영자가 세션을 끊은 것이라 새 토큰으로 안 풀린다(closed{retryable:false}).
    */
-  tokenRequired: (e: { readonly cause: 'expired' | 'revoked' }) => void
+  tokenRequired: (e: { readonly cause: 'expired' }) => void
   /** 끝났다. retryable=false = 다시 붙어도 소용없는 사유(4000·4001·4002·4005). true = 백오프 소진 — connect() 를 다시 부르면 새 세션이다. ★rooms 는 비고 방은 앱이 다시 join 한다. */
   closed: (e: { readonly code: number; readonly name: string; readonly retryable: boolean }) => void
   /**
@@ -177,8 +178,6 @@ export interface JoinOptions {
   readonly mode?: 'listen' | 'talk'
   /** 앱이 붙이는 라벨. 권한이 아니다 (연§4-4). 기본 255 */
   readonly role?: number
-  /** 'recorder' 는 admin 토큰만 (연§6-2) — 명단·정원에서 투명. 기본 'user'. */
-  readonly participantType?: 'user' | 'recorder'
   /** 플랫폼 시스템 UI 용 표시(iOS PushToTalk 의 PTChannelDescriptor). 웹은 무시. §12-2 */
   readonly descriptor?: { readonly name: string; readonly image?: Blob }
 }
@@ -189,7 +188,7 @@ export interface RoomSummary {
   readonly capacity: number
   readonly userCount: number
   readonly createdAt: number
-  /** 녹화 참가자 존재 (연§5-3) */
+  /** 녹화 참가자 존재 (연§5-3) — ★투명이어도 참이다. 녹화 사실은 감추지 않는다. */
   readonly rec: boolean
 }
 
@@ -208,6 +207,10 @@ export interface Participant {
   readonly userId: string
   /** 라벨 (연§4-4) */
   readonly role: number
+  /** 토큰이 정한 종류 (연§4-4·§5-2) — wire u8 0·1·2 그대로. 클라 선언이 아니다. */
+  readonly participantType: 'user' | 'recorder' | 'bot'
+  /** 토큰이 서명한 신원(이름·프로필). 앱이 정한 불투명 JSON이고 ★갱신 통지가 없다(발급 시점 고정). */
+  readonly metadata?: unknown
   /** 그 사람의 입장 시점 select (연§4-4) — Room.mode 와 같은 축·같은 값. ★발언 자격이 아니다(방에 있으면 누구나 말한다): listen 으로 들어와 말하는 사람도 'listen' 그대로. "지금 누가 말하나"는 ptt.speaker. */
   readonly mode: 'listen' | 'talk'
 }

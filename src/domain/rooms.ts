@@ -25,7 +25,6 @@ export interface JoinResponse {
 export interface JoinOptions {
   readonly select?: boolean
   readonly role?: number
-  readonly participantType?: number
 }
 
 /** 연§7-5-3 — 이 넷은 사건별 절차가 있다. 다시 보내도 같으니 곧바로 앱에 알린다. */
@@ -104,7 +103,6 @@ export class Rooms {
     this.state.set(roomId, 'joining')
     const body: Record<string, unknown> = { room_id: roomId, select }
     if (opts.role !== undefined) body.role = opts.role
-    if (opts.participantType !== undefined) body.participant_type = opts.participantType
 
     let res: JoinResponse
     try {
