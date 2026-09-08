@@ -88,12 +88,16 @@ export class PeerLink {
     })
   }
 
-  /** 연§9-1-1 — 브라우저가 offer, 클라가 answer. 최초 한 번과 2pc 보내기 재협상이 이 경로다. */
-  private async clientOffer(pc: PeerConnectionLike): Promise<void> {
+  /**
+   * 연§9-1-1 — 브라우저가 offer, 클라가 answer. ★pub 사건은 두 모드 다 이 경로다.
+   * `1pc` 은 한 벌이라 offer 에 받기 m-line 도 딸려 나오므로 `seats` 로 그 자리를 답한다(연§9-10 규칙 1).
+   */
+  private async clientOffer(pc: PeerConnectionLike, seats: readonly Seat[] = []): Promise<void> {
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
     const local = pc.localDescription?.sdp ?? offer.sdp ?? ''
     const answer = publishAnswer(local, this.cfg, {
+      seats,
       session: { id: this.cfg.sfu_id, version: this.sendVersion },
     })
     this.sendVersion += 1
@@ -102,9 +106,8 @@ export class PeerLink {
   }
 
   /**
-   * 보낼 자리를 얻는다. ★1pc 는 m-line 을 늘리지 않는다(연§9-10-3 2-1) —
-   * 세울 때 만든 inactive 트랜시버를 되쓴다. addTransceiver 를 다시 부르면
-   * 최초 한 번만 허용된 클라 offer 경로가 다시 필요해지고 SSRC 도 새로 시작한다.
+   * 보낼 자리를 얻는다. `1pc` 은 세울 때 만든 `inactive` 트랜시버를 먼저 되쓴다 —
+   * SSRC·대역 추정이 보존된다. 없으면 늘린다(pub 협상이 브라우저 offer 라 늘려도 된다).
    */
   /**
    * 보낼 자리 하나. ★`prefer` 를 주면 그 코덱을 offer 의 첫 줄로 세운다(연§6-3 무전 video).
@@ -132,12 +135,14 @@ export class PeerLink {
     return t.receiver.track.kind
   }
 
-  /** 연§9-8 — 내가 트랙을 더하거나 뺐다. 2pc 는 보내기 연결만 다시 협상한다. */
+  /**
+   * 연§9-8 — 내가 트랙을 더하거나 뺐다. ★협상 주체는 두 모드가 같다(연§9-10) —
+   * 브라우저가 offer 를 내고 클라가 answer 를 짓는다. `1pc` 은 같은 SDP 에 받기 자리가
+   * 딸려 오므로 `seats` 를 함께 넘긴다.
+   */
   renegotiatePublish(seats: readonly Seat[] = []): Promise<void> {
     return this.serial.run(async () => {
-      const pub = this.require(this.pub)
-      if (this.onePc) return this.unified(pub, seats)
-      await this.clientOffer(pub)
+      await this.clientOffer(this.require(this.pub), this.onePc ? seats : [])
     })
   }
 

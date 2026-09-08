@@ -95,6 +95,12 @@ export interface PublishOptions {
   readonly session?: SessionId
   /** opus 받는 쪽 선호. 없으면 offer 원문 그대로 간다. */
   readonly audioPrefs?: Readonly<Record<string, string | number | boolean>>
+  /**
+   * 연§9-10 규칙 1 — `1pc` 은 한 벌이라 브라우저 offer 에 ★받기 m-line 도 딸려 나온다.
+   * 그 자리를 §9-5 표대로 `sendonly` + SSRC 로 답한다. `recvonly` 로 답하면 브라우저가
+   * 방향 불일치로 거부한다. `2pc` 는 이 목록이 비어 있다.
+   */
+  readonly seats?: readonly Seat[]
 }
 
 /**
@@ -104,9 +110,19 @@ export interface PublishOptions {
 export function publishAnswer(offer: string | ParsedSdp, cfg: ServerConfig, opts: PublishOptions = {}): string {
   const parsed = typeof offer === 'string' ? parse(offer) : offer
   const sid = opts.session ?? { id: '1', version: 1 }
+  const seats = new Map((opts.seats ?? []).map((s) => [s.mid, s]))
   const lines = header(parsed.bundle, sid)
-  for (const m of parsed.sections) lines.push(...answerSection(m, cfg, opts))
+  for (const m of parsed.sections) {
+    const seat = seats.get(m.mid)
+    // 연§9-10 규칙 2 무중단 불변 — 상대 축의 번호는 offer 에 서 있는 것을 그대로 쓴다.
+    lines.push(...(seat === undefined ? answerSection(m, cfg, opts) : offerSection(seat, cfg, extmapOfSection(m), false)))
+  }
   return `${lines.join('\r\n')}\r\n`
+}
+
+/** 연§9-5 — 받기 m-line 에서 `sdes:mid` 는 뺀다. BUNDLE 구분이 SSRC 로 떨어져야 한다. */
+function extmapOfSection(m: MSection): readonly { id: number; uri: string }[] {
+  return [...m.extmap].filter(([, uri]) => uri !== URI_MID).map(([id, uri]) => ({ id, uri }))
 }
 
 function answerSection(m: MSection, cfg: ServerConfig, opts: PublishOptions): string[] {
@@ -257,16 +273,23 @@ export function unifiedOffer(seats: readonly Seat[], cfg: ServerConfig, opts: Un
   const byMid = new Map(confirmed.sections.map((m) => [m.mid, m]))
   const ordered = [...seats].sort((a, b) => Number.parseInt(a.mid, 10) - Number.parseInt(b.mid, 10))
 
-  const bundle = [...mine.sections.map((m) => m.mid), ...ordered.map((s) => s.mid)]
+  // ★받기 mid 는 `seats` 가 짓는다 — 브라우저 offer 에도 그 자리가 있으므로 빼지 않으면
+  // 한 mid 가 BUNDLE 에 두 번 들어가고 m-line 이 겹친다.
+  const seatMids = new Set(ordered.map((s) => s.mid))
+  const send = mine.sections.filter((m) => !seatMids.has(m.mid))
+  const bundle = [...send.map((m) => m.mid), ...ordered.map((s) => s.mid)]
   const lines = header(bundle, sid)
-  for (const m of mine.sections) lines.push(...sendSection(m, byMid.get(m.mid), cfg))
+  for (const m of send) lines.push(...sendSection(m, byMid.get(m.mid), cfg))
   for (const s of ordered) lines.push(...offerSection(s, cfg, extmapOf(confirmed, s.kind), false))
   return `${lines.join('\r\n')}\r\n`
 }
 
 /** 연§9-10-1 — 받기 확장 번호도 그 연결의 확정본을 쓴다. 한 BUNDLE 에 URI 마다 번호가 하나다. */
 function extmapOf(confirmed: ParsedSdp, kind: 'audio' | 'video'): readonly { id: number; uri: string }[] {
-  const m = confirmed.sections.find((s) => s.kind === kind)
+  // ★보내기 절에서 읽는다 — 확정본에는 받기 절도 함께 있고(연§9-10 규칙 1), 번호는 한 BUNDLE 에
+  // URI 마다 하나라 값은 같지만 출처를 정해 두지 않으면 절 순서에 따라 답이 흔들린다.
+  const m = confirmed.sections.find((s) => s.kind === kind && s.direction === 'recvonly')
+    ?? confirmed.sections.find((s) => s.kind === kind)
   if (!m) return []
   return [...m.extmap]
     .filter(([, uri]) => uri !== URI_MID)

@@ -419,3 +419,70 @@ test('비게 된 보내기 m-line 은 inactive 로 남는다', () => {
   assert.ok(video.includes('a=inactive'))
   assert.ok(parse(sdp).bundle.includes('1'), '없애면 BUNDLE 태그가 옮겨가 전송이 깨진다')
 })
+
+// 연§9-10 규칙 1 — `1pc` 은 한 벌이라 브라우저 offer 에 받기 m-line 이 딸려 나온다.
+// 그 자리를 `recvonly` 로 답하면 브라우저가 방향 불일치로 거부한다.
+const ONE_PC_OFFER = [
+  'v=0',
+  'o=- 4611731400430051336 3 IN IP4 127.0.0.1',
+  's=-',
+  't=0 0',
+  'a=group:BUNDLE 0 32',
+  'a=msid-semantic: WMS *',
+  'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+  'c=IN IP4 0.0.0.0',
+  'a=ice-ufrag:cliUf1',
+  'a=ice-pwd:cliPw1',
+  'a=fingerprint:sha-256 11:22:33',
+  'a=setup:actpass',
+  'a=mid:0',
+  'a=sendonly',
+  'a=rtcp-mux',
+  'a=rtpmap:111 opus/48000/2',
+  'a=fmtp:111 minptime=10;useinbandfec=1',
+  'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
+  'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
+  'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
+  'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+  'c=IN IP4 0.0.0.0',
+  'a=ice-ufrag:cliUf1',
+  'a=ice-pwd:cliPw1',
+  'a=fingerprint:sha-256 11:22:33',
+  'a=setup:actpass',
+  'a=mid:32',
+  'a=recvonly',
+  'a=rtcp-mux',
+  'a=rtpmap:111 opus/48000/2',
+  'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
+  'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
+  'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
+].join('\r\n')
+
+const SEAT_32: Seat = {
+  mid: '32', kind: 'audio', pt: 111, codec: 'opus', ssrc: 1001, track_id: 't-u2-mic', user_id: 'u2', room_id: 'r1',
+}
+
+test('연§9-10 규칙 1 — 딸려 나온 받기 자리를 sendonly + SSRC 로 답한다', () => {
+  const got = publishAnswer(ONE_PC_OFFER, CFG, { seats: [SEAT_32] })
+  const recv = section(got, 1)
+  assert.ok(recv.includes('a=mid:32') && recv.includes('a=sendonly'), '받기 자리는 서버가 보낸다')
+  assert.ok(!recv.includes('a=recvonly'), 'recvonly 로 답하면 방향 불일치로 거부된다')
+  assert.ok(recv.includes('a=msid:ox-u2 t-u2-mic') && recv.includes('a=ssrc:1001 cname:ox-sfu'))
+  assert.ok(!recv.some((l) => l.startsWith('a=extmap:1 ')), '받기에서 sdes:mid 는 뺀다(연§9-5)')
+  assert.equal(section(got, 0).find((l) => l.startsWith('a=recv') || l.startsWith('a=send')), 'a=recvonly')
+  assert.ok(lines(got).includes('a=group:BUNDLE 0 32'), 'm-line 개수와 순서는 offer 그대로다')
+})
+
+test('연§9-10 규칙 2 — 상대 축 번호는 offer 에 선 것 그대로다', () => {
+  const recv = section(publishAnswer(ONE_PC_OFFER, CFG, { seats: [SEAT_32] }), 1)
+  assert.deepEqual(recv.filter((l) => l.startsWith('a=extmap:')), [
+    'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
+    'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
+  ])
+})
+
+test('연§9-10-1 — 받기 mid 가 내 offer 에도 있으면 한 번만 싣는다', () => {
+  const got = unifiedOffer([SEAT_32], CFG, { mine: ONE_PC_OFFER, confirmed: publishAnswer(ONE_PC_OFFER, CFG, { seats: [SEAT_32] }) })
+  assert.ok(lines(got).includes('a=group:BUNDLE 0 32'), 'mid 가 BUNDLE 에 두 번 들어가지 않는다')
+  assert.equal(lines(got).filter((l) => l === 'a=mid:32').length, 1, 'm-line 이 겹치지 않는다')
+})
