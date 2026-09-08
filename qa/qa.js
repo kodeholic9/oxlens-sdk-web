@@ -2,6 +2,17 @@
 // 3층 어댑터 — spec 은 이 표면만 쓴다. SDK 내부를 직접 만지지 않는다.
 import { createClient } from '../dist/index.js'
 
+// ★시험 전용 관측 — 산 연결의 손잡이를 여기서 잡는다. 제품에 구멍을 내지 않으려고
+//   페이지가 생성자를 감싼다. 갈래B 가 "브라우저에게 offer 를 시키면 어떻게 되나" 를 재현하는 자리다.
+const seenPcs = []
+const OriginalPc = window.RTCPeerConnection
+window.RTCPeerConnection = function (config) {
+  const pc = new OriginalPc(config)
+  seenPcs.push(pc)
+  return pc
+}
+window.RTCPeerConnection.prototype = OriginalPc.prototype
+
 const state = {
   client: null,
   base: null,
@@ -161,6 +172,23 @@ const qa = {
       })
     }
     return out
+  },
+
+  /**
+   * 연§9-10 규칙 1 을 어긴다 — 산 연결에서 ★브라우저가 자기 offer 를 내게 한다.
+   * 성공하면 되돌려 세션을 원래대로 둔다(대조군이 그 뒤로도 돌아야 한다).
+   */
+  async forceBrowserOffer() {
+    const pc = seenPcs[seenPcs.length - 1]
+    if (!pc) return { refused: false, message: 'no pc', mids: [] }
+    const mids = pc.getTransceivers().map((t) => `${t.mid}:${t.currentDirection}`)
+    try {
+      await pc.setLocalDescription(await pc.createOffer())
+      await pc.setLocalDescription({ type: 'rollback' })
+      return { refused: false, message: '', mids }
+    } catch (e) {
+      return { refused: true, message: String(e.message ?? e), mids }
+    }
   },
 
   session() {
