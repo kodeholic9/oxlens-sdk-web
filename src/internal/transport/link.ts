@@ -59,6 +59,15 @@ export class PeerLink {
 
   get sfuId(): string { return this.cfg.sfu_id }
   get onePc(): boolean { return this.cfg.pc_mode === '1pc' }
+
+  /**
+   * 연§9-10 규칙 1 — `1pc` 은 SDP 가 한 벌이라 발행 협상에도 받기 자리가 딸려 온다.
+   * 이 연결이 마지막으로 조립한 받기 자리다.
+   */
+  private seats: readonly Seat[] = []
+
+  /** 연§9-10-3 2단계가 세운 예비 자리. 되쓸 수 있는 것은 ★이것뿐이다. */
+  private spares: TransceiverLike[] = []
   get channel(): DataChannelLike | null { return this.dc }
   get isOpen(): boolean { return this.pub !== null }
   get queued(): number { return this.serial.pending }
@@ -76,8 +85,9 @@ export class PeerLink {
       this.dc = pub.createDataChannel(DC_LABEL, { ordered: false, maxRetransmits: 0 })
       // 연§9-10-3 2② — 확정 answer 를 만들어 둔다. 없으면 첫 마이크에서 코덱 줄의 출처가 없다.
       if (this.onePc) {
-        pub.addTransceiver('audio', { direction: 'inactive' })
-        pub.addTransceiver('video', { direction: 'inactive' })
+        // 연§9-10-3 2단계 — PT·확장 번호의 씨앗. ★우리가 만든 둘만 나중에 되쓴다.
+        this.spares = [pub.addTransceiver('audio', { direction: 'inactive' }),
+          pub.addTransceiver('video', { direction: 'inactive' })]
       }
       await this.clientOffer(pub)
       if (!this.onePc) {
@@ -117,9 +127,14 @@ export class PeerLink {
    */
   sender(kind: 'audio' | 'video', prefer?: { codec: string; fmtp?: string }): TransceiverLike {
     const pub = this.require(this.pub)
-    if (this.onePc) {
-      const spare = pub.getTransceivers().find((t) => t.direction === 'inactive' && this.kindOf(t) === kind)
-      if (spare) { spare.direction = 'sendonly'; return spare }
+    // ★서버가 준 받기 트랜시버를 집으면 안 된다 — 잔존 자리도 `inactive` 라 방향으로는 못 가른다.
+    //   그 자리에 송신을 얹으면 브라우저가 demuxer 기준을 못 세워 `setLocalDescription` 이 던진다.
+    const spare = this.spares.findIndex((t) => this.kindOf(t) === kind)
+    if (spare >= 0) {
+      const t = this.spares[spare]!
+      this.spares.splice(spare, 1)
+      t.direction = 'sendonly'
+      return t
     }
     const t = pub.addTransceiver(kind, { direction: 'sendonly' })
     if (prefer !== undefined) applyPreference(t, kind, prefer)
@@ -140,9 +155,10 @@ export class PeerLink {
    * 브라우저가 offer 를 내고 클라가 answer 를 짓는다. `1pc` 은 같은 SDP 에 받기 자리가
    * 딸려 오므로 `seats` 를 함께 넘긴다.
    */
-  renegotiatePublish(seats: readonly Seat[] = []): Promise<void> {
+  renegotiatePublish(): Promise<void> {
     return this.serial.run(async () => {
-      await this.clientOffer(this.require(this.pub), this.onePc ? seats : [])
+      // ★받기 자리는 이 연결이 이미 아는 것이다 — 발행 경로가 따로 들고 다니지 않는다.
+      await this.clientOffer(this.require(this.pub), this.onePc ? this.seats : [])
     })
   }
 
@@ -151,6 +167,7 @@ export class PeerLink {
    * 성공하면 부르는 쪽이 READY{tracks} 를 보낸다. 실패했으면 보내지 않는다.
    */
   negotiateSubscribe(seats: readonly Seat[]): Promise<void> {
+    this.seats = seats
     return this.serial.run(async () => {
       if (this.onePc) return this.unified(this.require(this.pub), seats)
       const sub = this.require(this.sub)

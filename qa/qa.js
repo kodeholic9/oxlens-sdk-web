@@ -20,10 +20,11 @@ function note(kind, detail) {
 // 시험에서는 하니스(node)가 그 자리를 맡아 토큰을 넣어 준다.
 
 const qa = {
-  async connect({ base, token }) {
+  async connect({ base, token, pcMode }) {
     state.base = base
     state.token = token
-    const client = createClient({ base, token })
+    // 연§9-10-2 — `pc_mode` 는 붙기 전에 정해진다. 시험이 모드를 지정하는 자리가 여기다.
+    const client = createClient(pcMode ? { base, token, pcMode } : { base, token })
     state.client = client
     client.on('track', (room, t) => {
       state.tracks.set(t.id, { track: t, roomId: room.id })
@@ -140,17 +141,22 @@ const qa = {
       let packets = null
       let bytes = null
       let framesDecoded = null
+      // 연§9-10 규칙 2 — 끊김은 계수가 멎는 것으로도, 디코더가 얼어붙는 것으로도 드러난다.
+      let freezeCount = null
+      let pauseCount = null
       for (const row of (await track.getStats()).values()) {
         if (row.type !== 'inbound-rtp') continue
         packets = row.packetsReceived ?? null
         bytes = row.bytesReceived ?? null
         framesDecoded = row.framesDecoded ?? null
+        freezeCount = row.freezeCount ?? null
+        pauseCount = row.pauseCount ?? null
       }
       out.push({
         id, roomId, kind: track.kind, active: track.active,
         muted: track.mediaStreamTrack.muted,
         readyState: track.mediaStreamTrack.readyState,
-        packets, bytes, framesDecoded,
+        packets, bytes, framesDecoded, freezeCount, pauseCount,
         ...(el ? { videoWidth: el.videoWidth, videoHeight: el.videoHeight, currentTime: el.currentTime } : {}),
       })
     }

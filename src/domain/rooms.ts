@@ -46,6 +46,8 @@ export interface Server {
   readonly link: PeerLink
   readonly store: TrackStore
   readonly rooms: Set<string>
+  /** 연§9-10-3 2-0 — 확정본 신고는 그 연결에 한 번이다. */
+  reported?: boolean
 }
 
 export interface RoomsOptions {
@@ -122,6 +124,9 @@ export class Rooms {
 
     const server = await this.attach(res.server_config)
     server.rooms.add(roomId)
+    // 연§9-10-3 2-0 — `1pc` 은 확정본을 ★신고하고 응답을 기다린다. 신고 전에 조립하면
+    // 서버가 보내는 PT·확장 번호와 내 SDP 가 어긋나 ★패킷은 오는데 트랙에 안 실린다.
+    await this.reportTransport(server, roomId)
     this.homeOf.set(roomId, server.sfuId)
     server.store.apply('join', roomId, res.version, { kind: 'snapshot', tracks: res.tracks })
     if (select) this.pubRoom = { room: roomId, sfuId: server.sfuId }
@@ -191,6 +196,16 @@ export class Rooms {
       if (this.state.get(room) === 'none') continue
       await request(this.sig(), this.clock, Op.Ready, { room_id: room, type: 'tracks' })
     }
+  }
+
+  /** 연§6-3 `READY{type:"transport"}` — `1pc` 전용이고 그 연결에 한 번이다(정§7-4). */
+  private async reportTransport(server: Server, roomId: string): Promise<void> {
+    if (server.cfg.pc_mode !== '1pc' || server.reported === true) return
+    const report = server.link.transportReport()
+    await request(this.sig(), this.clock, Op.Ready, {
+      room_id: roomId, type: 'transport', extmap: report.extmap, codecs: report.codecs,
+    })
+    server.reported = true
   }
 
   private async attach(cfg: ServerConfig): Promise<Server> {

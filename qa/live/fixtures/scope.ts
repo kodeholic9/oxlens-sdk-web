@@ -19,9 +19,14 @@ export class Scope {
   user(label: string): string { return userFor(this.tag, label) }
 
   /** ★참가자는 이 문으로만 연다 — 회수 목록에 들어가야 방이 비워진다. */
-  async open(context: BrowserContext, opts: { userId: string; priority?: number }): Promise<Participant> {
+  async open(
+    context: BrowserContext, opts: { userId: string; priority?: number; pcMode?: '1pc' | '2pc' },
+  ): Promise<Participant> {
     const page = await context.newPage()
-    page.on('console', (m) => { if (m.type() === 'error') process.stdout.write(`  [console] ${m.text()}\n`) })
+    // ★누구의 콘솔인지 붙인다 — 두 페이지가 섞이면 증거가 증거 노릇을 못 한다.
+    page.on('console', (m) => {
+      if (m.type() === 'error') process.stdout.write(`  [console ${opts.userId}] ${m.text()}\n`)
+    })
     page.on('pageerror', (e) => process.stdout.write(`  [pageerror] ${e.message}\n`))
     await page.goto(PAGE)
     await page.waitForFunction(() => (window as { qaReady?: boolean }).qaReady === true)
@@ -35,7 +40,9 @@ export class Scope {
         [fn, args] as const,
       ) as Promise<T>,
     }
-    await part.call('connect', { base: BASE, token: await userToken(opts.userId, opts.priority ?? 0) })
+    await part.call('connect', {
+      base: BASE, token: await userToken(opts.userId), ...(opts.pcMode ? { pcMode: opts.pcMode } : {}),
+    })
     this.parts.push(part)
     return part
   }

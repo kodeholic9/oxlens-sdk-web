@@ -17,6 +17,9 @@ export interface TrackStat {
   readonly framesDecoded: number | null
   readonly videoWidth?: number
   readonly currentTime?: number
+  /** 연§9-10 규칙 2 — 끊김은 계수가 멎는 것으로도, 디코더가 얼어붙는 것으로도 드러난다. */
+  readonly freezeCount?: number | null
+  readonly pauseCount?: number | null
 }
 
 export interface Flow {
@@ -39,4 +42,41 @@ export async function flowOf(
     bytes: (second.bytes ?? 0) - (first.bytes ?? 0),
     frames: (second.framesDecoded ?? 0) - (first.framesDecoded ?? 0),
   }
+}
+
+export interface Sample {
+  readonly at: number
+  readonly stat: TrackStat | undefined
+}
+
+/**
+ * 연§9-10 규칙 2 — 재협상 창을 촘촘히 훑는다. 두 스냅샷의 차분으로는 ★창 안의 끊김을 못 본다.
+ * `during` 은 표본 몇 개가 지난 뒤 한 번 친다 — 사건과 관측이 같은 시간축에 있어야 한다.
+ */
+export async function watch(
+  p: Participant, pick: (t: TrackStat) => boolean,
+  opts: { samples: number; gapMs: number; fireAt: number; during: () => Promise<unknown> },
+): Promise<Sample[]> {
+  const out: Sample[] = []
+  let fired: Promise<unknown> | null = null
+  for (let i = 0; i < opts.samples; i += 1) {
+    const stats = await p.call<TrackStat[]>('trackStats')
+    out.push({ at: Date.now(), stat: stats.find(pick) })
+    if (i === opts.fireAt) fired = opts.during()
+    await new Promise((r) => setTimeout(r, opts.gapMs))
+  }
+  if (fired) await fired
+  return out
+}
+
+/** 표본 사이에 ★한 번이라도 멎은 자리. 없으면 빈 배열이다. */
+export function stalls(samples: readonly Sample[]): { i: number; packets: number }[] {
+  const out: { i: number; packets: number }[] = []
+  for (let i = 1; i < samples.length; i += 1) {
+    const a = samples[i - 1]?.stat?.packets ?? null
+    const b = samples[i]?.stat?.packets ?? null
+    if (a === null || b === null) { out.push({ i, packets: -1 }); continue }
+    if (b - a <= 0) out.push({ i, packets: b - a })
+  }
+  return out
 }
