@@ -76,18 +76,19 @@ test('AUDIO-OUT-03 방 볼륨·뮤트가 재생에 실제로 걸린다', async (
   await talker.call('enableMic')
 
   await expect.poll(() => listener.call<AudioOut>('audioOut').then((a) => a.count)).toBeGreaterThan(0)
-  const n = (await listener.call<AudioOut>('audioOut')).count
 
+  // ★불변은 "그 방의 **모든** 요소에 걸린다" 이다 — 개수를 먼저 찍어 두고 견주면
+  //   그 사이 무전 슬롯 요소가 하나 더 붙는 창에서 시험이 저 혼자 흔들린다.
   await listener.call('roomAudio', ROOM, { volume: 0.25 })
   await expect.poll(
-    () => listener.call<AudioOut>('audioOut').then((a) => a.volumes.filter((v) => v === 0.25).length),
-  ).toBe(n)
+    () => listener.call<AudioOut>('audioOut').then((a) => a.volumes.every((v) => v === 0.25) && a.count > 0),
+  ).toBe(true)
 
   await listener.call('roomAudio', ROOM, { muted: true })
   await expect.poll(
-    () => listener.call<AudioOut>('audioOut').then((a) => a.muted),
+    () => listener.call<AudioOut>('audioOut').then((a) => a.count > 0 && a.muted === a.count),
     { message: '값만 들고 재생에 안 걸면 화면은 음소거인데 소리가 난다' },
-  ).toBe(n)
+  ).toBe(true)
 })
 
 test('AUDIO-OUT-04 트랙이 사라지면 요소도 놓는다', async ({ browser }) => {
