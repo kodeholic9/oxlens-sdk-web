@@ -291,9 +291,7 @@ function extmapOf(confirmed: ParsedSdp, kind: 'audio' | 'video'): readonly { id:
   const m = confirmed.sections.find((s) => s.kind === kind && s.direction === 'recvonly')
     ?? confirmed.sections.find((s) => s.kind === kind)
   if (!m) return []
-  return [...m.extmap]
-    .filter(([, uri]) => uri !== URI_MID)
-    .map(([id, uri]) => ({ id, uri }))
+  return [...m.extmap].filter(([, uri]) => uri !== URI_MID).map(([id, uri]) => ({ id, uri }))
 }
 
 function sendSection(m: MSection, confirmed: MSection | undefined, cfg: ServerConfig): string[] {

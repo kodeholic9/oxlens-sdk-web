@@ -157,8 +157,12 @@ export class PeerLink {
    */
   renegotiatePublish(): Promise<void> {
     return this.serial.run(async () => {
-      // ★받기 자리는 이 연결이 이미 아는 것이다 — 발행 경로가 따로 들고 다니지 않는다.
-      await this.clientOffer(this.require(this.pub), this.onePc ? this.seats : [])
+      const pub = this.require(this.pub)
+      // ★`1pc` 은 pub 사건도 합성 offer 다 — 브라우저가 로컬 offer 를 내면 같은 BUNDLE 안
+      //   받기 audio m-line 이 둘 이상일 때 PT 집합이 겹쳐 demuxer 기준 등록이 거부된다
+      //   (실측: `Failed to apply demuxer criteria`). 그 자리를 만들지 않는 것이 유일한 길이다.
+      if (this.onePc) return this.unified(pub, this.seats)
+      await this.clientOffer(pub)
     })
   }
 
