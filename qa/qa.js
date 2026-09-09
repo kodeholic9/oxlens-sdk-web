@@ -155,6 +155,15 @@ const qa = {
       // 연§9-10 규칙 2 — 끊김은 계수가 멎는 것으로도, 디코더가 얼어붙는 것으로도 드러난다.
       let freezeCount = null
       let pauseCount = null
+      // 연§9-10 규칙 2 의 ★폭을 재는 눈금. 패킷 계수는 표본 창보다 짧은 끊김을 못 본다
+      //   (opus 20ms ptime 이면 250ms 창에 12.5 패킷이라 40ms 가 비어도 계수는 는다).
+      //   오디오 은닉은 48kHz 샘플 단위라 480 샘플이 곧 10ms 다.
+      let concealed = null
+      let silentConcealed = null
+      let inserted = null
+      let removed = null
+      let samplesReceived = null
+      let freezeMs = null
       for (const row of (await track.getStats()).values()) {
         if (row.type !== 'inbound-rtp') continue
         packets = row.packetsReceived ?? null
@@ -162,12 +171,19 @@ const qa = {
         framesDecoded = row.framesDecoded ?? null
         freezeCount = row.freezeCount ?? null
         pauseCount = row.pauseCount ?? null
+        concealed = row.concealedSamples ?? null
+        silentConcealed = row.silentConcealedSamples ?? null
+        inserted = row.insertedSamplesForDeceleration ?? null
+        removed = row.removedSamplesForAcceleration ?? null
+        samplesReceived = row.totalSamplesReceived ?? null
+        freezeMs = row.totalFreezesDuration ?? null
       }
       out.push({
         id, roomId, kind: track.kind, active: track.active,
         muted: track.mediaStreamTrack.muted,
         readyState: track.mediaStreamTrack.readyState,
         packets, bytes, framesDecoded, freezeCount, pauseCount,
+        concealed, silentConcealed, inserted, removed, samplesReceived, freezeMs,
         ...(el ? { videoWidth: el.videoWidth, videoHeight: el.videoHeight, currentTime: el.currentTime } : {}),
       })
     }

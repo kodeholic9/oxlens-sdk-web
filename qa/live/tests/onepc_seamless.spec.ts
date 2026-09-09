@@ -4,7 +4,7 @@
 // 트랙이 그 창에서 멎는지를 본다. 두 스냅샷 차분으로는 창 안의 끊김을 못 보므로 촘촘히 훑는다.
 import { test } from '@playwright/test'
 import { Scope, ensureRoom, expect } from '../fixtures/scope.js'
-import { stalls, TrackStat, watch } from '../fixtures/delta.js'
+import { msOf, stalls, TrackStat, watch } from '../fixtures/delta.js'
 
 const S = new Scope('onepc')
 const ROOM = S.room()
@@ -88,4 +88,60 @@ test('ONEPC-00 사건이 없으면 그냥 흐른다 — 기준선', async ({ bro
     samples: 10, gapMs: 250, fireAt: 99, during: async () => undefined,
   })
   expect(stalls(samples), '사건 없이도 멎으면 1pc 전달 자체가 안 서는 것이다').toEqual([])
+})
+
+/** 그 창 동안 늘어난 값. 계수는 누적이라 차분만이 뜻을 갖는다. */
+const grew = (a: TrackStat, b: TrackStat, k: keyof TrackStat): number =>
+  ((b[k] as number | null) ?? 0) - ((a[k] as number | null) ?? 0)
+
+/**
+ * ★ONEPC-04 — 끊김의 **폭**을 잰다.
+ *
+ * ONEPC-01·02 는 패킷 계수가 멎는지를 250ms 창으로 훑는다. 그 눈금은 창보다 짧은 끊김을
+ * 못 본다 — opus 20ms ptime 이면 250ms 에 12.5 패킷이라 ★40ms 가 비어도 계수는 늘어난다.
+ * 오디오 은닉은 48kHz 샘플 단위라 480 샘플이 곧 10ms 다. 두 축은 서로를 대신하지 못한다:
+ * 계수는 "온다" 를, 은닉은 "들린다" 를 말한다.
+ *
+ * ★이 눈금이 살아 있다는 증거 — 발행자 장치를 죽이면 2초 창에서 은닉이 1,900ms 로 오른다
+ * (`resync.spec.ts` 의 `killSource` 와 같은 손잡이). 평시 바닥은 0~6ms 다.
+ */
+test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다', async ({ browser }) => {
+  const ctx = await browser.newContext()
+  const ROOM4 = S.room('width')
+  const ROOM4B = S.room('width2')
+  await ensureRoom(ROOM4)
+  await ensureRoom(ROOM4B)
+  const a = await S.open(ctx, { userId: S.user('U07'), pcMode: '1pc' })
+  const b = await S.open(ctx, { userId: S.user('U08'), pcMode: '1pc' })
+  await a.call('join', ROOM4, 'talk')
+  await b.call('join', ROOM4, 'talk')
+  await b.call('enableMic')
+  await flowing(a)
+
+  const at = async (): Promise<TrackStat> =>
+    (await a.call<TrackStat[]>('trackStats')).find(peerAudio)!
+
+  /** 같은 길이의 창을 열고 그 안에서 사건을 친다. 사건이 없으면 그것이 기준선이다. */
+  const window_ = async (during: () => Promise<unknown>): Promise<TrackStat[]> => {
+    const before = await at()
+    const fired = during()
+    await a.page.waitForTimeout(2_000)
+    await fired
+    return [before, await at()]
+  }
+
+  const [q0, q1] = await window_(async () => undefined)
+  const floor = grew(q0!, q1!, 'concealed')
+
+  for (const [what, fire] of [
+    ['보내기 증설', () => a.call('enableCamera')],
+    ['받기 증설', () => a.call('join', ROOM4B, 'listen')],
+  ] as const) {
+    const [s0, s1] = await window_(fire)
+    const silent = grew(s0!, s1!, 'silentConcealed')
+    const hidden = grew(s0!, s1!, 'concealed')
+    expect(silent, `★${what} 창에서 무음으로 메운 자리 — 사람이 듣는 끊김이다(${msOf(silent)}ms)`).toBe(0)
+    expect(hidden, `${what} 창 은닉 ${msOf(hidden)}ms · 기준선 ${msOf(floor)}ms — 10ms 를 넘으면 재협상이 소리를 끊은 것이다`)
+      .toBeLessThanOrEqual(480)
+  }
 })

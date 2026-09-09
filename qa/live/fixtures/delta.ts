@@ -20,7 +20,21 @@ export interface TrackStat {
   /** 연§9-10 규칙 2 — 끊김은 계수가 멎는 것으로도, 디코더가 얼어붙는 것으로도 드러난다. */
   readonly freezeCount?: number | null
   readonly pauseCount?: number | null
+  /**
+   * ★끊김의 **폭**을 재는 눈금. 패킷 계수는 표본 창보다 짧은 끊김을 못 본다 —
+   * opus 20ms ptime 이면 250ms 창에 12.5 패킷이라 40ms 가 비어도 계수는 는다.
+   * 오디오 은닉은 48kHz 샘플 단위라 ★480 샘플이 곧 10ms 다.
+   */
+  readonly concealed?: number | null
+  readonly silentConcealed?: number | null
+  readonly inserted?: number | null
+  readonly removed?: number | null
+  readonly samplesReceived?: number | null
+  readonly freezeMs?: number | null
 }
+
+/** 48kHz 샘플 → ms. 오디오 계수는 전부 이 눈금이다. */
+export const msOf = (samples: number): number => Math.round((samples / 48) * 10) / 10
 
 export interface Flow {
   readonly packets: number
