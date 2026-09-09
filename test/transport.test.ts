@@ -153,7 +153,11 @@ test('READY{transport} 재료는 확정본에서 뽑는다', async () => {
     },
   ])
   const uris = report.extmap.map((e) => `${e.id}:${e.uri.split(/[:/]/).pop()!}`)
-  assert.ok(uris.includes('1:mid') && uris.includes('4:ssrc-audio-level'))
+  assert.ok(uris.includes('4:ssrc-audio-level'), '받기 절이 쓰는 확장은 번호째로 신고한다')
+  // 연§9-10-1 — 신고하는 것은 ★받기 절이 쓰는 표다. mid 를 넣어 신고하면 서버가 egress 에
+  // 발행자의 mid 값을 구독자가 읽는 번호로 옮겨 적고, 받는 쪽은 그 이름을 자기 보내기 m-line 으로
+  // 읽어 그 SSRC 의 주인을 옮긴다(연§9-5 · §9-10).
+  assert.ok(!uris.some((u) => u.endsWith(':mid')), '★sdes:mid 는 신고표에 없다')
 })
 
 test('SDK§10-2 — 모든 PC 가 붙어 있어야 살아 있다', async () => {

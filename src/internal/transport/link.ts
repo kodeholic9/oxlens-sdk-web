@@ -7,7 +7,7 @@ import {
   TransceiverLike,
 } from '../../platform/webrtc.js'
 import { publishAnswer, Seat, subscribeOffer, unifiedOffer } from '../sdp/build.js'
-import { ServerConfig } from '../sdp/config.js'
+import { ServerConfig, URI_MID } from '../sdp/config.js'
 import { parse } from '../sdp/parse.js'
 import { Serial } from './serial.js'
 
@@ -208,7 +208,10 @@ export class PeerLink {
     if (pc.signalingState !== 'stable') await pc.setLocalDescription({ type: 'rollback' })
   }
 
-  /** 연§6-3 — 서버가 egress 확장 번호·PT 를 이 표로 재기록한다. */
+  /** 연§6-3 — 서버가 egress 확장 번호·PT 를 이 표로 재기록한다.
+   *  ★신고하는 것은 **받기 절이 쓰는 표**다(연§9-10-1) — `sdes:mid` 는 빠진다.
+   *  이것을 넣어 신고하면 서버가 egress 에 ★발행자의 mid 값을 구독자가 읽는 번호로 옮겨 적고,
+   *  받는 쪽은 그 이름을 자기 보내기 m-line 으로 읽어 그 SSRC 의 주인을 옮긴다(연§9-5 · §9-10). */
   transportReport(): TransportReport {
     if (this.confirmed === null) {
       throw new LinkError('no_confirmed', '신고할 확정본이 없다')
@@ -218,7 +221,7 @@ export class PeerLink {
     const codecs: { kind: 'audio' | 'video'; pt: number; name: string; fmtp?: string; rtx_pt?: number }[] = []
     for (const m of parsed.sections) {
       if (m.kind === 'application') continue
-      for (const [id, uri] of m.extmap) extmap.set(uri, id)
+      for (const [id, uri] of m.extmap) if (uri !== URI_MID) extmap.set(uri, id)
       for (const pt of m.pts) {
         const rtpmap = m.rtpmap.get(pt)
         if (rtpmap === undefined || m.rtx.has(pt)) continue
