@@ -9,6 +9,9 @@ const CHROMIUM_MEDIA = [
   '--use-fake-ui-for-media-stream',
   '--use-fake-device-for-media-stream',
   '--autoplay-policy=no-user-gesture-required',
+  // ★화면공유(getDisplayMedia)도 물어보지 않고 고르게 한다 — 연§9-10-3 2② 의 셋째 자리 축.
+  '--auto-select-desktop-capture-source=Entire screen',
+  '--allow-http-screen-capture',
 ]
 const FIREFOX_MEDIA = {
   'media.navigator.streams.fake': true,

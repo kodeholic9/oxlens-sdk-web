@@ -83,6 +83,11 @@ const qa = {
     return { id: t.id, state: t.state, server: t.server }
   },
 
+  async enableScreen() {
+    const t = await state.client.media.enableScreen()
+    return { id: t.id, state: t.state, source: t.source, server: t.server }
+  },
+
   async setSpeakingRoom(roomId) { await state.client.setSpeakingRoom(roomId) },
 
   async press(roomId) { await state.client.rooms.get(roomId).ptt.press() },
@@ -205,6 +210,18 @@ const qa = {
     } catch (e) {
       return { refused: true, message: String(e.message ?? e), mids }
     }
+  },
+
+  /**
+   * 연§9-10 규칙 2(무중단 불변)의 관측 재료 — 산 연결의 m-line 자리를 그대로 낸다.
+   * ★판정 재료만이다. "늘었나" 를 spec 이 정한다(연§9-10-3 2② 의 씨앗 셋이 성립하는지).
+   */
+  mlines() {
+    const pc = seenPcs[seenPcs.length - 1]
+    if (!pc) return null
+    return pc.getTransceivers().map((t) => ({
+      mid: t.mid, kind: t.receiver.track.kind, direction: t.direction,
+    }))
   },
 
   session() {

@@ -53,13 +53,35 @@ test('2pc 는 연결 둘, 1pc 는 하나다', async () => {
   assert.equal(one.peers.made.length, 1, '전송로가 하나여야 keepalive 가 한 벌로 준다')
 })
 
-test('1pc 는 세우면서 audio·video 트랜시버를 inactive 로 함께 세운다', async () => {
+test('1pc 는 세우면서 audio 1 + video 2 를 inactive 로 함께 세운다', async () => {
   const { peers, link } = stand('1pc')
   await link.open()
   assert.deepEqual(
     peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')),
-    ['addTransceiver:audio:inactive', 'addTransceiver:video:inactive'],
+    ['addTransceiver:audio:inactive', 'addTransceiver:video:inactive', 'addTransceiver:video:inactive'],
     '안 세우면 첫 마이크에서 가져올 코덱 확정본이 없다',
+  )
+})
+
+// ★연§9-10-3 2② — video 가 둘인 것은 카메라 + 화면공유다. 규칙 1 아래에선 새 보내기 m-line 의
+// mid 를 지을 주체가 클라에 없고, 규칙 2(무중단 불변)는 m-line 이 느는 순간을 가장 싫어한다.
+test('★1pc 에서 카메라와 화면공유가 m-line 을 안 늘린다', async () => {
+  const { peers, link } = stand('1pc')
+  await link.open()
+  const before = peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length
+
+  const cam = link.sender('video')
+  const screen = link.sender('video')
+  assert.notEqual(cam.mid, screen.mid, '두 자리는 서로 다른 m-line 이다')
+  assert.equal(
+    peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length, before,
+    '★미리 세운 자리를 되쓴다 — 늘리면 무중단 불변이 깨지고 BUNDLE 천장을 먹는다',
+  )
+
+  // 셋을 다 쓴 뒤에야 늘린다(그때는 규칙 1 이 그 mid 를 정할 수 없다 — 값을 늘리는 것이 답이다).
+  link.sender('video')
+  assert.equal(
+    peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length, before + 1,
   )
 })
 

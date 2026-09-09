@@ -111,9 +111,15 @@ export class PeerLink {
       this.dc = pub.createDataChannel(DC_LABEL, { ordered: false, maxRetransmits: 0 })
       // 연§9-10-3 2② — 확정 answer 를 만들어 둔다. 없으면 첫 마이크에서 코덱 줄의 출처가 없다.
       if (this.onePc) {
-        // 연§9-10-3 2단계 — PT·확장 번호의 씨앗. ★우리가 만든 둘만 나중에 되쓴다.
-        this.spares = [pub.addTransceiver('audio', { direction: 'inactive' }),
-          pub.addTransceiver('video', { direction: 'inactive' })]
+        // 연§9-10-3 2② — PT·확장 번호의 씨앗. ★우리가 만든 셋만 나중에 되쓴다.
+        // ★video 가 둘인 것은 카메라 + 화면공유다. 규칙 1(언제나 서버 offer) 아래에선
+        // 새 보내기 m-line 의 mid 를 지을 주체가 클라에 없고, 규칙 2(무중단 불변)는 m-line 이
+        // 느는 순간을 가장 싫어한다 — inactive m-line 하나가 그 규칙을 새로 세우는 것보다 싸다.
+        this.spares = [
+          pub.addTransceiver('audio', { direction: 'inactive' }),
+          pub.addTransceiver('video', { direction: 'inactive' }),
+          pub.addTransceiver('video', { direction: 'inactive' }),
+        ]
       }
       await this.clientOffer(pub)
       if (!this.onePc) {

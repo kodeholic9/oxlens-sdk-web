@@ -133,8 +133,11 @@ test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다'
   const [q0, q1] = await window_(async () => undefined)
   const floor = grew(q0!, q1!, 'concealed')
 
+  // ★화면공유는 연§9-10-3 2② 가 미리 세운 **둘째 video 자리**를 되쓴다 — m-line 이 늘지 않는다.
+  // 늘면 규칙 2(무중단 불변)가 그 창에서 깨지고, 여기 은닉 폭으로 그것이 보인다.
   for (const [what, fire] of [
     ['보내기 증설', () => a.call('enableCamera')],
+    ['화면공유 증설', () => a.call('enableScreen')],
     ['받기 증설', () => a.call('join', ROOM4B, 'listen')],
   ] as const) {
     const [s0, s1] = await window_(fire)
@@ -144,4 +147,12 @@ test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다'
     expect(hidden, `${what} 창 은닉 ${msOf(hidden)}ms · 기준선 ${msOf(floor)}ms — 10ms 를 넘으면 재협상이 소리를 끊은 것이다`)
       .toBeLessThanOrEqual(480)
   }
+
+  // ★연§9-10-3 2② — 카메라와 화면공유가 **미리 세운 자리**를 되썼는지. 늘었으면 위 은닉 폭이
+  // 우연히 작았을 뿐이고, 규칙 2 는 다음 형상에서 깨진다.
+  const seats = await a.call<{ mid: string; kind: string; direction: string }[]>('mlines')
+  const sending = seats.filter((t) => t.direction === 'sendonly' || t.direction === 'sendrecv')
+  expect(sending.map((t) => t.kind).sort(), '보내는 것은 카메라 + 화면공유 둘이다').toEqual(['video', 'video'])
+  expect(seats.filter((t) => t.kind === 'video' && Number.parseInt(t.mid, 10) < 32).length,
+    '★보내기 video 자리는 2단계가 세운 둘 그대로다 — 늘면 무중단 불변이 다음 형상에서 깨진다').toBe(2)
 })
