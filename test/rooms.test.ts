@@ -219,7 +219,9 @@ test('통지는 보관본 문 하나를 지난다', async () => {
     room_id: 'r1', kind: 'audio' as const, ssrc: 1, track_id: 't1', mid: '0', pt: 111,
   }
   assert.equal(s.rooms.applyEvent('r1', v, { kind: 'add', tracks: [track] }), 'ok')
-  assert.equal(s.rooms.applyEvent('r1', v, { kind: 'add', tracks: [track] }), 'stale')
+  // ★연§4-6 둘째 예외 — 같은 seq 는 에코다(나에게만 온 프레임). 버리면 재배정·소속 결과가 삼켜진다.
+  assert.equal(s.rooms.applyEvent('r1', v, { kind: 'add', tracks: [track] }), 'ok')
+  assert.equal(s.rooms.applyEvent('r1', { epoch: CFG.sfu_id, seq: 1 }, { kind: 'add', tracks: [track] }), 'stale')
   assert.equal(s.rooms.applyEvent('r1', { epoch: CFG.sfu_id, seq: 9 }, { kind: 'add', tracks: [track] }), 'resync')
 })
 

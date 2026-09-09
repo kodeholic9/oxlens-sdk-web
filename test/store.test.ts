@@ -25,8 +25,24 @@ test('낡은 응답이 최신 통지를 되감지 못한다', () => {
   assert.equal(s.tracks('r1').length, 2, 'seq 를 안 견주면 여기서 비어 버린다')
 })
 
-test('같은 seq 도 버린다 — 오르지 않았으면 새 사실이 아니다', () => {
-  assert.deepEqual(seeded().apply('event', 'r1', V(10), { kind: 'add', tracks: [track('2')] }),
+test('★같은 seq 는 에코다 — 내용을 반영하고 번호는 그대로 둔다(연§4-6 둘째 예외)', () => {
+  const s = seeded()
+  const r = s.apply('event', 'r1', V(10), { kind: 'add', tracks: [track('2')] })
+  assert.equal(r.accepted, true, '나에게만 온 프레임이라 서버가 seq 를 안 올렸다 — 버리면 결과가 삼켜진다')
+  assert.deepEqual(s.tracks('r1').map((t) => t.mid), ['0', '1', '2'])
+  assert.deepEqual(s.versionOf('r1'), V(10), '번호는 안 오른다')
+  assert.equal(s.apply('event', 'r1', V(12), { kind: 'add', tracks: [track('3')] }).accepted, false,
+    '에코를 받아도 그다음 갭 판정의 기준은 그대로다')
+})
+
+test('에코 다음 정상 통지는 그대로 이어진다', () => {
+  const s = seeded()
+  s.apply('event', 'r1', V(10), { kind: 'add', tracks: [track('2')] })
+  assert.equal(s.apply('event', 'r1', V(11), { kind: 'add', tracks: [track('3')] }).accepted, true)
+})
+
+test('작으면 여전히 버린다 — 되감기는 에코가 아니다', () => {
+  assert.deepEqual(seeded().apply('event', 'r1', V(9), { kind: 'add', tracks: [track('2')] }),
     { accepted: false, why: 'stale' })
 })
 

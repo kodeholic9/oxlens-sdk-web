@@ -181,13 +181,17 @@ export class Rooms {
     this.pubRoom = null
   }
 
-  /** 연§6-7 통지가 보관본에 닿는 유일한 문. 갭이면 부르는 쪽이 재동기한다. */
-  applyEvent(roomId: string, version: Version, delta: Parameters<TrackStore['apply']>[3]): 'ok' | 'stale' | 'resync' {
+  /**
+   * 연§6-7 통지가 보관본에 닿는 유일한 문. 갭이면 부르는 쪽이 재동기한다.
+   * ★`noop` — 받아들였는데 보관본이 안 바뀌었다. 연§4-6 배달 불변식이 시키는 **빈 델타**가 그것이다
+   * (`seq` 를 올린 사건이 나에게는 바꿀 것이 없을 때 번호만 받는다). 재조립을 걸면 안 붙는다.
+   */
+  applyEvent(roomId: string, version: Version, delta: Parameters<TrackStore['apply']>[3]): 'ok' | 'noop' | 'stale' | 'resync' {
     const server = this.serverOf(roomId)
     if (!server) return 'stale'
     const verdict = server.store.apply('event', roomId, version, delta)
-    if (verdict.accepted) return 'ok'
-    return verdict.why === 'stale' ? 'stale' : 'resync'
+    if (!verdict.accepted) return verdict.why === 'stale' ? 'stale' : 'resync'
+    return verdict.added.length + verdict.removed.length + verdict.unreachable.length === 0 && !verdict.reset ? 'noop' : 'ok'
   }
 
   /** 연§9-8 — 받을 것이 바뀌면 그 서버 하나만 다시 협상한다. */

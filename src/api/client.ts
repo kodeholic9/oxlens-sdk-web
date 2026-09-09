@@ -422,7 +422,8 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
           user_id: userId, role: Number(note.body.role ?? 255), select: note.body.select !== false,
           participant_type: Number(note.body.participant_type ?? 0), metadata: note.body.metadata,
         })
-        handle.setParticipants([...handle.participants, p])
+        // ★같은 seq 를 두 번 봐도 명단이 겹치지 않는다 — 견주기가 중복을 걸러 주지 않는다(연§4-6 둘째 예외).
+        handle.setParticipants([...handle.participants.filter((x) => x.userId !== userId), p])
         handle.emit('participantJoined', p)
       } else {
         handle.setParticipants(handle.participants.filter((p) => p.userId !== userId))
@@ -439,6 +440,9 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
         action === 'remove' ? { kind: 'remove', tracks } : { kind: 'add', tracks })
       if (verdict === 'stale') return
       if (verdict === 'resync') { this.queueResync(roomId); return }
+      // ★빈 델타 — 연§4-6 배달 불변식이 시키는 "번호만 받는 한 장"이다(내 트랙이라 바뀔 것이 없다).
+      // 여기서 재조립을 걸면 발행할 때마다 붙어 있는 배관을 헛되이 흔든다.
+      if (verdict === 'noop') return
       if (action === 'remove') {
         for (const t of tracks) { handle.drop(t.track_id); this.playback.remove(t.track_id) }
       }
@@ -457,7 +461,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
         ...(note.body.active === undefined ? {} : { active: note.body.active as boolean }),
         ...(note.body.duplex === undefined ? {} : { duplex: note.body.duplex as 'full' | 'half' }),
       }
-      if (this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [patched] }) !== 'ok') return
+      if (!['ok', 'noop'].includes(this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [patched] }))) return
       handle.refresh(patched)
       return
     }
@@ -476,10 +480,11 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       const affiliation = note.body.affiliation as { sub_rooms?: string[] } | undefined
       const cause = (note.body.cause ?? 'moderate') as string
 
-      // 연§4-6 견주기는 보관본 갱신을 지키는 규칙이다 — ★방을 내리는 결말에는 걸지 않는다.
-      // 그 뒤에 올 통지가 없어 되감길 것이 없고, 급사 통지(정§15-1)의 version 은 hub 가
-      // 마지막으로 통과시킨 값이라 보관값과 **같다** — 견주면 규칙 2 에 걸려 종결이 삼켜지고
-      // 방은 영영 안 닫힌다. 방을 유지하는 갱신만 견준다.
+      // 연§4-6 첫째 예외 — ★방을 내리는 결말에는 견주기를 걸지 않는다. 그 뒤에 올 통지가 없어
+      // 되감길 것이 없고, 급사 통지(정§15-1)의 version 은 hub 가 마지막으로 통과시킨 값이라
+      // 보관값과 같다 — 견주면 종결이 삼켜지고 방은 영영 안 닫힌다.
+      // 방을 유지하는 갱신은 연§4-6 둘째 예외로 받는다 — 이 통지는 나에게만 오므로 서버가
+      // seq 를 안 올렸다. 보관값과 같게 오고, 그것이 stale 이 아니라 에코다.
       if (affiliation?.sub_rooms?.includes(roomId) === true) {
         if (version && this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [] }) === 'stale') return
         handle.emit('affiliation', { cause: 'moderate' })

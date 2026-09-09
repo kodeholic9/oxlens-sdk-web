@@ -188,6 +188,29 @@ test('입퇴장도 보관본 문을 지난다 — seq 는 그때도 오른다', 
     '입퇴장이 문을 안 지나면 뒤따르는 트랙이 매번 갭으로 보여 영영 안 붙는다')
 })
 
+// ★연§4-6 배달 불변식 — `seq` 를 올린 사건은 방 전원에게 한 장씩 오고, 나에게 바뀔 것이 없으면
+// 빈 델타(`tracks:[]`)다. 번호만 받고 끝내야 한다 — 재조립을 걸면 붙어 있는 배관을 헛되이 흔든다.
+test('★빈 델타는 번호만 올린다 — 재협상하지 않는다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const before = s.ops().length
+  s.notify(Op.TrackEvent, {
+    action: 'add', room_id: 'r1', tracks: [], version: { epoch: CFG.sfu_id, seq: 2 },
+  })
+  await tick()
+  assert.deepEqual(room.tracks, [])
+  const after = s.sock.sent.map(decode).slice(before)
+  assert.ok(!after.some((f) => f.op === Op.Ready && f.kind === Kind.Request),
+    '내가 발행할 때마다 내 받기 배관이 흔들리면 안 된다')
+  // 번호는 받았다 — 다음 통지가 갭으로 보이지 않는다.
+  s.notify(Op.TrackEvent, {
+    action: 'add', room_id: 'r1', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 3 },
+  })
+  await s.drain(Op.Ready, {})
+  assert.equal(room.tracks.length, 1, '빈 델타가 문을 안 지나면 뒤엣것이 매번 갭이다')
+})
+
 test('TRACK_EVENT 는 보관본 문을 지나 트랙 이벤트가 된다', async () => {
   const s = stand()
   await connected(s)
@@ -241,8 +264,9 @@ test('낡은 통지는 트랙 이벤트를 만들지 않는다', async () => {
   const seen: string[] = []
   room.on('track', (t) => seen.push(t.id))
   const before = s.ops().length
+  // 입장 응답이 준 보관값은 seq 1 이다(:93). 그보다 ★작은 것만 되감기다 — 같은 값은 에코다(연§4-6 둘째 예외).
   s.notify(Op.TrackEvent, {
-    action: 'add', room_id: 'r1', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 1 },
+    action: 'add', room_id: 'r1', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 0 },
   })
   await tick()
   assert.deepEqual(seen, [], '되감기면 그 사이 트랙이 영영 안 붙는다')
@@ -250,6 +274,22 @@ test('낡은 통지는 트랙 이벤트를 만들지 않는다', async () => {
   const after = s.sock.sent.map(decode).slice(before)
   assert.ok(!after.some((f) => f.op === Op.Ready && f.kind === Kind.Request),
     '낡은 것에 재협상을 걸면 붙어 있는 배관을 헛되이 흔든다')
+})
+
+// ★연§4-6 둘째 예외 — `READY{transport}` 가 유발한 재배정은 나에게만 오고 `seq` 를 안 올린다.
+// 보관값과 같게 오므로, 같다고 버리면 재배정된 PT 가 SDP 에 영영 안 실린다.
+test('★같은 seq 의 TRACK_EVENT 는 에코로 반영한다 — 재배정이 삼켜지지 않는다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const seen: string[] = []
+  room.on('track', (t) => seen.push(t.id))
+  s.notify(Op.TrackEvent, {
+    action: 'add', room_id: 'r1', tracks: [MIC_TRACK], version: { epoch: CFG.sfu_id, seq: 1 },
+  })
+  await s.drain(Op.Ready, {})
+  assert.deepEqual(seen, ['t-u2-mic'], '같다고 버리면 재배정된 PT 가 SDP 에 영영 안 실린다')
+  assert.equal(room.tracks.length, 1)
 })
 
 test('갭이면 그 방을 통짜로 다시 받는다', async () => {
@@ -352,7 +392,9 @@ test('★방을 내리는 결말은 견주기에 걸리지 않는다 — 급사 
   assert.equal(s.client.rooms.has('r1'), false)
 })
 
-test('★방을 유지하는 결말은 그대로 견준다 — 낡은 소속 갱신은 버린다', async () => {
+// ★연§4-6 둘째 예외 — `ROOM_EVENT{affiliation}` 은 나에게만 오므로 서버가 `seq` 를 안 올렸다.
+// 보관값과 **같게** 오는 것이 정상이고, 그것이 되감기가 아니라 에코다.
+test('★방을 유지하는 결말은 에코로 반영한다 — 작은 것만 버린다', async () => {
   const s = stand()
   await connected(s)
   const room = await joined(s)
@@ -363,7 +405,15 @@ test('★방을 유지하는 결말은 그대로 견준다 — 낡은 소속 갱
     affiliation: { sub_rooms: ['r1'], pub_room: null }, version: { epoch: CFG.sfu_id, seq: 1 },
   })
   await tick()
-  assert.equal(stillThere, 0, '보관값과 같은 seq — 되감기라 버린다')
+  assert.equal(stillThere, 1, '같은 seq 는 에코다 — 버리면 중재 회수가 앱에 영영 안 간다')
+  assert.equal(room.state, 'joined')
+
+  s.notify(Op.RoomEvent, {
+    type: 'affiliation', room_id: 'r1', cause: 'moderate',
+    affiliation: { sub_rooms: ['r1'], pub_room: null }, version: { epoch: CFG.sfu_id, seq: 0 },
+  })
+  await tick()
+  assert.equal(stillThere, 1, '보관값보다 작은 것은 되감기라 버린다')
   assert.equal(room.state, 'joined')
 })
 

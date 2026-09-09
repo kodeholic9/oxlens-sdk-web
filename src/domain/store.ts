@@ -76,10 +76,15 @@ export class TrackStore {
     const whole = delta.kind === 'snapshot'
 
     const sameEpoch = cur !== undefined && cur.version.epoch === version.epoch
+    // 연§4-6 둘째 예외 — 보관값과 **같은** seq 는 나에게만 온 에코다(응답의 version ·
+    // ROOM_EVENT{affiliation} · READY{transport} 가 유발한 재배정 TRACK_EVENT).
+    // 서버가 배달 불변식대로 올리지 않았다는 뜻이므로 내용은 반영하고 번호는 그대로 둔다.
+    // 같다고 버리면 내가 요청한 결과가 통째로 삼켜진다.
+    const echo = cur !== undefined && sameEpoch && version.seq === cur.version.seq
     if (cur && sameEpoch) {
-      if (version.seq <= cur.version.seq) return { accepted: false, why: 'stale' }
+      if (version.seq < cur.version.seq) return { accepted: false, why: 'stale' }
       if (!whole && cur.desync) return { accepted: false, why: 'desync' }
-      if (!whole && version.seq !== cur.version.seq + 1) {
+      if (!whole && !echo && version.seq !== cur.version.seq + 1) {
         cur.desync = true
         return { accepted: false, why: 'gap' }
       }
