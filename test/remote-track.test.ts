@@ -12,6 +12,7 @@ function hostOf(sent: Sent[]): RoomHost {
     sendMessage: async () => ({ msgId: 'm' }),
     subscribeLayer: async (roomId, targets) => { sent.push({ roomId, targets }) },
     setRoomAudio: () => {},
+    report: () => {},
   }
 }
 
@@ -66,6 +67,81 @@ test('대상은 track_id 다 — user_id 를 싣지 않는다', async () => {
   await track.setLayer({ spatial: 0 })
   assert.equal(sent[0].targets[0].track_id, 't-u2-cam')
   assert.equal((sent[0].targets[0] as unknown as Record<string, unknown>).user_id, undefined)
+})
+
+interface FakeObservers {
+  fire(visible: boolean): void
+  resize(): void
+  restore(): void
+}
+
+/** 브라우저 관찰자 둘과 MediaStream 을 전역에 세운다 — 되돌리는 것은 부른 쪽이다. */
+function observers(): FakeObservers {
+  const g = globalThis as Record<string, unknown>
+  const saved = { ro: g.ResizeObserver, io: g.IntersectionObserver, dpr: g.devicePixelRatio, ms: g.MediaStream }
+  let ioCb: ((entries: { isIntersecting: boolean }[]) => void) | null = null
+  let roCb: (() => void) | null = null
+  g.ResizeObserver = class { constructor(cb: () => void) { roCb = cb } observe(): void {} disconnect(): void {} }
+  g.IntersectionObserver = class {
+    constructor(cb: (entries: { isIntersecting: boolean }[]) => void) { ioCb = cb }
+    observe(): void {}
+    disconnect(): void {}
+  }
+  g.devicePixelRatio = 2
+  g.MediaStream = class { constructor(readonly tracks: unknown[]) {} }
+  return {
+    fire: (visible) => ioCb?.([{ isIntersecting: visible }]),
+    resize: () => roCb?.(),
+    restore: () => { g.ResizeObserver = saved.ro; g.IntersectionObserver = saved.io; g.devicePixelRatio = saved.dpr; g.MediaStream = saved.ms },
+  }
+}
+
+const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+test('adaptiveStream — 보이면 200·작은 타일은 낮은 단, 안 보이면 정지·1', async () => {
+  const o = observers()
+  try {
+    const sent: Sent[] = []
+    const link = { receiverOf: () => null } as never
+    const track = new RemoteTrackHandle(entryOf(), {} as MediaStreamTrack, link, hostOf(sent), true)
+    const el = { clientWidth: 160 } as unknown as HTMLMediaElement
+    track.attach(el)
+    o.fire(true); await settle()
+    assert.deepEqual(sent.at(-1)!.targets[0], { track_id: 't-u2-cam', spatial: 0, paused: false, priority: 200 },
+      '160css × DPR 2 = 320px < 480 — 작은 타일은 낮은 단')
+    ;(el as unknown as { clientWidth: number }).clientWidth = 400
+    o.resize(); await settle()
+    assert.deepEqual(sent.at(-1)!.targets[0], { track_id: 't-u2-cam', spatial: 1, paused: false, priority: 200 })
+    o.fire(false); await settle()
+    assert.deepEqual(sent.at(-1)!.targets[0], { track_id: 't-u2-cam', paused: true, priority: 1 })
+    const n = sent.length
+    o.fire(false); await settle()
+    assert.equal(sent.length, n, '같은 답이면 다시 보내지 않는다')
+    o.fire(true); await settle()
+    track.detach(el); await settle()
+    assert.deepEqual(sent.at(-1)!.targets[0], { track_id: 't-u2-cam', paused: true, priority: 1 }, '떼면 안 보는 채널이다')
+  } finally {
+    o.restore()
+  }
+})
+
+test('adaptiveStream 이 꺼져 있거나 관찰자가 없는 브라우저면 자동은 없다', async () => {
+  const o = observers()
+  try {
+    const sent: Sent[] = []
+    const link = { receiverOf: () => null } as never
+    const off = new RemoteTrackHandle(entryOf(), {} as MediaStreamTrack, link, hostOf(sent), false)
+    off.attach({ clientWidth: 100 } as unknown as HTMLMediaElement)
+    o.fire(true); await settle()
+    assert.equal(sent.length, 0)
+    ;(globalThis as Record<string, unknown>).IntersectionObserver = undefined
+    const on = new RemoteTrackHandle(entryOf(), {} as MediaStreamTrack, link, hostOf(sent), true)
+    on.attach({ clientWidth: 100 } as unknown as HTMLMediaElement)
+    await settle()
+    assert.equal(sent.length, 0, '브라우저가 안 주는 것을 앱 실패로 만들지 않는다')
+  } finally {
+    o.restore()
+  }
 })
 
 test('setReceive 는 표준 손잡이가 있으면 ms 그대로 쓰고 서버로 보내지 않는다', async () => {

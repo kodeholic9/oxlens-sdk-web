@@ -12,6 +12,8 @@ export const JITTER_FROM = 2
 export const JITTER_MAX_MS = 1_000
 /** 연§8-1 T-bind. */
 export const T_BIND_MS = 10_000
+/** 연§6-1 `client_ver` — 이 SDK 판의 프로토콜 세대. */
+export const CLIENT_VER = 1
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'active' | 'resuming'
 
@@ -42,6 +44,7 @@ export type SessionEvent =
   | { readonly kind: 'active'; readonly bind: BindResult; readonly resumed: boolean }
   | { readonly kind: 'caught_up'; readonly outcome: ResumeOutcome }
   | { readonly kind: 'resuming' }
+  | { readonly kind: 'token_required' }
   | { readonly kind: 'rebuild'; readonly why: 'no_session' | 'window_expired' | 'resume_failed' }
   | { readonly kind: 'closed'; readonly info: CloseInfo; readonly retryable: boolean }
 
@@ -49,6 +52,7 @@ export interface SessionOptions {
   readonly url: string
   readonly token: string
   readonly pcMode?: '1pc' | '2pc'
+  readonly clientVer?: number
   readonly connect: (url: string) => Promise<Socket>
   readonly live: LiveReport
   readonly clock?: Clock
@@ -67,6 +71,7 @@ export class Session {
   private stopped = false
   private events: SessionEvent[] = []
   private wake: (() => void) | null = null
+  private tokenWaiter: (() => void) | null = null
 
   state: ConnectionState = 'disconnected'
 
@@ -80,11 +85,16 @@ export class Session {
   /** 재구축이 도는 동안 참을 유지한다 — 끊겼다 붙었다를 앱에 낱낱이 알리지 않는다(SDK§10-5). */
   get recovering(): boolean { return this.state === 'resuming' }
 
-  setToken(token: string): void { this.opts = { ...this.opts, token } }
+  /** SDK§3-2 — `tokenRequired` 뒤의 새 토큰. 기다리던 재접속이 이것으로 다시 `BIND` 한다. */
+  setToken(token: string): void {
+    this.opts = { ...this.opts, token }
+    this.tokenWaiter?.()
+  }
 
   /** 연§7-1-1 — 앱이 접속을 요청했다. */
   async connect(): Promise<BindResult> {
     this.stopped = false
+    this.events = []
     this.attempt = 0
     this.droppedAt = null
     const bind = await this.dial(false)
@@ -119,7 +129,7 @@ export class Session {
     const previous = this.bind?.session_id
     const body: Record<string, unknown> = {
       token: this.opts.token,
-      client_ver: 1,
+      client_ver: this.opts.clientVer ?? CLIENT_VER,
       pc_mode: this.opts.pcMode ?? '2pc',
     }
     // 연§6-1 — session_id 가 유효하면 그것이 이긴다. 토큰은 보지 않는다.
@@ -185,7 +195,11 @@ export class Session {
     }
   }
 
-  /** 연§8-2 — 사다리는 재구축이 끝나 active 가 될 때만 0 으로 돌아간다. */
+  /**
+   * 연§8-2 — 사다리는 재구축이 끝나 active 가 될 때만 0 으로 돌아간다.
+   * 연§7-3-2-1 · §7-2-3 — 재접속 `BIND` 의 실패는 셋으로 가른다: `2003` 은 새 토큰을 기다린다(SDK§3-2
+   * `tokenRequired`) · `1xxx`·그 밖의 `2xxx` 는 다시 붙어도 같아 끝낸다 · 나머지(`4003`·`5xxx`·T-bind)는 사다리다.
+   */
   private async retry(last: CloseInfo): Promise<boolean> {
     while (this.attempt < BACKOFF_MS.length) {
       const wait = BACKOFF_MS[this.attempt]! + (this.attempt >= JITTER_FROM ? this.jitter() : 0)
@@ -194,17 +208,51 @@ export class Session {
       if (this.stopped) return false
       // 연§8-2 — 창을 넘겼으면 이어받기 왕복을 태우지 않는다.
       if (this.windowExpired()) this.push({ kind: 'rebuild', why: 'window_expired' })
-      try {
-        await this.dial(true)
-        return true
-      } catch {
-        this.sig?.close(4000, 'PROTOCOL_ERROR')
+      for (;;) {
+        try {
+          await this.dial(true)
+          return true
+        } catch (e) {
+          const verdict = bindVerdict(e)
+          if (verdict === 'again') { this.sig?.close(4000, 'PROTOCOL_ERROR'); break }
+          this.sig?.close(CLOSE_NORMAL, '')
+          if (verdict === 'fatal') return this.finish({ code: 0, reason: 'BIND_FAILED' }, false)
+          if (await this.awaitToken()) continue
+          if (this.stopped) return false
+          return this.finish(last, true)
+        }
       }
     }
+    return this.finish(last, true)
+  }
+
+  private finish(info: CloseInfo, retryable: boolean): false {
     this.state = 'disconnected'
-    this.push({ kind: 'closed', info: last, retryable: true })
+    this.push({ kind: 'closed', info, retryable })
     this.sig = null
     return false
+  }
+
+  /**
+   * SDK§3-2 — 앱이 `setToken` 을 부를 때까지 기다린다. 미디어는 닫지 않는다.
+   * ★`resume_window_ms` 를 넘기면 그만 기다린다 — 부르는 쪽이 `closed{retryable:true}` 로 끝낸다.
+   */
+  private async awaitToken(): Promise<boolean> {
+    this.push({ kind: 'token_required' })
+    const remaining = this.windowRemaining()
+    if (remaining <= 0) return false
+    const ctl = new AbortController()
+    const arrived = new Promise<boolean>((r) => { this.tokenWaiter = () => r(true) })
+    const expired = this.clock.sleep(remaining, ctl.signal).then(() => false)
+    const ok = await Promise.race([arrived, expired])
+    ctl.abort()
+    this.tokenWaiter = null
+    return ok && !this.stopped
+  }
+
+  private windowRemaining(): number {
+    if (this.droppedAt === null || this.bind === null) return 0
+    return this.bind.resume_window_ms - (this.clock.now() - this.droppedAt)
   }
 
   private windowExpired(): boolean {
@@ -230,4 +278,12 @@ export class Session {
     this.events.push(e)
     this.wake?.()
   }
+}
+
+function bindVerdict(e: unknown): 'token' | 'fatal' | 'again' {
+  if (!(e instanceof RequestFailed)) return 'again'
+  const code = e.failure.code
+  if (code === 2003) return 'token'
+  if (code < 3000) return 'fatal'
+  return 'again'
 }

@@ -61,7 +61,7 @@ export class PeerLink {
   get onePc(): boolean { return this.cfg.pc_mode === '1pc' }
 
   /**
-   * 연§9-10 규칙 1 — `1pc` 은 SDP 가 한 벌이라 발행 협상에도 받기 자리가 딸려 온다.
+   * 연§9-10 규칙 1 — `1pc` 은 발행 재협상도 합성 서버 offer 라 받기 자리를 같이 다시 조립한다.
    * 이 연결이 마지막으로 조립한 받기 자리다.
    */
   private seats: readonly Seat[] = []
@@ -99,15 +99,15 @@ export class PeerLink {
   }
 
   /**
-   * 연§9-1-1 — 브라우저가 offer, 클라가 answer. ★pub 사건은 두 모드 다 이 경로다.
-   * `1pc` 은 한 벌이라 offer 에 받기 m-line 도 딸려 나오므로 `seats` 로 그 자리를 답한다(연§9-10 규칙 1).
+   * 연§9-1-1 — 브라우저가 offer, 클라가 answer. `2pc` 의 pub 사건과 `1pc` 의 2단계(세울 때 한 번,
+   * 연§9-10-3 2③)가 이 경로다. `1pc` 의 그 뒤 pub 사건은 합성 offer(`unified`)다 — 연§9-10 규칙 1.
    */
-  private async clientOffer(pc: PeerConnectionLike, seats: readonly Seat[] = []): Promise<void> {
+  private async clientOffer(pc: PeerConnectionLike): Promise<void> {
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
     const local = pc.localDescription?.sdp ?? offer.sdp ?? ''
     const answer = publishAnswer(local, this.cfg, {
-      seats,
+      seats: [],
       session: { id: sessionIdOf(this.cfg.sfu_id), version: this.sendVersion },
     })
     this.sendVersion += 1
@@ -117,7 +117,7 @@ export class PeerLink {
 
   /**
    * 보낼 자리를 얻는다. `1pc` 은 세울 때 만든 `inactive` 트랜시버를 먼저 되쓴다 —
-   * SSRC·대역 추정이 보존된다. 없으면 늘린다(pub 협상이 브라우저 offer 라 늘려도 된다).
+   * SSRC·대역 추정이 보존된다. 없으면 늘린다.
    */
   /**
    * 보낼 자리 하나. ★`prefer` 를 주면 그 코덱을 offer 의 첫 줄로 세운다(연§6-3 무전 video).
@@ -151,9 +151,8 @@ export class PeerLink {
   }
 
   /**
-   * 연§9-8 — 내가 트랙을 더하거나 뺐다. ★협상 주체는 두 모드가 같다(연§9-10) —
-   * 브라우저가 offer 를 내고 클라가 answer 를 짓는다. `1pc` 은 같은 SDP 에 받기 자리가
-   * 딸려 오므로 `seats` 를 함께 넘긴다.
+   * 연§9-8 — 내가 트랙을 더하거나 뺐다. `2pc` 는 브라우저 offer(연§9-1-1), `1pc` 은 합성 서버
+   * offer(연§9-10 규칙 1)라 받기 자리 `seats` 를 같이 다시 조립한다.
    */
   renegotiatePublish(): Promise<void> {
     return this.serial.run(async () => {
@@ -273,6 +272,13 @@ export class PeerLink {
     for (const [id, row] of await pc.getStats()) {
       if (row.ssrc === ssrc) out.set(id, row)
     }
+    return out
+  }
+
+  /** SDK§11-2-1 — 이 연결의 모든 PC 의 계수 전량. 품질 판정은 부르는 쪽이 한다. */
+  async statsAll(): Promise<ReadonlyMap<string, Record<string, unknown>>[]> {
+    const out: ReadonlyMap<string, Record<string, unknown>>[] = []
+    for (const pc of this.peerList()) out.push(await pc.getStats())
     return out
   }
 

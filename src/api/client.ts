@@ -6,6 +6,7 @@ import { DiagnosticsHandle } from './diagnostics.js'
 import { ResumeOutcome } from '../domain/session.js'
 import { FloorRoom } from '../domain/floor.js'
 import { MediaRegistry } from '../domain/media-registry.js'
+import { grade, StatsMeter, STATS_INTERVAL_MS, worst } from '../domain/quality.js'
 import { Rooms, Server } from '../domain/rooms.js'
 import { Session } from '../domain/session.js'
 import { TrackEntry, Version } from '../domain/store.js'
@@ -17,6 +18,7 @@ import { Clock, systemClock } from '../platform/clock.js'
 import { browserHttp, Http } from '../platform/http.js'
 import { AudioOut, browserAudio, headlessAudio } from '../platform/audio.js'
 import { Devices } from '../platform/media.js'
+import { browserPage, PageLifecycle } from '../platform/page.js'
 import { connectWebSocket, Socket } from '../platform/socket.js'
 import { browserPeers, PeerFactory } from '../platform/webrtc.js'
 import { Bus } from './emitter.js'
@@ -26,8 +28,8 @@ import { NotImplementedError } from './not-implemented.js'
 import { PttHandle, roomOf } from './ptt.js'
 import { LayerTarget, RoomHandle } from './room.js'
 import {
-  ClientEvents, ClientOptions, Diagnostics, JoinOptions, Media, OxLensClient,
-  Participant, Room, RoomPreview, RoomSummary, SessionInfo,
+  ClientEvents, ClientOptions, ConnectionQuality, Diagnostics, JoinOptions, Media, OxLensClient,
+  OxLensError, Participant, Room, RoomPreview, RoomSummary, SessionInfo,
 } from './types.js'
 
 /** 연§8-4 타이머들이 도는 눈금. 재전송 간격(0.5초)보다 촘촘해야 한다. */
@@ -41,6 +43,7 @@ export interface Wiring {
   readonly audioOut?: AudioOut
   readonly clock?: Clock
   readonly http?: Http
+  readonly page?: PageLifecycle
 }
 
 const PT_NAMES = ['user', 'recorder', 'bot'] as const
@@ -79,11 +82,19 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
   private pcMode: '1pc' | '2pc' | null = null
   private lastClose: { code: number; name: string } | null = null
   private token: string
+  /** SDK§11-2-1 — 서버마다 매긴 것의 최악값. `active` 밖에서는 `lost` 다. */
+  private quality: ConnectionQuality = 'good'
+  private readonly meters = new Map<string, StatsMeter>()
+  private readonly statsInterval: number
+  private metering = false
+  private readonly adaptive: boolean
 
   constructor(opts: ClientOptions, wiring: Wiring = {}) {
     super()
     this.clock = wiring.clock ?? systemClock
     this.token = opts.token
+    this.statsInterval = opts.statsIntervalMs ?? STATS_INTERVAL_MS
+    this.adaptive = opts.adaptiveStream !== false
     const peers = wiring.peers ?? browserPeers
     const mode = opts.pcMode === '1pc' ? '1pc' : '2pc'
     this.roomsDomain = new Rooms(() => this.requireSignaling(), { peers, clock: this.clock, pcMode: mode })
@@ -102,6 +113,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     this.registry = new MediaRegistry(() => this.requireSignaling(), {
       devices: this.devicePort,
       clock: this.clock,
+      ...(opts.deviceAcquireTimeoutMs === undefined ? {} : { acquireTimeoutMs: opts.deviceAcquireTimeoutMs }),
     })
     this.surface = new MediaSurface(this.registry, { publishTarget: () => this.publishTarget() }, this.devicePort, this.playback)
     this.directory = new Directory(
@@ -113,10 +125,13 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       url: wsUrl(opts.base),
       token: opts.token,
       pcMode: mode,
+      ...(opts.clientVer === undefined ? {} : { clientVer: opts.clientVer }),
       connect: wiring.connect ?? connectWebSocket,
       live: { rooms: () => this.roomsDomain.liveRooms(), publish: () => this.registry.liveTracks() },
       clock: this.clock,
     })
+    // SDK§12-1 — 페이지를 떠나면 close() 를 시도하되 보장하지 않는다. 못 보내면 서버의 두 시계가 회수한다.
+    if (opts.disconnectOnPageLeave !== false) (wiring.page ?? browserPage).onLeave(() => { void this.close() })
   }
 
   get rooms(): ReadonlyMap<string, Room> { return this.handles }
@@ -133,7 +148,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       recovering: this.sess.recovering,
       userId: this.userId,
       pcMode: this.pcMode,
-      quality: this.sess.state === 'active' ? 'good' : 'lost',
+      quality: this.sess.state === 'active' ? this.quality : 'lost',
       ...(this.lastClose === null ? {} : { reason: this.lastClose }),
     }
   }
@@ -148,6 +163,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     }
     void this.pumpNotifications()
     void this.pumpSession()
+    void this.meter()
     this.emit('session', this.session)
   }
 
@@ -181,7 +197,8 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       sendMessage: (id, content) => this.sendMessage(id, content),
       subscribeLayer: (id, targets) => this.subscribeLayer(id, targets),
       setRoomAudio: (id, patch) => this.playback.setRoom(id, patch),
-    })
+      report: (id, e) => this.handles.get(id)?.emit('error', toOxLensError(e)),
+    }, this.adaptive)
     handle.state = 'joined'
     const ptt = new PttHandle(
       new FloorRoom(roomId, this.userId ?? '', 'hold'),
@@ -223,7 +240,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
         participants: d.participants.map(participantOf),
       }
     } catch (e) {
-      throw toOxLensError(e)
+      throw this.surfaced(e)
     }
   }
 
@@ -231,8 +248,15 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     try {
       return (await this.directory.list()).rooms.map(summaryOf)
     } catch (e) {
-      throw toOxLensError(e)
+      throw this.surfaced(e)
     }
+  }
+
+  /** SDK§3-2 — HTTP 401(`2003`)은 `auth` reject 이면서 `tokenRequired` 다. 둘 중 하나만 내면 앱이 새 토큰을 못 낸다. */
+  private surfaced(e: unknown): OxLensError {
+    const err = toOxLensError(e)
+    if (err.code === 2003) this.emit('tokenRequired', { cause: 'expired' })
+    return err
   }
 
   /** SDK§10-6 — 게이트 닫기가 먼저다. 전송로를 놓은 뒤 sender 를 만지면 닫힌 연결에 손댄다. */
@@ -519,7 +543,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       handle.setParticipants(detail.participants.map(participantOf))
       handle.emit('resync')
     } catch (e) {
-      handle.emit('error', toOxLensError(e))
+      handle.emit('error', this.surfaced(e))
     }
   }
 
@@ -560,6 +584,10 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     for await (const e of this.sess.listen()) {
       if (e.kind === 'caught_up') {
         this.catchUp(e.outcome)
+        continue
+      }
+      if (e.kind === 'token_required') {
+        this.emit('tokenRequired', { cause: 'expired' })
         continue
       }
       if (e.kind === 'closed') {
@@ -606,6 +634,38 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       const track = this.registry.all.find((t) => t.trackId === id)
       if (track) { track.trackId = null; track.server = null; track.state = 'acquired' }
     }
+  }
+
+  /**
+   * SDK§11-2-1 — `statsIntervalMs` 마다 서버마다 getStats 로 4단을 매기고 최악값을 세션 값으로 낸다.
+   * 바뀔 때만 `session` 이벤트. `diagnostics.stats` 는 듣는 쪽이 있을 때만 같은 스냅샷을 낸다(SDK§11-2).
+   */
+  private async meter(): Promise<void> {
+    if (this.metering || this.statsInterval <= 0) return
+    this.metering = true
+    while (this.sessionUp()) {
+      await this.clock.sleep(this.statsInterval)
+      if (!this.sessionUp()) break
+      await this.measure()
+      if (this.diag.has('stats')) this.diag.emit('stats', await this.diag.probe())
+    }
+    this.metering = false
+  }
+
+  private sessionUp(): boolean { return this.sess.state !== 'disconnected' }
+
+  private async measure(): Promise<void> {
+    const grades: ConnectionQuality[] = []
+    for (const server of this.roomsDomain.allServers()) {
+      let meter = this.meters.get(server.sfuId)
+      if (!meter) { meter = new StatsMeter(); this.meters.set(server.sfuId, meter) }
+      const reports = await server.link.statsAll()
+      grades.push(grade(meter.sample(reports), server.link.dead()))
+    }
+    const q = worst(grades)
+    if (q === this.quality) return
+    this.quality = q
+    this.emit('session', this.session)
   }
 
   private requireSignaling(): Signaling {

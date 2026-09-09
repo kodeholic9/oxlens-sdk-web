@@ -81,6 +81,9 @@ export class Rooms {
       .map(([room]) => room)
   }
 
+  /** SDK§11-2-1 — 서버마다 품질을 매기는 쪽이 훑는다. */
+  allServers(): readonly Server[] { return [...this.servers.values()] }
+
   /** 연§7-5-7 — 미디어가 죽은 서버들. 방아쇠는 ICE failed 와 media_lost 둘이다. */
   deadServers(now = this.clock.now()): readonly string[] {
     return [...this.servers.values()].filter((s) => s.link.dead(now)).map((s) => s.sfuId)

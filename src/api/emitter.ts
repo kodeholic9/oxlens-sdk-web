@@ -23,6 +23,11 @@ export class Bus<E extends AnyEvents> implements Emitter<E> {
     return this
   }
 
+  /** 듣는 쪽이 있나 — 비용이 있는 스냅샷은 들을 때만 만든다. */
+  has<K extends keyof E>(event: K): boolean {
+    return (this.listeners.get(event)?.size ?? 0) > 0
+  }
+
   /** 한 핸들러가 던져도 나머지는 부른다 — 앱 버그가 SDK 흐름을 끊지 않는다. */
   emit<K extends keyof E>(event: K, ...args: Parameters<E[K]>): void {
     const set = this.listeners.get(event)

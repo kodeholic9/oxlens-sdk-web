@@ -6,7 +6,7 @@ import { decode, encode, Kind } from '../src/internal/frame.js'
 import { Op } from '../src/internal/wire.js'
 import { Signaling } from '../src/internal/signaling.js'
 import { PeerLink } from '../src/internal/transport/link.js'
-import { MediaRegistry, PublishError } from '../src/domain/media-registry.js'
+import { DEVICE_ACQUIRE_TIMEOUT_MS, MediaRegistry, PublishError } from '../src/domain/media-registry.js'
 import { DeviceError } from '../src/platform/media.js'
 import { CFG, PUBLISH_OFFER } from './_sdp_fixtures.js'
 import { FakeClock, FakeDevices, FakePeers, FakeSocket, tick } from './_fakes.js'
@@ -65,7 +65,7 @@ async function publishOne(s: Stand, kind: 'microphone' | 'camera'): Promise<Awai
   const [track] = await s.reg.acquire([{ kind }])
   const p = s.reg.publish(track!, s.target())
   await tick()
-  s.reply(Op.PublishTracks, { intent: true, action: 'add', tracks: [{ mid: track!.transceiver!.mid, track_id: `srv-${kind}` }] })
+  s.reply(Op.PublishTracks, { action: 'add', tracks: [{ mid: track!.transceiver!.mid, track_id: `srv-${kind}` }] })
   return p
 }
 
@@ -83,6 +83,39 @@ test('획득은 전부 아니면 전무다', async () => {
   await assert.rejects(s.reg.acquire([{ kind: 'microphone' }, { kind: 'camera' }]), DeviceError)
   assert.deepEqual(s.devices.stopped, ['microphone-1'], '이미 획득한 것을 놓아야 한다')
   assert.deepEqual(s.reg.all, [])
+})
+
+test('프롬프트를 방치하면 DEVICE_TIMEOUT 이고 늦게 온 스트림은 즉시 정지한다', async () => {
+  const s = stand()
+  s.devices.hang = 'microphone'
+  const p = s.reg.acquire([{ kind: 'microphone' }])
+  p.catch(() => {})
+  await tick()
+  await s.clock.advance(DEVICE_ACQUIRE_TIMEOUT_MS)
+  await assert.rejects(p, (e: unknown) => e instanceof DeviceError && e.reason === 'timeout' && e.kind === 'microphone')
+  assert.deepEqual(s.reg.all, [])
+  s.devices.hung[0]!()
+  await tick()
+  assert.deepEqual(s.devices.stopped, ['microphone-1'], '앱은 실패로 아는데 표시등이 켜진 채 남으면 안 된다')
+})
+
+test('호출별 timeoutMs 가 기본 상한을 덮는다', async () => {
+  const s = stand()
+  s.devices.hang = 'camera'
+  const p = s.reg.acquire([{ kind: 'camera', timeoutMs: 1_000 }])
+  p.catch(() => {})
+  await tick()
+  await s.clock.advance(999)
+  assert.equal(s.clock.pending, 1, '아직 기다린다')
+  await s.clock.advance(1)
+  await assert.rejects(p, (e: unknown) => e instanceof DeviceError && e.reason === 'timeout')
+})
+
+test('제때 오면 시계를 걷고 트랙을 돌려준다', async () => {
+  const s = stand()
+  const [track] = await s.reg.acquire([{ kind: 'microphone', timeoutMs: 1_000 }])
+  assert.equal(track!.state, 'acquired')
+  assert.equal(s.clock.pending, 0, '남은 시계가 없다')
 })
 
 test('발행은 트랜시버 → 협상 → 등록 → 송신 차례다', async () => {

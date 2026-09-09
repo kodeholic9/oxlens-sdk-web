@@ -10,10 +10,20 @@ export interface Http {
   get(url: string, headers: Readonly<Record<string, string>>): Promise<HttpResponse>
 }
 
+/** 연§4-5 `Failure` 형 — HTTP 실패 body 도 이 형이다(연§5-5). 상태 코드가 아니라 `code` 로 판단한다. */
+export interface HttpFailure {
+  readonly code: number
+  readonly name: string
+  readonly message?: string
+  readonly details?: Readonly<Record<string, unknown>>
+}
+
 export class HttpFailed extends Error {
   override readonly name = 'HttpFailed'
-  constructor(readonly status: number, readonly url: string) {
-    super(`${url} → ${status}`)
+  readonly failure?: HttpFailure
+  constructor(readonly status: number, readonly url: string, failure?: HttpFailure) {
+    super(failure === undefined ? `${url} → ${status}` : `${url} → ${status} ${failure.code} ${failure.name}`)
+    if (failure !== undefined) this.failure = failure
   }
 }
 

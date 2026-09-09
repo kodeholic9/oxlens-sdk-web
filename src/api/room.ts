@@ -14,6 +14,8 @@ export interface RoomHost {
   sendMessage(roomId: string, content: string): Promise<{ msgId: string }>
   /** 연§6-3 `SUBSCRIBE_LAYER` — 여러 대상을 한 번에 보낼 수 있다(부분 갱신). */
   subscribeLayer(roomId: string, targets: readonly LayerTarget[]): Promise<void>
+  /** SDK§6-2 — 내 요청이 아닌 실패(자동 층 조절)를 그 방의 `error` 로 올린다. */
+  report(roomId: string, e: unknown): void
 }
 
 /** 연§6-3 — wire 그대로. 생략한 필드는 ★안 바꾼다(부분 갱신). */
@@ -37,6 +39,7 @@ export class RoomHandle extends Bus<RoomEvents> implements Room {
     readonly mode: 'listen' | 'talk',
     readonly server: string,
     private readonly host: RoomHost,
+    private readonly adaptive = false,
   ) {
     super()
   }
@@ -77,7 +80,7 @@ export class RoomHandle extends Bus<RoomEvents> implements Room {
   adopt(entry: TrackEntry, media: MediaStreamTrack, link: PeerLink): { track: RemoteTrackHandle; fresh: boolean } {
     const known = this.byTrackId.get(entry.track_id)
     if (known) { known.update(entry); return { track: known, fresh: false } }
-    const handle = new RemoteTrackHandle(entry, media, link, this.host)
+    const handle = new RemoteTrackHandle(entry, media, link, this.host, this.adaptive)
     this.byTrackId.set(entry.track_id, handle)
     this.emit('track', handle)
     return { track: handle, fresh: true }

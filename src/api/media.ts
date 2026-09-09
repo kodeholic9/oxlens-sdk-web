@@ -1,7 +1,7 @@
 // author: kodeholic (powered by Claude)
 // SDK§6-1 — 발행 표면. 길은 둘이다: 고수준 enable*(획득+발행) · 저수준 acquire → publish.
 import { LocalTrack as InnerTrack, MediaRegistry } from '../domain/media-registry.js'
-import { Devices as DevicePort, CaptureKind } from '../platform/media.js'
+import { CaptureKind, CaptureRequest, Devices as DevicePort } from '../platform/media.js'
 import { MediaTrackLike } from '../platform/webrtc.js'
 import { Playback } from '../domain/playback.js'
 import { DevicesHandle } from './devices.js'
@@ -122,13 +122,13 @@ export class MediaSurface implements Media {
 
   enableMicrophone(opts?: MicrophoneOptions): Promise<LocalTrack> { return this.enable('microphone', opts) }
   enableCamera(opts?: CameraOptions): Promise<LocalTrack> { return this.enable('camera', opts) }
-  enableScreen(_opts?: ScreenOptions): Promise<LocalTrack> { return this.enable('screen') }
+  enableScreen(opts?: ScreenOptions): Promise<LocalTrack> { return this.enable('screen', opts) }
 
   /** 획득 + 발행 한 덩어리. ★실패하면 자기가 만든 트랙을 SDK 가 정지한다. */
-  private async enable(kind: CaptureKind, opts?: { readonly deviceId?: string }): Promise<LocalTrack> {
+  private async enable(kind: CaptureKind, opts?: { readonly deviceId?: string; readonly timeoutMs?: number }): Promise<LocalTrack> {
     const to = this.host.publishTarget()
     if (to === null) throw noSpeakingRoom()
-    const [got] = await this.reg.acquire([{ kind, ...(opts?.deviceId === undefined ? {} : { deviceId: opts.deviceId }) }])
+    const [got] = await this.reg.acquire([requestOf(kind, opts)])
       .catch((e: unknown) => { throw toOxLensError(e) })
     try {
       await this.reg.publish(got!, to)
@@ -193,14 +193,23 @@ export class MediaSurface implements Media {
   }
 }
 
-function kindsOf(opts: AcquireOptions): { kind: CaptureKind; deviceId?: string }[] {
-  const out: { kind: CaptureKind; deviceId?: string }[] = []
+function kindsOf(opts: AcquireOptions): CaptureRequest[] {
+  const out: CaptureRequest[] = []
   for (const kind of ['microphone', 'camera', 'screen'] as const) {
-    const req = (opts as Record<string, { deviceId?: string } | undefined>)[kind]
+    const req = (opts as Record<string, { deviceId?: string; timeoutMs?: number } | true | undefined>)[kind]
     if (req === undefined) continue
-    out.push({ kind, ...(req.deviceId === undefined ? {} : { deviceId: req.deviceId }) })
+    out.push(requestOf(kind, req === true ? undefined : req))
   }
   return out
+}
+
+/** SDK§6-1 — 획득 요청. `timeoutMs` 는 호출별 상한이고 없으면 등록부 기본값이다(SDK§2-3). */
+function requestOf(kind: CaptureKind, opts?: { readonly deviceId?: string; readonly timeoutMs?: number }): CaptureRequest {
+  return {
+    kind,
+    ...(opts?.deviceId === undefined ? {} : { deviceId: opts.deviceId }),
+    ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+  }
 }
 
 /** `TrackSource` → 획득 종류. 외부 트랙은 잡지 않으므로 ★등록 표기용이다. */

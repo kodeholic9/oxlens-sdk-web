@@ -111,6 +111,8 @@ export interface ClientOptions {
   readonly adaptiveStream?: boolean
   /** getUserMedia 대기 상한(프롬프트 방치 포함). 만료 = DEVICE_TIMEOUT, 늦게 온 스트림은 SDK 가 stop. 기본 30,000 (정책서 §4-1 deviceAcquireTimeoutMs). 호출별 opts.timeoutMs 가 덮는다. */
   readonly deviceAcquireTimeoutMs?: number
+  /** session.quality·diagnostics.stats 의 getStats 주기. 0 = 끔. 기본 5,000 (정책서 §4-1 statsIntervalMs). §11-2 */
+  readonly statsIntervalMs?: number
   /** DC 만 끊겼을 때 같은 PeerLink 위 재개설 횟수·간격. 소진하면 그 서버를 재입장(연§7-5-7). 기본 3회·1,000ms (정책서 §4-1 dcReopen). */
   readonly dcReopen?: { readonly attempts: number; readonly intervalMs: number }
   /** 1pc 에서 PeerLink 단위로 굳는 opus fmtp 선호(2단계 협상 때 한 번). 2pc 는 쓰지 않는다. 기본 = ptt 프로필 값(정책서 §4-1 opusFmtpDefault). §6-3 */

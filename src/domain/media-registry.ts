@@ -1,7 +1,7 @@
 // author: kodeholic (powered by Claude)
 // 연§7-4 · SDK§6-1 — 발행 3단(트랜시버·등록·송신). 되돌리기는 한 곳이고 그 단만 되돌린다.
 import { Clock } from '../platform/clock.js'
-import { CaptureKind, CaptureRequest, Devices } from '../platform/media.js'
+import { CaptureKind, CaptureRequest, DeviceError, Devices } from '../platform/media.js'
 import { MediaTrackLike, TransceiverLike } from '../platform/webrtc.js'
 import { Signaling } from '../internal/signaling.js'
 import { parse } from '../internal/sdp/parse.js'
@@ -66,9 +66,13 @@ export interface PublishTarget {
   readonly sfuId: string
 }
 
+/** 정책서 §4-1 `deviceAcquireTimeoutMs` — 프롬프트 방치를 브라우저가 안 알리니 SDK 가 시계를 건다(SDK§2-3). */
+export const DEVICE_ACQUIRE_TIMEOUT_MS = 30_000
+
 export interface RegistryOptions {
   readonly devices: Devices
   readonly clock: Clock
+  readonly acquireTimeoutMs?: number
 }
 
 export class MediaRegistry {
@@ -97,7 +101,7 @@ export class MediaRegistry {
     const got: LocalTrack[] = []
     try {
       for (const req of reqs) {
-        const media = await this.opts.devices.capture(req)
+        const media = await this.capture(req)
         got.push(this.enroll(media, req.kind, 'app'))
       }
     } catch (e) {
@@ -346,6 +350,28 @@ export class MediaRegistry {
     if (track.duplex !== 'half' || !track.transceiver) return
     await track.transceiver.sender.replaceTrack(open ? track.media : null)
     track.state = open ? 'sending' : 'registered'
+  }
+
+  /**
+   * SDK§2-3 `DEVICE_TIMEOUT` — 만료하면 reject 하고, ★늦게 온 스트림은 즉시 `stop` 한다.
+   * 안 하면 앱은 실패로 아는데 권한 표시등이 켜진 채 남는다.
+   */
+  private async capture(req: CaptureRequest): Promise<MediaTrackLike> {
+    const ms = req.timeoutMs ?? this.opts.acquireTimeoutMs ?? DEVICE_ACQUIRE_TIMEOUT_MS
+    const job = this.opts.devices.capture(req)
+    const ctl = new AbortController()
+    const late = this.opts.clock.sleep(ms, ctl.signal).then((): MediaTrackLike => {
+      throw new DeviceError(req.kind, 'timeout', `${req.kind} 획득이 ${ms}ms 안에 안 끝났다`)
+    })
+    try {
+      return await Promise.race([job, late])
+    } catch (e) {
+      if (e instanceof DeviceError && e.reason === 'timeout') job.then((t) => { t.stop() }, () => {})
+      throw e
+    } finally {
+      ctl.abort()
+      late.catch(() => {})
+    }
   }
 
   private enroll(media: MediaTrackLike, kind: CaptureKind, owner: Owner): LocalTrack {

@@ -184,8 +184,11 @@ export class FakePeer implements PeerConnectionLike {
     return ch
   }
 
+  /** 시험이 채우는 계수 — 비어 있으면 판정할 것이 없다. */
+  readonly stats = new Map<string, Record<string, unknown>>()
+
   getStats(): Promise<ReadonlyMap<string, Record<string, unknown>>> {
-    return Promise.resolve(new Map())
+    return Promise.resolve(this.stats)
   }
 
   close(): void { this.calls.push('close'); this.closed = true; this.ice.end(); this.tracks.end() }
@@ -232,6 +235,9 @@ export class FakeDevices implements Devices {
   readonly taken: string[] = []
   readonly stopped: string[] = []
   fail: string | null = null
+  /** 그 kind 의 프롬프트를 방치한다 — `hung` 의 함수를 부르면 그제야 트랙이 나온다. */
+  hang: string | null = null
+  readonly hung: Array<() => void> = []
   list: PlatformDeviceInfo[] = []
   perm: Record<string, PlatformPermission> = {}
   private n = 0
@@ -255,18 +261,34 @@ export class FakeDevices implements Devices {
 
   capture(req: CaptureRequest): Promise<MediaTrackLike> {
     if (this.fail === req.kind) {
-      return Promise.reject(new DeviceError(req.kind, 'user', `${req.kind} 를 막았다`))
+      return Promise.reject(new DeviceError(req.kind, 'permission_denied', `${req.kind} 를 막았다`, { blockedBy: 'user' }))
     }
-    this.n += 1
-    const id = `${req.kind}-${this.n}`
-    this.taken.push(id)
     const self = this
-    return Promise.resolve({
-      id,
-      kind: req.kind === 'microphone' ? 'audio' : 'video',
-      stop() { self.stopped.push(id) },
-    })
+    const make = (): MediaTrackLike => {
+      self.n += 1
+      const id = `${req.kind}-${self.n}`
+      self.taken.push(id)
+      return {
+        id,
+        kind: req.kind === 'microphone' ? 'audio' : 'video',
+        stop() { self.stopped.push(id) },
+      }
+    }
+    if (this.hang === req.kind) return new Promise((r) => { this.hung.push(() => r(make())) })
+    return Promise.resolve(make())
   }
+}
+
+// ── 페이지 수명 대역 ─────────────────────────────────────────────────────────
+import type { PageLifecycle } from '../src/platform/page.js'
+
+export class FakePage implements PageLifecycle {
+  private readonly leavers = new Set<() => void>()
+  onLeave(fn: () => void): () => void {
+    this.leavers.add(fn)
+    return () => this.leavers.delete(fn)
+  }
+  leave(): void { for (const fn of [...this.leavers]) fn() }
 }
 
 // ── HTTP 대역 ────────────────────────────────────────────────────────────────

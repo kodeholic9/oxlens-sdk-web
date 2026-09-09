@@ -8,15 +8,39 @@ import { NotImplementedError } from './not-implemented.js'
 import { RoomHost } from './room.js'
 import { LayerRequest, ReceiveOptions, RemoteTrack, RemoteTrackEvents, TrackKind } from './types.js'
 
+/** 정책서 §4-1 `adaptiveStream` — 보이는 트랙 200 · 안 보이는 트랙 1 · 작은 타일 문턱(물리 픽셀). */
+export const PRIORITY_VISIBLE = 200
+export const PRIORITY_HIDDEN = 1
+export const SMALL_TILE_PX = 480
+
+interface Sight {
+  visible: boolean
+  widthPx: number
+}
+
+interface Observer {
+  observe(target: Element): void
+  disconnect(): void
+}
+
+interface Observers {
+  ResizeObserver?: new (cb: () => void) => Observer
+  IntersectionObserver?: new (cb: (entries: ReadonlyArray<{ isIntersecting: boolean }>) => void) => Observer
+  devicePixelRatio?: number
+}
+
 export class RemoteTrackHandle extends Bus<RemoteTrackEvents> implements RemoteTrack {
   volume = 1
   private attached = new Set<HTMLMediaElement>()
+  private readonly sights = new Map<HTMLMediaElement, { sight: Sight; stop: () => void }>()
+  private lastAuto: string | null = null
 
   constructor(
     private entry: TrackEntry,
     readonly mediaStreamTrack: MediaStreamTrack,
     private readonly link: PeerLink,
     private readonly host: RoomHost,
+    private readonly adaptive = false,
   ) {
     super()
   }
@@ -45,6 +69,7 @@ export class RemoteTrackHandle extends Bus<RemoteTrackEvents> implements RemoteT
     // 모바일 사파리는 이것이 없으면 전체화면으로 뺏어 간다.
     ;(element as { playsInline?: boolean }).playsInline = true
     this.attached.add(element)
+    if (this.adaptive) this.observe(element)
     return element
   }
 
@@ -52,7 +77,49 @@ export class RemoteTrackHandle extends Bus<RemoteTrackEvents> implements RemoteT
     for (const el of element ? [element] : [...this.attached]) {
       el.srcObject = null
       this.attached.delete(el)
+      this.sights.get(el)?.stop()
+      this.sights.delete(el)
     }
+    if (this.adaptive && this.lastAuto !== null) this.reassess()
+  }
+
+  /**
+   * SDK§6-2 `adaptiveStream` — 엘리먼트 크기·가시성으로 `setLayer` 를 대신 한다. 안 보는 채널은 정지·
+   * priority 1, 보는 채널은 priority 200, 작은 타일은 낮은 단. ★브라우저가 관찰자를 안 주면 자동은 없다.
+   */
+  private observe(el: HTMLMediaElement): void {
+    const g = globalThis as Observers
+    if (!g.ResizeObserver || !g.IntersectionObserver) return
+    const sight: Sight = { visible: false, widthPx: this.widthOf(el) }
+    const ro = new g.ResizeObserver(() => { sight.widthPx = this.widthOf(el); this.reassess() })
+    const io = new g.IntersectionObserver((entries) => {
+      sight.visible = entries.some((x) => x.isIntersecting)
+      this.reassess()
+    })
+    ro.observe(el)
+    io.observe(el)
+    this.sights.set(el, { sight, stop: () => { ro.disconnect(); io.disconnect() } })
+  }
+
+  private widthOf(el: HTMLMediaElement): number {
+    return (el.clientWidth || 0) * ((globalThis as Observers).devicePixelRatio ?? 1)
+  }
+
+  /** 같은 답이면 다시 보내지 않는다 — 관찰자는 자주 울린다. */
+  private reassess(): void {
+    const shown = [...this.sights.values()].map((s) => s.sight).filter((s) => s.visible)
+    const [maxSpatial] = parseScalability(this.entry.scalability)
+    const req: LayerRequest = shown.length === 0
+      ? { paused: true, priority: PRIORITY_HIDDEN }
+      : {
+          paused: false,
+          priority: PRIORITY_VISIBLE,
+          spatial: Math.max(...shown.map((s) => s.widthPx)) < SMALL_TILE_PX ? 0 : maxSpatial,
+        }
+    const key = JSON.stringify(req)
+    if (key === this.lastAuto) return
+    this.lastAuto = key
+    this.setLayer(req).catch((e: unknown) => { this.host.report(this.roomId, e) })
   }
 
   /**

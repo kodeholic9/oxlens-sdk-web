@@ -5,13 +5,13 @@ import assert from 'node:assert/strict'
 import { decode, encode, Kind } from '../src/internal/frame.js'
 import { Op } from '../src/internal/wire.js'
 import { createClient } from '../src/index.js'
-import { OxLensClient, RemoteTrack, Room } from '../src/api/types.js'
+import { ClientOptions, OxLensClient, RemoteTrack, Room } from '../src/api/types.js'
 import {
   decode as decodeMbcp, encode as encodeMbcp, frame, short as mbcpShort, str as mbcpStr,
   text as mbcpText, Tlv, Type, unframe,
 } from '../src/internal/mbcp.js'
 import { CFG, PUBLISH_OFFER } from './_sdp_fixtures.js'
-import { FakeClock, FakeDevices, FakeHttp, FakePeers, FakeSocket, tick } from './_fakes.js'
+import { FakeClock, FakeDevices, FakeHttp, FakePage, FakePeers, FakeSocket, tick } from './_fakes.js'
 
 const BIND_OK = {
   user_id: 'u1', role: 'user', server_ver: 1,
@@ -33,11 +33,12 @@ interface Stand {
   http: FakeHttp
   ops(): number[]
   reply(op: number, body?: Record<string, unknown>): void
+  fail(op: number, code: number, name: string): void
   notify(op: number, body: Record<string, unknown>): void
   drain(op: number, body?: Record<string, unknown>): Promise<void>
 }
 
-function stand(): Stand {
+function stand(over: { opts?: Partial<ClientOptions>; page?: FakePage } = {}): Stand {
   const socks: FakeSocket[] = []
   const sock = new FakeSocket()
   socks.push(sock)
@@ -47,8 +48,9 @@ function stand(): Stand {
   const devices = new FakeDevices()
   const http = new FakeHttp()
   const client = createClient(
-    { base: 'https://hub.example', token: 't' },
+    { base: 'https://hub.example', token: 't', ...over.opts },
     {
+      ...(over.page === undefined ? {} : { page: over.page }),
       // ★재접속마다 새 소켓이다 — 같은 것을 돌려주면 두 번째 BIND 가 닫힌 소켓에 실린다.
       connect: () => {
         dials += 1
@@ -72,8 +74,10 @@ function stand(): Stand {
     // 미디어가 살아 있어야 RESUME 을 보낸다 — 죽은 방은 신고 자체를 안 한다(연§7-3-2 4).
     live: async () => { for (const p of peers.made) p.setIce('connected'); await tick() },
     ops: () => live().sent.map((b) => decode(b).op),
-    reply: (op, body) => { for (const pid of pending(op)) sock.deliver(encode(Kind.Ok, op, pid, body ?? {})) },
-    notify: (op, body) => { notifyPid += 1; sock.deliver(encode(Kind.Request, op, notifyPid, body)) },
+    // ★답은 지금 산 소켓에 준다 — 재접속 뒤의 BIND 는 새 소켓에 실려 있다.
+    reply: (op, body) => { for (const pid of pending(op)) live().deliver(encode(Kind.Ok, op, pid, body ?? {})) },
+    fail: (op, code, name) => { for (const pid of pending(op)) live().deliver(encode(Kind.Fail, op, pid, { code, name })) },
+    notify: (op, body) => { notifyPid += 1; live().deliver(encode(Kind.Request, op, notifyPid, body)) },
     async drain(op, body) { for (let i = 0; i < 4; i += 1) { await tick(); s.reply(op, body); await tick() } },
   }
   return s
@@ -409,13 +413,104 @@ test('방 목록에는 참가자 이름이 없다', async () => {
   assert.deepEqual(list, [{ roomId: 'r1', name: 'n', capacity: 10, userCount: 3, createdAt: 1, rec: true }])
 })
 
-test('HTTP 실패는 표면 오류로 온다', async () => {
+test('HTTP 실패는 표면 오류로 온다 — body 의 code 가 있으면 그것, 없으면 상태 코드 이름', async () => {
   const s = stand()
   await connected(s)
   await assert.rejects(s.client.preview('nope'), (e: unknown) => {
-    assert.equal((e as { category: string }).category, 'bug')
+    const err = e as { category: string; name: string; code: number }
+    assert.deepEqual([err.category, err.name, err.code], ['server', 'HTTP_404', 0])
     return true
   })
+  s.http.status = 404
+  s.http.routes.set('/rooms/gone', { code: 3001, name: 'ROOM_NOT_FOUND' })
+  await assert.rejects(s.client.preview('gone'), (e: unknown) => {
+    const err = e as { category: string; name: string; code: number }
+    assert.deepEqual([err.category, err.name, err.code], ['state', 'ROOM_NOT_FOUND', 3001], '연§5-5 — 상태 코드가 아니라 code 로 판단한다')
+    return true
+  })
+})
+
+test('HTTP 401 은 auth 2003 으로 거절하면서 tokenRequired 를 낸다', async () => {
+  const s = stand()
+  await connected(s)
+  const asked: string[] = []
+  s.client.on('tokenRequired', (e) => asked.push(e.cause))
+  s.http.status = 401
+  s.http.routes.set('/rooms/lobby', { code: 2003, name: 'TOKEN_EXPIRED' })
+  await assert.rejects(s.client.preview('lobby'), (e: unknown) => {
+    const err = e as { category: string; code: number }
+    assert.deepEqual([err.category, err.code], ['auth', 2003])
+    return true
+  })
+  assert.deepEqual(asked, ['expired'], '둘 중 하나만 내면 앱이 새 토큰을 못 낸다')
+})
+
+test('재접속 BIND 의 2003 은 tokenRequired 로 오고 setToken 이 재접속을 잇는다', async () => {
+  const s = stand()
+  await connected(s)
+  const asked: string[] = []
+  s.client.on('tokenRequired', (e) => asked.push(e.cause))
+  s.sock.close(1006, '')
+  await tick(); await s.clock.advance(0)
+  s.fail(Op.Bind, 2003, 'TOKEN_EXPIRED')
+  await tick()
+  assert.deepEqual(asked, ['expired'])
+  assert.equal(s.client.session.state, 'resuming', '미디어를 닫지 않고 기다린다')
+
+  s.client.setToken('t2')
+  await tick()
+  const bind = s.ops().filter((op) => op === Op.Bind)
+  assert.equal(bind.length, 1, '새 소켓에 새 토큰으로 BIND 한다')
+  s.reply(Op.Bind, BIND_OK)
+  await tick()
+  assert.equal(s.client.session.state, 'active')
+})
+
+test('페이지를 떠나면 close 를 시도한다 — disconnectOnPageLeave 기본 true', async () => {
+  const page = new FakePage()
+  const s = stand({ page })
+  await connected(s)
+  page.leave()
+  await tick()
+  assert.deepEqual(s.sock.closedWith, { code: 1000, reason: '' })
+  assert.equal(s.client.session.state, 'disconnected')
+})
+
+test('disconnectOnPageLeave:false 면 떠나도 닫지 않는다', async () => {
+  const page = new FakePage()
+  const s = stand({ page, opts: { disconnectOnPageLeave: false } })
+  await connected(s)
+  page.leave()
+  await tick()
+  assert.equal(s.sock.closedWith, null)
+})
+
+test('session.quality 는 getStats 로 매기고 바뀔 때만 session 이벤트가 난다', async () => {
+  const s = stand()
+  await connected(s)
+  await joined(s)
+  const seen: string[] = []
+  s.client.on('session', (i) => seen.push(i.quality))
+  const pc = s.peers.made[0]!
+  pc.stats.set('cp', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: 0.05 })
+  pc.stats.set('in', { type: 'inbound-rtp', packetsReceived: 1000, packetsLost: 5 })
+  await s.clock.advance(5_000)
+  assert.equal(s.client.session.quality, 'excellent')
+  pc.stats.set('cp', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: 0.5 })
+  await s.clock.advance(5_000)
+  assert.equal(s.client.session.quality, 'poor', 'RTT 400ms 를 넘겼다')
+  await s.clock.advance(5_000)
+  assert.deepEqual(seen, ['excellent', 'poor'], '같은 값이면 다시 내지 않는다')
+})
+
+test('statsIntervalMs:0 이면 재지 않는다', async () => {
+  const s = stand({ opts: { statsIntervalMs: 0 } })
+  await connected(s)
+  await joined(s)
+  const pc = s.peers.made[0]!
+  pc.stats.set('cp', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: 0.9 })
+  await s.clock.advance(20_000)
+  assert.equal(s.client.session.quality, 'good')
 })
 
 test('TRACK_STATE 는 트랙 하나의 표시만 고친다', async () => {
@@ -472,9 +567,11 @@ test('획득 실패는 device 로 온다', async () => {
   await joined(s, { affiliation: { sub_rooms: ['r1'], pub_room: 'r1' } }, { mode: 'talk' })
   s.devices.fail = 'microphone'
   await assert.rejects(s.client.media.enableMicrophone(), (e: unknown) => {
-    const err = e as { category: string; details?: Record<string, unknown> }
+    const err = e as { category: string; name: string; details?: Record<string, unknown> }
     assert.equal(err.category, 'device')
-    assert.equal(err.details?.kind, 'microphone', '어느 kind 에서 막혔는지가 프롬프트를 다시 띄울 자리다')
+    assert.equal(err.details?.kind, 'audio', '어느 kind 에서 막혔는지가 프롬프트를 다시 띄울 곳이다 — SDK§2-3 audio/video')
+    assert.equal(err.name, 'DEVICE_PERMISSION_DENIED')
+    assert.equal(err.details?.blockedBy, 'user')
     return true
   })
 })

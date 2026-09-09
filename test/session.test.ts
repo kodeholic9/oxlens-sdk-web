@@ -20,9 +20,10 @@ interface Stand {
   /** 마지막 소켓의 op 목록. */
   ops(): number[]
   answer(op: number, body?: Record<string, unknown>): void
+  fail(op: number, code: number, name: string): void
 }
 
-function stand(over: Partial<{ jitter: number }> = {}): Stand {
+function stand(over: Partial<{ jitter: number; clientVer: number }> = {}): Stand {
   const clock = new FakeClock()
   const sockets: FakeSocket[] = []
   const live = { rooms: [] as string[], publish: [] as { track_id: string; kind: string }[] }
@@ -33,6 +34,7 @@ function stand(over: Partial<{ jitter: number }> = {}): Stand {
     live: { rooms: () => live.rooms, publish: () => live.publish },
     clock,
     jitter: () => over.jitter ?? 0,
+    ...(over.clientVer === undefined ? {} : { clientVer: over.clientVer }),
   })
   const last = (): FakeSocket => sockets[sockets.length - 1]!
   return {
@@ -41,6 +43,10 @@ function stand(over: Partial<{ jitter: number }> = {}): Stand {
     answer(op, body) {
       const f = last().sent.map(decode).find((x) => x.op === op && x.kind === Kind.Request)!
       last().deliver(encode(Kind.Ok, op, f.pid, body ?? {}))
+    },
+    fail(op, code, name) {
+      const f = last().sent.map(decode).find((x) => x.op === op && x.kind === Kind.Request)!
+      last().deliver(encode(Kind.Fail, op, f.pid, { code, name }))
     },
   }
 }
@@ -231,6 +237,95 @@ test('앱이 닫으면 사다리를 돌지 않는다', async () => {
   await s.clock.advance(60_000)
   assert.equal(s.sockets.length, 1)
   assert.deepEqual(s.sockets[0]!.closedWith, { code: 1000, reason: '' })
+})
+
+test('clientVer 옵션이 BIND 의 client_ver 로 실린다', async () => {
+  const s = stand({ clientVer: 2 })
+  const p = s.session.connect()
+  await tick()
+  const body = decode(s.sockets[0]!.sent[0]!).body as Record<string, unknown>
+  assert.equal(body.client_ver, 2)
+  s.answer(Op.Bind, BIND_OK); await p
+})
+
+test('재접속 BIND 가 2003 이면 새 토큰을 기다렸다가 그 토큰으로 다시 붙는다', async () => {
+  const s = stand()
+  const p = s.session.connect()
+  await tick(); s.answer(Op.Bind, BIND_OK); await p
+  const seen: string[] = []
+  void (async () => { for await (const e of s.session.listen()) seen.push(e.kind) })()
+
+  s.sockets[0]!.close(1006, '')
+  await tick(); await s.clock.advance(0)
+  s.fail(Op.Bind, 2003, 'TOKEN_EXPIRED')
+  await tick()
+  assert.ok(seen.includes('token_required'))
+  assert.deepEqual(s.sockets[1]!.closedWith, { code: 1000, reason: '' }, '실패한 소켓은 정상 종료로 놓는다')
+  await s.clock.advance(5_000)
+  assert.equal(s.sockets.length, 2, '토큰이 올 때까지 다시 붙지 않는다')
+
+  s.session.setToken('t2')
+  await tick()
+  assert.equal(s.sockets.length, 3, '새 토큰이 오면 사다리 없이 바로 붙는다')
+  const body = decode(s.sockets[2]!.sent[0]!).body as Record<string, unknown>
+  assert.equal(body.token, 't2')
+  s.answer(Op.Bind, BIND_OK)
+  await tick()
+  assert.equal(s.session.state, 'active')
+})
+
+test('새 토큰이 창 안에 안 오면 재시도 가능으로 닫는다', async () => {
+  const s = stand()
+  const p = s.session.connect()
+  await tick(); s.answer(Op.Bind, BIND_OK); await p
+  const seen: { kind: string; retryable?: boolean }[] = []
+  void (async () => {
+    for await (const e of s.session.listen()) seen.push({ kind: e.kind, ...('retryable' in e ? { retryable: e.retryable } : {}) })
+  })()
+
+  s.sockets[0]!.close(1006, '')
+  await tick(); await s.clock.advance(0)
+  s.fail(Op.Bind, 2003, 'TOKEN_EXPIRED')
+  await tick()
+  await s.clock.advance(BIND_OK.resume_window_ms)
+  await tick()
+  assert.equal(s.session.state, 'disconnected')
+  assert.deepEqual(seen.at(-1), { kind: 'closed', retryable: true })
+  assert.equal(s.sockets.length, 2)
+})
+
+test('재접속 BIND 가 2002 면 다시 붙어도 같아 끝낸다', async () => {
+  const s = stand()
+  const p = s.session.connect()
+  await tick(); s.answer(Op.Bind, BIND_OK); await p
+  const seen: { kind: string; retryable?: boolean; reason?: string }[] = []
+  void (async () => {
+    for await (const e of s.session.listen()) {
+      seen.push({ kind: e.kind, ...(e.kind === 'closed' ? { retryable: e.retryable, reason: e.info.reason } : {}) })
+    }
+  })()
+
+  s.sockets[0]!.close(1006, '')
+  await tick(); await s.clock.advance(0)
+  s.fail(Op.Bind, 2002, 'TOKEN_INVALID')
+  await tick()
+  assert.equal(s.session.state, 'disconnected')
+  assert.deepEqual(seen.at(-1), { kind: 'closed', retryable: false, reason: 'BIND_FAILED' })
+  await s.clock.advance(60_000)
+  assert.equal(s.sockets.length, 2, '사다리를 돌지 않는다')
+})
+
+test('재접속 BIND 가 4003 이면 사다리를 계속 돈다', async () => {
+  const s = stand()
+  const p = s.session.connect()
+  await tick(); s.answer(Op.Bind, BIND_OK); await p
+  s.sockets[0]!.close(1006, '')
+  await tick(); await s.clock.advance(0)
+  s.fail(Op.Bind, 4003, 'QUOTA_EXCEEDED')
+  await tick()
+  assert.equal(s.session.state, 'resuming')
+  await s.clock.advance(BACKOFF_MS[1]!)
+  assert.equal(s.sockets.length, 3)
 })
 
 test('살아남은 것이 하나도 없으면 RESUME 을 보내지 않는다', async () => {

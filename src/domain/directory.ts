@@ -1,6 +1,6 @@
 // author: kodeholic (powered by Claude)
 // 연§5-3 · §5-5 — 방 목록과 방 상세. ★한 경로가 두 쓰임을 겸한다: 미리보기와 재동기.
-import { Http, HttpFailed } from '../platform/http.js'
+import { Http, HttpFailed, HttpFailure } from '../platform/http.js'
 import { TrackEntry, Version } from './store.js'
 
 export interface RoomRow {
@@ -56,7 +56,20 @@ export class Directory {
       ? { 'X-OxLens-Session': session }
       : { Authorization: `Bearer ${this.creds.token()}` }
     const res = await this.http.get(url, headers)
-    if (res.status !== 200) throw new HttpFailed(res.status, url)
+    if (res.status !== 200) throw new HttpFailed(res.status, url, failureOf(res.body))
     return res.body
+  }
+}
+
+/** 연§5-5 — 실패 body 는 `Failure` 형이다. 형이 아니면 없는 것으로 둔다(지어내지 않는다). */
+function failureOf(body: unknown): HttpFailure | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const b = body as Record<string, unknown>
+  if (typeof b.code !== 'number' || typeof b.name !== 'string') return undefined
+  return {
+    code: b.code,
+    name: b.name,
+    ...(typeof b.message === 'string' ? { message: b.message } : {}),
+    ...(typeof b.details === 'object' && b.details !== null ? { details: b.details as Record<string, unknown> } : {}),
   }
 }
