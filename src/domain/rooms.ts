@@ -6,7 +6,7 @@ import { PeerFactory } from '../platform/webrtc.js'
 import { RequestFailed, Signaling } from '../internal/signaling.js'
 import { Seat } from '../internal/sdp/build.js'
 import { ServerConfig } from '../internal/sdp/config.js'
-import { PeerLink } from '../internal/transport/link.js'
+import { OpusFmtpPrefs, PeerLink } from '../internal/transport/link.js'
 import { Op } from '../internal/wire.js'
 import { request } from './request.js'
 import { TrackEntry, TrackStore, Version } from './store.js'
@@ -54,6 +54,8 @@ export interface RoomsOptions {
   readonly peers: PeerFactory
   readonly clock?: Clock
   readonly pcMode?: '1pc' | '2pc'
+  /** 정책서 §4-1 `opusFmtpDefault` — 클라가 조립하는 answer 의 opus 선호(연§9-4 예외). */
+  readonly opusFmtpDefault?: OpusFmtpPrefs
 }
 
 export class Rooms {
@@ -221,7 +223,11 @@ export class Rooms {
     if (known && known.cfg.ice.publish_ufrag === cfg.ice.publish_ufrag) return known
     known?.link.close()
 
-    const link = new PeerLink(cfg, { peers: this.opts.peers, ...(this.opts.clock ? { clock: this.opts.clock } : {}) })
+    const link = new PeerLink(cfg, {
+      peers: this.opts.peers,
+      ...(this.opts.clock ? { clock: this.opts.clock } : {}),
+      ...(this.opts.opusFmtpDefault ? { opusFmtpDefault: this.opts.opusFmtpDefault } : {}),
+    })
     await link.open()
     const server: Server = { sfuId: cfg.sfu_id, cfg, link, store: known?.store ?? new TrackStore(), rooms: known?.rooms ?? new Set() }
     this.servers.set(cfg.sfu_id, server)

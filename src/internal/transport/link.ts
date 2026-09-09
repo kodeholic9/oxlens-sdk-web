@@ -22,6 +22,32 @@ export interface LinkOptions {
   readonly peers: PeerFactory
   readonly clock?: Clock
   readonly disconnectGraceMs?: number
+  /** 연§9-4 예외 — opus `fmtp` 의 받는 쪽 선호. 정책서 §4-1 `opusFmtpDefault`(앱이 주는 형 그대로). */
+  readonly opusFmtpDefault?: OpusFmtpPrefs
+}
+
+/** 정책서 §4-1 `opusFmtpDefault` — 앱이 주는 형. wire 이름으로 옮기는 것은 `opusPrefsOf` 하나다. */
+export interface OpusFmtpPrefs {
+  readonly dtx?: boolean
+  readonly fec?: boolean
+  readonly stereo?: boolean
+  readonly maxAverageBitrate?: number
+}
+
+/** 정책서 §4-1 — 1차 값은 `ptt` 프로필이다(무전이 기준 시나리오). mono = stereo 없음. */
+export const OPUS_FMTP_PTT: OpusFmtpPrefs = { dtx: true, fec: true, stereo: false }
+
+/**
+ * SDK§6-3 · 정책서 §4-1 — 앱 형을 opus `fmtp` 키로 옮긴다(RFC 7587 §6.1).
+ * ★옮기는 자리는 여기 하나다 — 두 곳에서 옮기면 부르는 길에 따라 wire 값이 갈린다.
+ */
+export function opusPrefsOf(o: OpusFmtpPrefs): Record<string, string | number | boolean> {
+  return {
+    ...(o.dtx === undefined ? {} : { usedtx: o.dtx }),
+    ...(o.fec === undefined ? {} : { useinbandfec: o.fec }),
+    ...(o.stereo === undefined ? {} : { stereo: o.stereo }),
+    ...(o.maxAverageBitrate === undefined ? {} : { maxaveragebitrate: o.maxAverageBitrate }),
+  }
 }
 
 /** 연§6-3 READY{transport} 의 재료 — 1pc 확정본에서 뽑는다. */
@@ -109,6 +135,10 @@ export class PeerLink {
     const answer = publishAnswer(local, this.cfg, {
       seats: [],
       session: { id: sessionIdOf(this.cfg.sfu_id), version: this.sendVersion },
+      // 연§9-4 예외 — opus 받는 쪽 선호는 answer 가 정한다. 이 값이 확정본에 박히고
+      // 그대로 PUBLISH_TRACKS.fmtp 로 신고돼 구독자 SDP 까지 간다(연§6-3).
+      // ★`1pc` 전용이다(SDK§6-3 · 정책서 §4-1) — `2pc` 는 발행마다 조립하므로 트랙 단위 값이 그 자리다.
+      ...(this.onePc ? { audioPrefs: opusPrefsOf(this.opts.opusFmtpDefault ?? OPUS_FMTP_PTT) } : {}),
     })
     this.sendVersion += 1
     await pc.setRemoteDescription({ type: 'answer', sdp: answer })
@@ -141,9 +171,19 @@ export class PeerLink {
     return t
   }
 
-  /** 연§6-3 — 등록에 실을 ssrc·pt·fmtp 는 내 offer 에서 읽는다. */
+  /** 연§6-3 — 등록에 실을 ssrc·mid·pt·simulcast 는 내 offer 에서 읽는다(협상 후보와 브라우저가 정한 값). */
   localOffer(): string | null {
     return this.pub?.localDescription?.sdp ?? null
+  }
+
+  /**
+   * 연§6-3 — 등록에 실을 `fmtp` 는 ★확정본(answer)에서 읽는다. offer 가 아니다.
+   * video 는 answer 가 offer 줄을 그대로 옮기므로 값이 같지만(연§9-4), ★opus 는 그 절의 예외로
+   * answer 가 받는 쪽 선호를 정한다 — offer 에서 읽으면 그 협상 결과가 구독자에게 안 간다.
+   * `1pc` 은 이것이 `READY{transport}.codecs` 와 같은 출처가 되어 이중 출처가 없다.
+   */
+  confirmedAnswer(): string | null {
+    return this.confirmed
   }
 
   private kindOf(t: TransceiverLike): string {

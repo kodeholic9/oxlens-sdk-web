@@ -14,12 +14,16 @@ const SEAT: Seat = {
   ssrc: 1001, pt: 111, codec: 'opus',
 }
 
-function stand(mode: '1pc' | '2pc', offer = BROWSER_OFFER): {
-  peers: FakePeers; clock: FakeClock; link: PeerLink
-} {
+function stand(
+  mode: '1pc' | '2pc',
+  offer = BROWSER_OFFER,
+  opusFmtpDefault?: { dtx?: boolean; fec?: boolean; stereo?: boolean; maxAverageBitrate?: number },
+): { peers: FakePeers; clock: FakeClock; link: PeerLink } {
   const peers = new FakePeers(offer)
   const clock = new FakeClock()
-  const link = new PeerLink({ ...CFG, pc_mode: mode }, { peers, clock })
+  const link = new PeerLink({ ...CFG, pc_mode: mode }, {
+    peers, clock, ...(opusFmtpDefault ? { opusFmtpDefault } : {}),
+  })
   return { peers, clock, link }
 }
 
@@ -139,13 +143,39 @@ test('확정본 없이 통합 offer 를 조립하지 않는다', async () => {
   })
 })
 
+// ★연§9-4 예외(RFC 7587 §6.1) — opus 받는 쪽 선호는 ★answer 가 정한다. 그 확정본이 곧
+// PUBLISH_TRACKS.fmtp 의 출처이고(연§6-3), READY{transport} 신고표와 ★한 출처다.
+// offer 에서 읽던 옛 길로는 앱이 정한 값이 wire 에 영영 못 닿았다.
+test('★opusFmtpDefault 가 확정 answer 에 박힌다 — 앱 값이 wire 에 닿는다', async () => {
+  const { peers, link } = stand('1pc', BROWSER_OFFER, { dtx: false, fec: true, maxAverageBitrate: 24000 })
+  await link.open()
+
+  const answer = peers.made[0]!.remoteDescription!.sdp!
+  assert.ok(answer.includes('a=fmtp:111 minptime=10;useinbandfec=1;usedtx=0;maxaveragebitrate=24000'),
+    'offer 원문(minptime=10;useinbandfec=1)에 앱 선호가 얹힌 값이라야 한다')
+  const opus = link.transportReport().codecs.find((c) => c.name === 'opus')!
+  assert.equal(opus.fmtp, 'minptime=10;useinbandfec=1;usedtx=0;maxaveragebitrate=24000',
+    '신고표와 등록 신고는 이 한 출처에서 나온다 — 이중 출처 0')
+})
+
+test('★2pc 는 opusFmtpDefault 를 쓰지 않는다 — 발행마다 조립한다(정책서 §4-1)', async () => {
+  const { peers, link } = stand('2pc', BROWSER_OFFER, { dtx: false })
+  await link.open()
+
+  const answer = peers.made[0]!.remoteDescription!.sdp!
+  assert.ok(answer.includes('a=fmtp:111 minptime=10;useinbandfec=1'), 'offer 원문 그대로다')
+  assert.ok(!answer.includes('usedtx'), '2pc 는 PeerLink 단위 값을 굳히지 않는다')
+})
+
 test('READY{transport} 재료는 확정본에서 뽑는다', async () => {
   const { link } = stand('1pc')
   await link.open()
   const report = link.transportReport()
 
+  // ★연§9-4 예외 · 정책서 §4-1 — opus 받는 쪽 선호는 answer 가 정한다. 확정본에 `ptt` 프로필이
+  // 박혀 있고(usedtx·useinbandfec·mono), 그 값이 그대로 신고표에도 PUBLISH_TRACKS.fmtp 에도 간다.
   assert.deepEqual(report.codecs, [
-    { kind: 'audio', pt: 111, name: 'opus', fmtp: 'minptime=10;useinbandfec=1' },
+    { kind: 'audio', pt: 111, name: 'opus', fmtp: 'minptime=10;useinbandfec=1;usedtx=1;stereo=0' },
     {
       kind: 'video', pt: 102, name: 'H264',
       fmtp: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f',

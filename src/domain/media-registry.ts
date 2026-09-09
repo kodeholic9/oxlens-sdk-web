@@ -423,11 +423,16 @@ export class MediaRegistry {
     const entry: Record<string, unknown> = {
       kind: track.kind, ssrc, mid, pt, duplex: track.duplex, source: track.source,
     }
+    // 연§6-3 — ★`fmtp` 는 kind 를 가리지 않는다. 확정본에 있으면 반드시 싣는다.
+    // ★출처는 offer 가 아니라 ★확정본(answer)이다: video 는 두 값이 같지만(연§9-4 "원문 줄을
+    // 그대로 옮긴다") opus 는 그 절의 예외로 answer 가 받는 쪽 선호를 정한다 — offer 에서 읽으면
+    // useinbandfec·minptime 협상 결과가 구독자에게 안 간다. 구독자 fmtp 의 출처가 이것 하나다.
+    const confirmed = to.link.confirmedAnswer()
+    const done = confirmed === null ? undefined : parse(confirmed).sections.find((x) => x.mid === mid)
+    const fmtp = (done ?? m).fmtp.get(pt)
+    if (fmtp !== undefined) entry.fmtp = fmtp
     if (track.kind === 'video') {
       entry.codec = codec
-      const fmtp = m.fmtp.get(pt)
-      // 연§6-3 — offer 에 있으면 반드시 싣는다. 구독자 fmtp 의 출처가 이것 하나다.
-      if (fmtp !== undefined) entry.fmtp = fmtp
       // ★연§6-3 은 안 보내면 서버가 추론한다고 하나(full=true), 내 offer 가 진실을 안다.
       // 추론에 맡기면 단일 레이어를 시뮬캐스트로 등록해 물리가 첫 RTP 를 영원히 기다린다.
       entry.simulcast = simulcast

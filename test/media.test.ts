@@ -23,13 +23,15 @@ interface Stand {
   target(): { link: PeerLink; roomId: string; sfuId: string }
 }
 
-function stand(mode: '1pc' | '2pc' = '2pc'): Stand {
+function stand(mode: '1pc' | '2pc' = '2pc', opusFmtpDefault?: Record<string, string | number | boolean>): Stand {
   const sock = new FakeSocket()
   const clock = new FakeClock()
   const sig = new Signaling(sock, { clock, window: 10 })
   const peers = new FakePeers(PUBLISH_OFFER)
   const devices = new FakeDevices()
-  const link = new PeerLink({ ...CFG, pc_mode: mode }, { peers, clock })
+  const link = new PeerLink({ ...CFG, pc_mode: mode }, {
+    peers, clock, ...(opusFmtpDefault ? { opusFmtpDefault } : {}),
+  })
   const reg = new MediaRegistry(() => sig, { devices, clock })
   const seen = new Set<number>()
   const pending = (op: number): number[] => sock.sent.map(decode)
@@ -132,7 +134,7 @@ test('발행은 트랜시버 → 협상 → 등록 → 송신 차례다', async 
     'RTP 는 협상 뒤다')
 })
 
-test('등록에 실을 값은 전부 내 offer 에서 읽는다', async () => {
+test('등록에 실을 값은 내 offer 에서, ★fmtp 는 확정본에서 읽는다', async () => {
   const s = stand()
   await s.link.open()
   await publishOne(s, 'microphone')
@@ -140,15 +142,19 @@ test('등록에 실을 값은 전부 내 offer 에서 읽는다', async () => {
   const body = bodyOf(s, Op.PublishTracks)
   assert.equal(body.room_id, 'r1')
   assert.equal(body.action, 'add')
+  // ★연§6-3 — fmtp 는 kind 를 안 가린다. audio 도 확정본에 있으면 싣는다.
+  // opus 는 연§9-4 예외로 answer 가 받는 쪽 선호를 정하므로, offer 에서 읽으면
+  // useinbandfec·minptime 협상 결과가 구독자에게 영영 안 간다.
   assert.deepEqual(body.tracks, [{
     kind: 'audio', ssrc: 11111, mid: '0', pt: 111, duplex: 'full', source: 'microphone',
+    fmtp: 'minptime=10;useinbandfec=1',
   }])
   assert.equal(body.mid_extmap_id, 1, '협상 결과 번호를 신고한다')
   assert.equal(body.audio_level_extmap_id, 4)
   assert.equal(body.twcc_extmap_id, 6)
 })
 
-test('video 는 codec 과 fmtp 를 반드시 싣는다', async () => {
+test('video 는 codec 과 fmtp 를 반드시 싣는다 — 확정본이 출처다', async () => {
   const s = stand()
   await s.link.open()
   s.link.sender('audio')

@@ -97,7 +97,10 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     this.adaptive = opts.adaptiveStream !== false
     const peers = wiring.peers ?? browserPeers
     const mode = opts.pcMode === '1pc' ? '1pc' : '2pc'
-    this.roomsDomain = new Rooms(() => this.requireSignaling(), { peers, clock: this.clock, pcMode: mode })
+    this.roomsDomain = new Rooms(() => this.requireSignaling(), {
+      peers, clock: this.clock, pcMode: mode,
+      ...(opts.opusFmtpDefault ? { opusFmtpDefault: opts.opusFmtpDefault } : {}),
+    })
     this.devicePort = wiring.devices ?? requireBrowserDevices()
     this.playback = new Playback(wiring.audioOut ?? defaultAudioOut())
     // SDK§12-1 — 허용이 바뀌면 앱에 알린다. ★주인이 훑는다(콜백을 넘기지 않는다).
