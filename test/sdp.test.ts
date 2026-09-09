@@ -3,7 +3,7 @@
 // 둘 중 하나가 틀린 것이라 그 자리에서 드러나야 한다.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { publishAnswer, SdpError, Seat, subscribeOffer, unifiedOffer } from '../src/internal/sdp/build.js'
+import { publishAnswer, SdpError, Seat, sessionIdOf, subscribeOffer, unifiedOffer } from '../src/internal/sdp/build.js'
 import { parse } from '../src/internal/sdp/parse.js'
 import { BROWSER_OFFER, CFG, DC_ONLY_OFFER, FP } from './_sdp_fixtures.js'
 
@@ -485,4 +485,25 @@ test('연§9-10-1 — 받기 mid 가 내 offer 에도 있으면 한 번만 싣�
   const got = unifiedOffer([SEAT_32], CFG, { mine: ONE_PC_OFFER, confirmed: publishAnswer(ONE_PC_OFFER, CFG, { seats: [SEAT_32] }) })
   assert.ok(lines(got).includes('a=group:BUNDLE 0 32'), 'mid 가 BUNDLE 에 두 번 들어가지 않는다')
   assert.equal(lines(got).filter((l) => l === 'a=mid:32').length, 1, 'm-line 이 겹치지 않는다')
+})
+
+// 연§9-2 — `o=` 의 session-id 는 ★숫자 문자열이어야 한다(RFC 4566 §5.2).
+// 서버 신원(`sfu_id`)을 그대로 쓰면 Firefox 가 SDP 를 통째로 거부한다:
+//   "SDP Parse Error: Invalid owner session id specified for o=". Chrome 은 받아 준다.
+test('연§9-2 — o= 의 session-id 는 숫자다', () => {
+  const id = sessionIdOf('sfu-f8531b178cce4811ace3e2352d248931')
+  assert.match(id, /^[0-9]+$/, '숫자 문자열이라야 Firefox 가 받는다')
+  assert.equal(sessionIdOf('sfu-f8531b178cce4811ace3e2352d248931'), id, '★그 연결 내내 같은 값이다')
+  assert.notEqual(sessionIdOf('sfu-1'), sessionIdOf('sfu-2'), '서버가 다르면 값도 다르다')
+  assert.notEqual(sessionIdOf(''), '0', '0 은 내지 않는다')
+})
+
+test('연§9-2 — 조립된 SDP 의 o= 줄이 실제로 숫자를 싣는다', () => {
+  for (const sdp of [
+    publishAnswer(BROWSER_OFFER, CFG, { seats: [], session: { id: sessionIdOf(CFG.sfu_id), version: 1 } }),
+    subscribeOffer([], CFG, { session: { id: sessionIdOf(CFG.sfu_id), version: 1 } }),
+  ]) {
+    const o = lines(sdp).find((l) => l.startsWith('o='))!
+    assert.match(o, /^o=- [0-9]+ [0-9]+ IN IP4 /, `o= 줄이 RFC 4566 꼴이 아니다: ${o}`)
+  }
 })

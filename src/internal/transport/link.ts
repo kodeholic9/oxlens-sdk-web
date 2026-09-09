@@ -6,7 +6,7 @@ import {
   DataChannelLike, IceState, MediaTrackLike, PeerConnectionLike, PeerFactory, RemoteTrackArrival,
   TransceiverLike,
 } from '../../platform/webrtc.js'
-import { publishAnswer, Seat, subscribeOffer, unifiedOffer } from '../sdp/build.js'
+import { publishAnswer, Seat, sessionIdOf, subscribeOffer, unifiedOffer } from '../sdp/build.js'
 import { ServerConfig, URI_MID } from '../sdp/config.js'
 import { parse } from '../sdp/parse.js'
 import { Serial } from './serial.js'
@@ -108,7 +108,7 @@ export class PeerLink {
     const local = pc.localDescription?.sdp ?? offer.sdp ?? ''
     const answer = publishAnswer(local, this.cfg, {
       seats,
-      session: { id: this.cfg.sfu_id, version: this.sendVersion },
+      session: { id: sessionIdOf(this.cfg.sfu_id), version: this.sendVersion },
     })
     this.sendVersion += 1
     await pc.setRemoteDescription({ type: 'answer', sdp: answer })
@@ -176,7 +176,7 @@ export class PeerLink {
       if (this.onePc) return this.unified(this.require(this.pub), seats)
       const sub = this.require(this.sub)
       const offer = subscribeOffer(seats, this.cfg, {
-        session: { id: this.cfg.sfu_id, version: this.recvVersion },
+        session: { id: sessionIdOf(this.cfg.sfu_id), version: this.recvVersion },
       })
       this.recvVersion += 1
       await this.rollbackIfBusy(sub)
@@ -194,7 +194,7 @@ export class PeerLink {
     const offer = unifiedOffer(seats, this.cfg, {
       mine: mine.sdp ?? '',
       confirmed: this.confirmed,
-      session: { id: this.cfg.sfu_id, version: this.recvVersion },
+      session: { id: sessionIdOf(this.cfg.sfu_id), version: this.recvVersion },
     })
     this.recvVersion += 1
     await this.rollbackIfBusy(pc)

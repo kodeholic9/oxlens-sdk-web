@@ -43,6 +43,9 @@ test('RESYNC-02 흐름이 멎으면 서버가 알리고 SDK 가 다시 받는다
 
   // ★장치만 죽인다 — 등록·배관은 살아 있고 RTP 만 멎는다.
   // 깨끗한 퇴장은 정체가 아니다(배관이 같이 걷힌다). 서버가 보는 것은 이 형상이다.
+  // ★이 자극은 브라우저를 탄다 — Chromium 은 `stop()` 에 RTP 가 즉시 멎지만
+  //   Firefox 는 무음 RTP 를 계속 보낸다(실측 +321 패킷/6초). Firefox 에서 이 시험이
+  //   빨간 것은 정체 감지가 아니라 ★자극이 안 먹은 것이다 — 서버는 옳게 동작한다.
   expect(await talker.call<number>('killSource')).toBeGreaterThan(0)
 
   await expect.poll(

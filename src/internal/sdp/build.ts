@@ -18,6 +18,21 @@ export class SdpError extends Error {
   }
 }
 
+/**
+ * 연§9-2 — `o=` 의 session-id 는 ★**숫자 문자열**이어야 한다(RFC 4566 §5.2).
+ * 서버 신원(`sfu_id`)은 문자열이라 그대로 쓰면 ★Firefox 가 SDP 를 통째로 거부한다
+ * ("SDP Parse Error: Invalid owner session id specified for o="). Chrome 은 받아 준다.
+ * 그 신원을 안정 사상해 ★그 연결 내내 같은 값이면서 서버마다 다른 숫자를 얻는다.
+ */
+export function sessionIdOf(sfuId: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < sfuId.length; i += 1) {
+    h ^= sfuId.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return String(h === 0 ? 1 : h)
+}
+
 export interface SessionId {
   readonly id: string
   readonly version: number
