@@ -125,7 +125,8 @@ export type ClientEvents = {
    * 새 토큰이 필요하다 — 2003 을 받았다(재접속 BIND 연§7-3-2-1, 또는 HTTP 401).
    * 앱이 setToken 을 부를 때까지 SDK 는 기다린다. resume_window_ms 를 넘기면 미디어를 닫고 closed{retryable:true}. §3-2
    * ★최초 connect() 의 2003 은 이 이벤트가 아니라 reject 다(연§7-2-3).
-   * ★Close 4004(SESSION_REVOKED)는 여기가 아니다 — 운영자가 세션을 끊은 것이라 새 토큰으로 안 풀린다(closed{retryable:false}).
+   * ★Close 4004(SESSION_REVOKED)가 그 자리에서 이것을 내지는 않는다 — SDK 가 세션을 버리고 session_id 없이
+   * 다시 붙고(연§7-0-3 3), 자격이 정말로 사라졌으면 그 BIND 가 2003 을 주어 그때 난다.
    */
   tokenRequired: (e: { readonly cause: 'expired' }) => void
   /** 끝났다. retryable=false = 다시 붙어도 소용없는 사유(4000·4001·4002·4005). true = 백오프 소진 — connect() 를 다시 부르면 새 세션이다. ★rooms 는 비고 방은 앱이 다시 join 한다. */

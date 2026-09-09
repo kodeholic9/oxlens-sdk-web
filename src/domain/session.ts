@@ -43,7 +43,7 @@ export interface ResumeOutcome {
 export type SessionEvent =
   | { readonly kind: 'active'; readonly bind: BindResult; readonly resumed: boolean }
   | { readonly kind: 'caught_up'; readonly outcome: ResumeOutcome }
-  | { readonly kind: 'resuming' }
+  | { readonly kind: 'resuming'; readonly info: CloseInfo }
   | { readonly kind: 'token_required' }
   | { readonly kind: 'rebuild'; readonly why: 'no_session' | 'window_expired' | 'resume_failed' }
   | { readonly kind: 'closed'; readonly info: CloseInfo; readonly retryable: boolean }
@@ -68,6 +68,8 @@ export class Session {
   private bind: BindResult | null = null
   private attempt = 0
   private droppedAt: number | null = null
+  /** 연§10-3 `4004` — 서버가 세션을 폐기했다. 다시 붙되 `session_id` 를 싣지 않는다(연§7-0-3 3). */
+  private revoked = false
   private stopped = false
   private events: SessionEvent[] = []
   private wake: (() => void) | null = null
@@ -133,7 +135,9 @@ export class Session {
       pc_mode: this.opts.pcMode ?? '2pc',
     }
     // 연§6-1 — session_id 가 유효하면 그것이 이긴다. 토큰은 보지 않는다.
-    if (resuming && previous !== undefined && !this.windowExpired()) body.session_id = previous
+    // ★4004 로 끊겼으면 싣지 않는다 — 서버가 세션을 즉시 폐기했으므로 이어받을 것이 없고,
+    // 토큰을 다시 검사시키는 것이 그 절단의 목적이다(연§7-0-3 3).
+    if (resuming && !this.revoked && previous !== undefined && !this.windowExpired()) body.session_id = previous
 
     const bind = await this.withDeadline(sig.request(Op.Bind, body), T_BIND_MS, socket)
     const result = bind as unknown as BindResult
@@ -142,6 +146,7 @@ export class Session {
     this.state = 'active'
     this.attempt = 0
     this.droppedAt = null
+    this.revoked = false
 
     // 연§6-1 — 응답의 session_id 가 내가 보낸 것과 같아야 이어받은 것이다.
     const resumed = resuming && previous !== undefined && result.session_id === previous
@@ -177,12 +182,16 @@ export class Session {
     }
   }
 
-  /** 연§7-0-3 — 끊겼다. 미디어는 닫지 않는다. */
+  /** 연§7-0-3 — 끊겼다. 미디어는 닫지 않는다(★`4004` 는 예외 — 서버가 Peer 를 이미 회수했다). */
   private async watchClose(): Promise<void> {
     for (;;) {
       const info = await this.sig!.closed
       if (this.stopped) { this.sig = null; this.wake?.(); return }
       this.droppedAt ??= this.clock.now()
+      // 연§10-3 · §7-0-3 3 — 운영자 절단. 차단이 아니라 세션 폐기다: 이어받기를 건너뛰고
+      // session_id 없이 다시 붙는다. 그 BIND 가 토큰을 다시 검사한다 — 자격이 사라졌으면 거기서 2003 이다.
+      // 뒤따르는 dial 이 resumed=false 로 떨어져 rebuild{no_session} 을 낸다 — 전면 재구축이 그 경로다.
+      this.revoked = info.code === 4004
       if (!reconnectable(info.code)) {
         this.state = 'disconnected'
         this.push({ kind: 'closed', info, retryable: false })
@@ -190,7 +199,9 @@ export class Session {
         return
       }
       this.state = 'resuming'
-      this.push({ kind: 'resuming' })
+      // SDK§3-2 `session.reason` — 끊긴 사유는 **끝난 것만이 아니다.** 다시 붙는 사유(`4003`·`4004`·
+      // `4006`·망 절단)도 앱이 알아야 한다 — `4004` 는 이 자리 말고 앱에 닿을 길이 없다.
+      this.push({ kind: 'resuming', info })
       if (!(await this.retry(info))) return
     }
   }

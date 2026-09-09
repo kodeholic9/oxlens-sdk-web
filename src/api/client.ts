@@ -595,6 +595,9 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
         this.emit('tokenRequired', { cause: 'expired' })
         continue
       }
+      // SDK§3-2 — `session.reason` 은 마지막으로 끊긴 사유다. 다시 붙는 사유도 여기서 담는다
+      // (연§10-3 `4004` 는 재접속 사유라 `closed` 를 안 지난다 — 그러면 앱이 알 길이 없다).
+      if (e.kind === 'resuming') this.lastClose = { code: e.info.code, name: e.info.reason }
       if (e.kind === 'closed') {
         this.lastClose = { code: e.info.code, name: e.info.reason }
         this.emit('closed', { code: e.info.code, name: e.info.reason, retryable: e.retryable })

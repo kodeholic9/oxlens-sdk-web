@@ -198,6 +198,48 @@ test('다시 붙어도 소용없는 사유면 사다리를 안 돈다', async ()
   assert.deepEqual(seen.at(-1), { kind: 'closed', retryable: false })
 })
 
+// ★연§10-3 `4004` — 운영자 절단은 차단이 아니다. 세션은 즉시 폐기고, 다시 붙되 이어받지 않는다.
+// 자격이 정말로 사라졌으면 그 재`BIND` 가 `2003` 으로 막는다 — 막는 자리는 토큰이지 close code 가 아니다.
+test('★4004 는 다시 붙는다 — session_id 를 안 싣고, 그 BIND 가 토큰을 다시 검사한다', async () => {
+  const s = stand()
+  const p = s.session.connect()
+  await tick(); s.answer(Op.Bind, BIND_OK); await p
+  s.live.rooms.push('r1')
+  const seen: string[] = []
+  void (async () => { for await (const e of s.session.listen()) seen.push(e.kind) })()
+
+  s.sockets[0]!.close(4004, 'SESSION_REVOKED')
+  await tick()
+  assert.equal(s.session.state, 'resuming', '끝난 것이 아니다 — 백오프로 다시 붙는다')
+  assert.ok(!seen.includes('closed'), '재접속 금지 코드가 아니다')
+
+  await s.clock.advance(BACKOFF_MS[0]!)
+  assert.equal(s.sockets.length, 2)
+  const body = decode(s.sockets[1]!.sent[0]!).body as Record<string, unknown>
+  assert.ok(!('session_id' in body), '★세션은 폐기됐다 — 이어받기를 태우면 2008 만 받는다')
+  assert.ok('token' in body, '★토큰을 싣는다 — 다시 검사시키는 것이 그 절단의 목적이다')
+
+  // 자격이 사라졌으면 여기서 막힌다 — tokenRequired 로 앱에 간다.
+  s.fail(Op.Bind, 2003, 'TOKEN_EXPIRED')
+  await tick()
+  assert.ok(seen.includes('token_required'), '막는 자리는 토큰이다')
+})
+
+test('★4004 는 이어받은 뒤에도 사유가 앱에 남는다 — session.reason', async () => {
+  const s = stand()
+  const p = s.session.connect()
+  await tick(); s.answer(Op.Bind, BIND_OK); await p
+  const seen: { kind: string; code?: number }[] = []
+  void (async () => {
+    for await (const e of s.session.listen()) seen.push({ kind: e.kind, ...('info' in e ? { code: e.info.code } : {}) })
+  })()
+
+  s.sockets[0]!.close(4004, 'SESSION_REVOKED')
+  await tick()
+  assert.deepEqual(seen.at(-1), { kind: 'resuming', code: 4004 },
+    '다시 붙는 사유는 closed 를 안 지난다 — 이 자리 말고 앱에 닿을 길이 없다')
+})
+
 test('모르는 close code 는 다시 붙는다', async () => {
   const s = stand()
   const p = s.session.connect()
