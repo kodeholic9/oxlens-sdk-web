@@ -1,8 +1,8 @@
 // OxLens SDK — 공개 표면 계약 (surface first).
 //
 // ★이 파일이 곧 `context/spec/oxlens_sdk_spec.md` §2~§7 이다. 절 번호를 주석에 단다.
-// ★wire 어휘가 여기 없다 — 표면은 사용자 어휘(listen/talk/press/speaker)다(정의서 §1-1).
-// ★여기 없는 것은 API 가 아니다. 내부(internal/)는 재수출하지 않는다(정의서 §1-2).
+// ★wire 어휘가 여기 없다 — 표면은 사용자 어휘(listen/talk/press/speaker)다(SDK 정의서 §1-1).
+// ★여기 없는 것은 API 가 아니다. 내부(internal/)는 재수출하지 않는다(SDK 정의서 §1-2).
 //      client 레벨 track 이벤트(초기 트랙 계약) · 허가 전 release · acceptPending/talkingSince · 프로필은 duplex 가 고름(EC 켬) ·
 //      AudioEncoding 은 answer+setParameters · LocalTrack.server 단수 · media.publish 전이중 전용 · OxLensError 클래스가 표면.
 
