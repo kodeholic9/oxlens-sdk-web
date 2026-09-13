@@ -564,20 +564,26 @@ test('statsIntervalMs:0 이면 재지 않는다', async () => {
   assert.equal(s.client.session.quality, 'good')
 })
 
-test('TRACK_STATE 는 트랙 하나의 표시만 고친다', async () => {
+test('★TRACK_STATE 는 `muted` 하나다 — 트랙 하나의 표시만 고친다(14차)', async () => {
+  // ★14차 K1 — `duplex`·`live` 는 빠졌고 `active` 는 `TRACK_EVENT{add}` 가 나른다.
+  //   ★여기 남은 것은 `muted` 뿐이고, 그 값은 ★**수신측이 스스로 알 수 없다**(검은
+  //   프레임이 계속 와서 진짜 까만 장면과 구별이 안 된다).
   const s = stand()
   await connected(s)
   const room = await joined(s, { tracks: [MIC_TRACK] })
   await tick()
   const track = room.tracks[0]!
-  assert.equal(track.active, true)
+  assert.equal(track.muted, false)
+  let heard: boolean | null = null
+  track.on('muted', (m) => { heard = m })
 
   s.notify(Op.TrackState, {
     type: 'muted', room_id: 'r1', user_id: 'u2', track_id: 't-u2-mic', ssrc: 1001,
-    kind: 'audio', active: false, version: { epoch: CFG.sfu_id, seq: 2 },
+    kind: 'audio', muted: true, version: { epoch: CFG.sfu_id, seq: 2 },
   })
   await tick()
-  assert.equal(track.active, false, '배열이 아니라 track_id 로 지목한다')
+  assert.equal(track.muted, true, '배열이 아니라 track_id 로 지목한다')
+  assert.equal(heard, true, '★이벤트를 안 내면 앱이 음소거 표시를 영영 못 그린다')
   assert.equal(room.tracks.length, 1, '지우는 것이 아니다')
 })
 
@@ -865,4 +871,119 @@ test('문자는 응답으로 내 것을 알고 남의 것은 통지로 온다', 
   s.notify(Op.Message, { room_id: 'r1', user_id: 'u2', content: '들린다' })
   await tick()
   assert.deepEqual(seen, [{ userId: 'u2', content: '들린다' }])
+})
+
+// ── 연§6-7 18·20차 `PARTICIPANT_STATE{permission}` ──────────────────────────
+
+test('★권한 비트는 기본이 넷 다 허용이다 — 부재는 「모른다」가 아니다', async () => {
+  // ★**기본과 다를 때만 wire 에 온다**(연§4-4) — 대부분의 참가자가 이 갈래다.
+  //   부재를 「모른다」로 읽으면 ★**버튼이 이유 없이 잠긴다.**
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const p = room.participants.find((x) => x.userId === 'u1')!
+  assert.deepEqual(p.permission, {
+    publishAudio: true, publishVideo: true, publishScreen: true, floorRequest: true,
+  })
+})
+
+test('★PARTICIPANT_STATE 는 방 전원의 보관본을 고친다 — 본인만이 아니다', async () => {
+  // ★★본인에게만 반영하면 남들 화면에 ★**말할 수 없는 사람이 말할 수 있는 것으로 남고**,
+  //   지령대가 그 사람을 계속 지목한다(연§6-7 증상 첫 줄).
+  const s = stand()
+  await connected(s)
+  // ★**남**의 비트가 바뀌는 판이다 — 스탠드가 붙은 신원은 `u1` 이다.
+  const room = await joined(s, {
+    participants: [{ user_id: 'u1', select: false }, { user_id: 'u2', select: true }],
+  })
+  let heard: { userId: string; mine: boolean } | null = null
+  room.on('participantPermission', (e) => { heard = { userId: e.userId, mine: e.mine } })
+
+  s.notify(Op.ParticipantState, {
+    type: 'permission', room_id: 'r1', user_id: 'u2',
+    version: { epoch: CFG.sfu_id, seq: 2 },
+    permission: {
+      publish_audio: true, publish_video: false, publish_screen: false, floor_request: true,
+    },
+  })
+  await tick()
+
+  const p = room.participants.find((x) => x.userId === 'u2')!
+  assert.deepEqual(p.permission, {
+    publishAudio: true, publishVideo: false, publishScreen: false, floorRequest: true,
+  })
+  assert.deepEqual(heard, { userId: 'u2', mine: false }, '남의 것이라 mine 이 거짓이다')
+  const me = room.participants.find((x) => x.userId === 'u1')!
+  assert.equal(me.permission.publishVideo, true, '남의 비트가 내 것을 안 건드린다')
+})
+
+test('★본인 비트가 내려가면 그 방의 발행을 멈춘다 — 거절을 기다리지 않는다', async () => {
+  // ★★**거절을 보고 멈추는 것보다 통지를 보고 멈추는 것이 빠르다** — 그 사이 소리가
+  //   계속 난다. ★서버는 ★**적용하고 나서 알린다**(순서가 계약이다).
+  const s = stand()
+  await connected(s)
+  const room = await joined(s, { affiliation: { sub_rooms: ['r1'], pub_room: 'r1' } }, { mode: 'talk' })
+  const pub = s.client.media.enableMicrophone()
+  for (let i = 0; i < 6; i += 1) {
+    await tick()
+    s.reply(Op.PublishTracks, { tracks: [{ mid: '0', track_id: 'srv-mic' }] })
+  }
+  const mic = await pub
+  assert.equal(mic.state, 'sending')
+
+  let heard: { mine: boolean } | null = null
+  room.on('participantPermission', (e) => { heard = { mine: e.mine } })
+  s.notify(Op.ParticipantState, {
+    type: 'permission', room_id: 'r1', user_id: 'u1',
+    version: { epoch: CFG.sfu_id, seq: 2 },
+    permission: {
+      publish_audio: false, publish_video: true, publish_screen: true, floor_request: true,
+    },
+  })
+  await tick()
+  s.reply(Op.PublishTracks, { action: 'remove' })
+  await tick()
+
+  assert.deepEqual(heard, { mine: true }, '내 것이라야 멈추는 축이 선다')
+  // ★**등록을 거두는 것이지 장치를 놓는 것이 아니다** — 앱이 다시 켤 수 있어야 한다.
+  assert.notEqual(mic.state, 'sending', '★등록이 남아 있으면 소리가 계속 난다')
+  assert.equal(s.client.media.tracks.length, 1, '장치는 앱 것이라 그대로 둔다')
+})
+
+test('★전량이 온다 — 델타가 아니라 통째로 갈아 끼운다', async () => {
+  // ★넷뿐이라 전량이 더 싸고, ★**"안 온 비트는 그대로"** 라는 규칙을 안 만든다.
+  //   델타로 읽으면 놓친 통지 하나가 ★**영구히 어긋난 비트**를 남긴다.
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  const send = (seq: number, over: Record<string, boolean>) => s.notify(Op.ParticipantState, {
+    type: 'permission', room_id: 'r1', user_id: 'u1', version: { epoch: CFG.sfu_id, seq },
+    permission: {
+      publish_audio: true, publish_video: true, publish_screen: true, floor_request: true, ...over,
+    },
+  })
+  send(2, { publish_video: false })
+  await tick()
+  send(3, { publish_screen: false })
+  await tick()
+
+  const p = room.participants.find((x) => x.userId === 'u1')!
+  assert.equal(p.permission.publishVideo, true, '★둘째 통지가 전량이라 video 는 되살아난다')
+  assert.equal(p.permission.publishScreen, false)
+})
+
+test('★낡은 seq 는 안 먹는다 — 권한도 보관본 문을 지난다', async () => {
+  const s = stand()
+  await connected(s)
+  const room = await joined(s)
+  s.notify(Op.ParticipantState, {
+    type: 'permission', room_id: 'r1', user_id: 'u1',
+    version: { epoch: CFG.sfu_id, seq: 0 },
+    permission: {
+      publish_audio: false, publish_video: false, publish_screen: false, floor_request: false,
+    },
+  })
+  await tick()
+  const p = room.participants.find((x) => x.userId === 'u1')!
+  assert.equal(p.permission.publishAudio, true, '낡은 통지가 비트를 내리면 버튼이 영영 잠긴다')
 })

@@ -51,14 +51,27 @@ export class RemoteTrackHandle extends Bus<RemoteTrackEvents> implements RemoteT
   /** 연§11-7 5 — track_id 를 파싱하지 않는다. 슬롯은 user_id 부재로 안다. */
   get slot(): boolean { return this.entry.user_id === undefined }
   get active(): boolean { return this.entry.active !== false }
+  /**
+   * 연§4-1 — ★**그 트랙이 음소거인가.** `TRACK_STATE{muted}` 와 같은 값이다.
+   *
+   * ★**수신측이 스스로 알 수 없는 값이라 wire 에 있다** — `enabled=false` 면 검은 프레임이
+   * 계속 와서 ★**진짜로 까만 장면과 구별되지 않는다.** 반대로 *"프레임이 오는가"* 는
+   * 로컬 관측이라 wire 에 안 둔다(옛 `live` 필드를 그래서 뺐다).
+   * ★슬롯에는 없다 — 주인이 없어 *"누구의 음소거인가"* 가 정의되지 않는다.
+   */
+  get muted(): boolean { return this.entry.muted === true }
   get userId(): string { return this.entry.user_id as string }
   get scalability(): string { return this.entry.scalability as string }
 
   /** 보관본이 통째로 바뀌면 핸들은 그대로 두고 안쪽만 갈아 끼운다(같은 핸들 계약). */
   update(entry: TrackEntry): void {
     const wasActive = this.active
+    const wasMuted = this.muted
     this.entry = entry
     if (wasActive !== this.active) this.emit('active', this.active)
+    // ★`muted` 이벤트가 형에는 있었는데 ★**낸 적이 없었다**(14차로 `TRACK_STATE` 의
+    //   유일한 값이 되면서 드러났다) — 안 내면 앱이 음소거 표시를 영영 못 그린다.
+    if (wasMuted !== this.muted) this.emit('muted', this.muted)
   }
 
   attach(element: HTMLMediaElement): HTMLMediaElement {

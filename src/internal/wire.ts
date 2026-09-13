@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// 연§6 op 전량 16 과 연§3-2 우선순위 단. 숫자가 계약이라 이름은 여기 한 곳에서만 짓는다.
+// 연§6 op 전량 18 과 연§3-2 우선순위 단. 숫자가 계약이라 이름은 여기 한 곳에서만 짓는다.
 
 export const Op = {
   Bind: 0x0101,
@@ -18,6 +18,8 @@ export const Op = {
   TrackEvent: 0x0702,
   TrackState: 0x0703,
   RoomEvent: 0x0704,
+  /** 연§6-7 18차 — 참가자 **속성**이 바뀌었다(권한 비트). ★표시만 고친다. */
+  ParticipantState: 0x0705,
 } as const
 
 export type OpCode = (typeof Op)[keyof typeof Op]

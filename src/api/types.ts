@@ -206,6 +206,24 @@ export interface RoomPreview extends RoomSummary {
 
 export type RoomState = 'joining' | 'joined' | 'leaving' | 'closed'
 
+/**
+ * 연§4-4-1 — ★**그 사람이 이 방에서 할 수 있는 것.**
+ *
+ * ★★**비트는 방 것이다** — 같은 사람이 방마다 다른 값을 가진다. 토큰이 **입장 초기값**을
+ * 주고(연§5-2), 그 뒤로는 서버 밖의 결정자가 ★**방 하나를 지목해** 바꾼다.
+ * ★**갱신값은 그 방이 기억한다** — 나갔다 들어와도, 새 토큰으로 다시 붙어도 방의 값이 이긴다.
+ */
+export interface Permission {
+  /** 오디오 발행 전부 — 전이중 마이크 · 반이중 마이크(슬롯 발화도 등록이 관문이다). */
+  readonly publishAudio: boolean
+  /** 카메라 영상. */
+  readonly publishVideo: boolean
+  /** ★**화면공유 영상** — `source` 는 클라 신고값이고 서버는 그것을 믿는다(연§4-4-1). */
+  readonly publishScreen: boolean
+  /** 발언 요청. ★**긴급도도 같다** — 우회 경로가 없다(`DENY(102)`). */
+  readonly floorRequest: boolean
+}
+
 export interface Participant {
   readonly userId: string
   /** 라벨 (연§4-4) */
@@ -216,6 +234,12 @@ export interface Participant {
   readonly metadata?: unknown
   /** 그 사람의 입장 시점 select (연§4-4) — Room.mode 와 같은 축·같은 값. ★발언 자격이 아니다(방에 있으면 누구나 말한다): listen 으로 들어와 말하는 사람도 'listen' 그대로. "지금 누가 말하나"는 ptt.speaker. */
   readonly mode: 'listen' | 'talk'
+  /**
+   * 연§4-4 — ★**기본과 다를 때만 wire 에 온다.** 없으면 넷 다 `true` 다.
+   *
+   * ★**`undefined` 를 "모른다" 로 읽지 않는다** — 이 자리에서 부재는 ★**기본값**이라는 뜻이다.
+   */
+  readonly permission: Permission
 }
 
 /** 서버가 이 방에서 나를 뺐다 (연§6-7). moderate 는 소속 부분 갱신이라 'affiliation' 으로, media_lost 는 rebuilding 으로 따로 온다. 'system' = 플랫폼 정책(iOS systemPolicy, §12-2). */
@@ -225,6 +249,19 @@ export type RoomEvents = {
   participants: (list: ReadonlyArray<Participant>) => void
   participantJoined: (p: Participant) => void
   participantLeft: (p: { readonly userId: string }) => void
+  /**
+   * 연§6-7 `PARTICIPANT_STATE{permission}` — ★**그 사람이 할 수 있는 것이 바뀌었다.**
+   *
+   * ★★**방 전원에게 온다** — 본인만이 아니다. 남들 화면에서도 ★**말할 수 없는 사람이
+   * 말할 수 있는 것으로 남으면** 지령대가 그 사람을 계속 지목한다.
+   * ★**표시만 고치는 자리다** — 트랙 회수는 `TRACK_EVENT{remove}` 가 따로 온다.
+   */
+  participantPermission: (e: {
+    readonly userId: string
+    readonly permission: Permission
+    /** 내 것인가 — ★**버튼을 잠그는 것 말고 발행을 멈추는 것**이 여기 걸린다. */
+    readonly mine: boolean
+  }) => void
   /** ★장착 가능한 순간 — mediaStreamTrack 이 있다. 초기 트랙은 join() resolve 다음 tick(놓치지 않으려면 client.on('track') 또는 room.tracks). RESUME·재동기·mid 재발급 트랙은 그 처리 직후 (연§4-1). */
   track: (t: RemoteTrack) => void
   /** mid 고갈로 받을 수 없는 트랙 (연§4-1). 나중에 mid 가 재발급되면 'track' 으로 온다. */
@@ -515,6 +552,8 @@ export type RemoteTrackEvents = {
 
 export interface RemoteTrack extends RemoteTrackInfo, Emitter<RemoteTrackEvents> {
   readonly active: boolean
+  /** 연§4-1 — 그 트랙이 음소거인가. ★슬롯에는 없다(주인이 없다). */
+  readonly muted: boolean
   /** 'track' 이벤트 시점부터 있다 — null 이 아니다. */
   readonly mediaStreamTrack: MediaStreamTrack
   /** 값은 상한 (연§6-3). 범위는 scalability. */

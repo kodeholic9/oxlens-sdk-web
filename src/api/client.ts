@@ -29,7 +29,7 @@ import { PttHandle, roomOf } from './ptt.js'
 import { LayerTarget, RoomHandle } from './room.js'
 import {
   ClientEvents, ClientOptions, ConnectionQuality, Diagnostics, JoinOptions, Media, OxLensClient,
-  OxLensError, Participant, Room, RoomPreview, RoomSummary, SessionInfo,
+  OxLensError, Participant, Permission, Room, RoomPreview, RoomSummary, SessionInfo,
 } from './types.js'
 
 /** 연§8-4 타이머들이 도는 눈금. 재전송 간격(0.5초)보다 촘촘해야 한다. */
@@ -49,14 +49,37 @@ export interface Wiring {
 const PT_NAMES = ['user', 'recorder', 'bot'] as const
 
 /** 연§4-4 명단 원소 — 종류·신원은 서버가 토큰에서 채운 값이다(클라 선언이 아니다). */
+/**
+ * 연§4-4 — ★**기본과 다를 때만 온다.** 부재는 *"모른다"* 가 아니라 ★**넷 다 허용**이다.
+ *
+ * ★이 자리에서 `undefined` 를 「모른다」로 읽으면 ★**버튼이 이유 없이 잠긴다** —
+ * 대부분의 참가자가 기본값이라 이 갈래가 정상 경로다.
+ */
+function permissionOf(v: unknown): Permission {
+  const b = (v ?? {}) as Record<string, unknown>
+  const on = (k: string): boolean => b[k] !== false
+  return {
+    publishAudio: on('publish_audio'),
+    publishVideo: on('publish_video'),
+    publishScreen: on('publish_screen'),
+    floorRequest: on('floor_request'),
+  }
+}
+
 function participantOf(p: {
-  user_id: string; role?: number; select?: boolean; participant_type?: number; metadata?: unknown
+  user_id: string
+  role?: number
+  select?: boolean
+  participant_type?: number
+  metadata?: unknown
+  permission?: unknown
 }): Participant {
   return {
     userId: p.user_id,
     role: p.role ?? 255,
     mode: p.select === false ? 'listen' : 'talk',
     participantType: PT_NAMES[p.participant_type ?? 0] ?? 'user',
+    permission: permissionOf(p.permission),
     ...(p.metadata === undefined ? {} : { metadata: p.metadata }),
   }
 }
@@ -469,15 +492,36 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       return
     }
 
-    // 연§6-7 — TRACK_STATE 는 트랙 하나의 표시만 고친다. 배열이 아니다.
+    // ★연§6-7 18·20차 — `PARTICIPANT_STATE` 는 ★**참가자 속성**이다(트랙이 아니다).
+    //   ★★**방 전원에게 온다** — 본인만 고치면 남들 화면에 ★**말할 수 없는 사람이
+    //   말할 수 있는 것으로 남는다.** ★`version` 이 있다(명단이 바뀌었다).
+    if (note.op === Op.ParticipantState && version) {
+      if (note.body.type !== 'permission') return
+      const verdict = this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [] })
+      if (verdict === 'stale') return
+      if (verdict === 'resync') { this.queueResync(roomId); return }
+      const userId = String(note.body.user_id ?? '')
+      const permission = permissionOf(note.body.permission)
+      // ★**전량이 온다**(델타가 아니다) — 그래서 통째로 갈아 끼운다.
+      handle.setParticipants(handle.participants.map(
+        (x) => (x.userId === userId ? { ...x, permission } : x),
+      ))
+      const mine = userId === (this.sess.info?.user_id ?? null)
+      handle.emit('participantPermission', { userId, permission, mine })
+      // ★★**본인이면 내려간 비트의 자동 발행을 멈춘다** — 거절을 보고 멈추는 것보다
+      //   ★**통지를 보고 멈추는 것이 빠르다**(그 사이 소리가 계속 난다).
+      if (mine) void this.haltDenied(roomId, permission)
+      return
+    }
+
+    // 연§6-7 — TRACK_STATE 는 ★`muted` 하나다(14차 K1 — `duplex` 는 `TRACK_EVENT{add}` 가 나른다).
     if (note.op === Op.TrackState && version) {
       const server = this.roomsDomain.serverOf(roomId)
       const known = server?.store.tracks(roomId).find((t) => t.track_id === note.body.track_id)
       if (!known) return
       const patched: TrackEntry = {
         ...known,
-        ...(note.body.active === undefined ? {} : { active: note.body.active as boolean }),
-        ...(note.body.duplex === undefined ? {} : { duplex: note.body.duplex as 'full' | 'half' }),
+        ...(note.body.muted === undefined ? {} : { muted: note.body.muted as boolean }),
       }
       if (!['ok', 'noop'].includes(this.roomsDomain.applyEvent(roomId, version, { kind: 'add', tracks: [patched] }))) return
       handle.refresh(patched)
@@ -581,6 +625,31 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
         handle?.emit('rebuilt')
       } catch (e) {
         handle?.emit('error', toOxLensError(e))
+      }
+    }
+  }
+
+  /**
+   * ★**내려간 비트의 자동 발행을 멈춘다**(연§6-7 `PARTICIPANT_STATE` 본인 몫).
+   *
+   * ★★**거절을 보고 멈추는 것보다 통지를 보고 멈추는 것이 빠르다** — 그 사이 소리가
+   * 계속 난다. ★**서버는 적용하고 나서 알린다**(순서가 계약이다)라 이 시점엔 이미
+   * 서버 비트가 내려가 있다.
+   *
+   * ★**그 방의 등록만 멈춘다** — 비트는 방 것이라(§4-4-1) 다른 방은 그대로다.
+   */
+  private async haltDenied(roomId: string, p: Permission): Promise<void> {
+    const denied = (t: { kind: string; source: string }): boolean =>
+      (t.kind === 'audio' && !p.publishAudio)
+      || (t.kind === 'video' && t.source === 'screen' && !p.publishScreen)
+      || (t.kind === 'video' && t.source !== 'screen' && !p.publishVideo)
+    for (const t of this.registry.all) {
+      if (t.room !== roomId || !denied(t)) continue
+      // ★**놓는 것이 아니라 등록을 거둔다** — 장치는 앱이 다시 켤 수 있어야 한다.
+      try {
+        await this.registry.remove(t)
+      } catch {
+        // ★삼키지 않는다 — 못 거뒀으면 다음 발행이 `2006` 으로 막히고 그것이 사실이다.
       }
     }
   }
