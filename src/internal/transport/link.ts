@@ -286,7 +286,11 @@ export class PeerLink {
    * 되어** 브라우저가 우리 절을 제 것에 안 붙이고 `inactive` 로 답한다 — `mid` 가 null 로
    * 남아 등록에 실을 값을 못 읽는다(실측 20260913, 17차로 이 길이 처음 섰다).
    */
-  async sender(kind: 'audio' | 'video', prefer?: { codec: string; fmtp?: string }): Promise<TransceiverLike> {
+  async sender(
+    kind: 'audio' | 'video',
+    prefer?: { codec: string; fmtp?: string },
+    media?: MediaTrackLike,
+  ): Promise<TransceiverLike> {
     return this.serial.run(async () => {
       const pub = this.require(this.pub)
       // ★서버가 준 받기 트랜시버를 집으면 안 된다 — 잔존 자리도 `inactive` 라 방향으로는 못 가른다.
@@ -314,6 +318,14 @@ export class PeerLink {
       }
       made.direction = 'sendonly'
       if (prefer !== undefined) applyPreference(made, kind, prefer)
+      // ★★**트랙을 붙이고 한 번 더 협상한다** — 규격의 `replaceTrack` 걸음이다.
+      //   ★브라우저는 ★**트랙이 붙어야 그 보내기에 SSRC 를 준다.** 안 붙이고 지나가면
+      //   등록에 실을 `ssrc` 가 SDP 에 없어 `NO_SSRC` 다(실측 20260913).
+      //   ★씨앗을 되쓰는 길에는 이 걸음이 없다 — 그 절은 처음부터 SDP 에 서 있었다.
+      if (media !== undefined) {
+        await made.sender.replaceTrack(media)
+        await this.negotiate(pub, this.seats)
+      }
       return made
     })
   }
@@ -325,7 +337,16 @@ export class PeerLink {
    * ★비게 된 절은 `a=inactive` 로 남지만 `mid` 는 쓰고 있는 것이라 비어 있지 않다.
    */
   private freeMid(pub: PeerConnectionLike): string {
-    const used = new Set(pub.getTransceivers().map((t) => t.mid).filter((m): m is string => m !== null))
+    // ★★**트랜시버만 세면 안 된다 — 데이터 채널은 트랜시버가 아니다.**
+    //   ★DC 의 m-line 도 `mid` 를 쓰고 있는데 `getTransceivers()` 에 안 나온다.
+    //   그 번호를 비었다고 보고 새 절을 얹으면 ★**한 자리를 둘이 주장해** 브라우저가
+    //   *"order of m-lines … doesn't match"* 로 거부한다(실측 20260913 — `add=2` 가 DC 였다).
+    //   ★**SDP 가 권위다** — 거기 있는 `a=mid:` 전부가 쓰고 있는 번호다.
+    const used = new Set<string>()
+    for (const t of pub.getTransceivers()) if (t.mid !== null) used.add(t.mid)
+    for (const sdp of [pub.localDescription?.sdp, pub.remoteDescription?.sdp, this.confirmed]) {
+      for (const m of sdp?.match(/^a=mid:(.+)$/gm) ?? []) used.add(m.slice(6).trim())
+    }
     for (let n = 0; n < 32; n += 1) {
       if (!used.has(String(n))) return String(n)
     }

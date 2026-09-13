@@ -6,7 +6,7 @@ import { PeerFactory } from '../platform/webrtc.js'
 import { RequestFailed, Signaling } from '../internal/signaling.js'
 import { Seat } from '../internal/sdp/build.js'
 import { ServerConfig } from '../internal/sdp/config.js'
-import { OpusFmtpPrefs, PeerLink } from '../internal/transport/link.js'
+import { OpusFmtpPrefs, PeerLink, TransportReport } from '../internal/transport/link.js'
 import { Op } from '../internal/wire.js'
 import { request } from './request.js'
 import { TrackEntry, TrackStore, Version } from './store.js'
@@ -68,6 +68,13 @@ export class Rooms {
    * 다시 만들면 그 offer 의 PT·SSRC 와 어긋난다.
    */
   private seeded: PeerLink | null = null
+  /**
+   * ★**브라우저의 번호표** — 한 번 재면 그 뒤 입장은 그대로 쓴다(연§6-2).
+   *
+   * ★번호는 ★**브라우저가 정하는 것**이라 서버가 바뀌어도 같다. 입장마다 다시 재면
+   * 그때마다 PC 를 새로 만들어 버리게 된다.
+   */
+  private table: TransportReport | null = null
   private readonly state = new Map<string, RoomState>()
   private readonly homeOf = new Map<string, string>()
   private readonly clock: Clock
@@ -124,11 +131,18 @@ export class Rooms {
     //   알려야 서버가 받기 PT 를 겹치지 않게 배정한다(§4-2-1 ④).
     //   ★옛 `READY{transport}` 갈래는 확정본 **뒤에** 신고해 첫 배정을 되돌리는 재협상이
     //   필요했다 — 14차가 없앴다(그 갈래를 보내면 서버가 `1002` 로 거절한다).
-    const seed = this.opts.pcMode === '1pc' ? await this.seedLink() : null
-    if (seed) {
-      const table = await seed.seedOffer()
-      body.extmap = table.extmap
-      body.codecs = table.codecs
+    // ★★**번호표는 브라우저의 것이지 서버의 것이 아니다** — 한 번 재면 그 뒤 입장은
+    //   그 값을 그대로 쓴다. ★안 그러면 ★**입장마다 PC 를 하나씩 새로 만들어** 버리고
+    //   (§9-10-3 2 는 *"연결이 없으면 만든다"* 이다), 그 버려진 연결이 진단·계측의
+    //   *"마지막 PC"* 를 가로챈다(실측 20260913 — 3층 `mlines` 가 빈 배열을 봤다).
+    let seed: PeerLink | null = null
+    if (this.opts.pcMode === '1pc') {
+      if (this.table === null) {
+        seed = await this.seedLink()
+        this.table = await seed.seedOffer()
+      }
+      body.extmap = this.table.extmap
+      body.codecs = this.table.codecs
     }
 
     let res: JoinResponse

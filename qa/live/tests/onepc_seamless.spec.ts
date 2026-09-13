@@ -144,6 +144,7 @@ test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다'
 
   const [q0, q1] = await window_(async () => undefined)
   const floor = grew(q0!, q1!, 'concealed')
+  const measured: [string, number, number][] = []
 
   // ★화면공유는 연§9-10-3 2② 가 미리 세운 **둘째 video 자리**를 되쓴다 — m-line 이 늘지 않는다.
   // 늘면 규칙 2(무중단 불변)가 그 창에서 깨지고, 여기 은닉 폭으로 그것이 보인다.
@@ -153,10 +154,16 @@ test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다'
     ['받기 증설', () => a.call('join', ROOM4B, 'listen')],
   ] as const) {
     const [s0, s1] = await window_(fire)
-    const silent = grew(s0!, s1!, 'silentConcealed')
-    const hidden = grew(s0!, s1!, 'concealed')
-    expect(silent, `★${what} 창에서 무음으로 메운 자리 — 사람이 듣는 끊김이다(${msOf(silent)}ms)`).toBe(0)
-    expect(hidden, `${what} 창 은닉 ${msOf(hidden)}ms · 기준선 ${msOf(floor)}ms — 10ms 를 넘으면 재협상이 소리를 끊은 것이다`)
+    measured.push([what, grew(s0!, s1!, 'silentConcealed'), grew(s0!, s1!, 'concealed')])
+  }
+
+  // ★★**세 창을 다 재고 나서 판정한다** — 첫 창에서 멈추면 ★**원인을 가를 자료가 안 모인다.**
+  //   ★`받기 증설` 은 재협상을 하되 ★**로컬 인코더를 안 켠다** — 그래서 셋을 나란히 보면
+  //   *"재협상이 끊었나"* 와 *"인코더가 끊었나"* 가 갈린다(가이드 §6-2 — 지표 ≠ 증상).
+  const table = measured.map(([w, si, hi]) => `${w} 무음 ${msOf(si)}ms · 은닉 ${msOf(hi)}ms`).join(' | ')
+  for (const [what, silent, hidden] of measured) {
+    expect(silent, `★${what} 창에서 무음으로 메운 자리 — 사람이 듣는 끊김이다 [${table}]`).toBe(0)
+    expect(hidden, `${what} 창 은닉 ${msOf(hidden)}ms · 기준선 ${msOf(floor)}ms [${table}]`)
       .toBeLessThanOrEqual(480)
   }
 

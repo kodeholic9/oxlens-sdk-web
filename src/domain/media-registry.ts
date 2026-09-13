@@ -148,7 +148,7 @@ export class MediaRegistry {
     // 연§6-3 — 무전 video 는 그 방 슬롯 코덱과 같아야 한다. ★보내기 전에 맞춘다.
     // ★★**`1pc` 은 `sender` 가 협상까지 한다**(연§9-10-1) — 새 절은 ★**클라가 붙이고
     //   브라우저가 트랜시버를 만든다.** 그래서 자리를 얻는 것과 협상이 한 걸음이다.
-    const transceiver = await to.link.sender(track.kind, prefer)
+    const transceiver = await to.link.sender(track.kind, prefer, track.media)
     track.transceiver = transceiver
     if (!to.link.onePc) await to.link.renegotiatePublish()
     track.state = 'staged'
