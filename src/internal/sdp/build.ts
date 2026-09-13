@@ -1,7 +1,7 @@
 // author: kodeholic (powered by Claude)
 // 연§9 — 서버 쪽 SDP 를 클라가 조립해 자기 브라우저에 먹인다.
 // 보내기는 answer, 받기는 offer 다(연§9-0). 방향을 뒤집으면 받기 m-line 이 0개가 된다.
-import { ServerConfig, URI_MID, clockRate, recvExtmap, recvFeedback, sendFeedback, supportsSend } from './config.js'
+import { ServerConfig, clockRate, recvExtmap, recvFeedback, sendFeedback, supportsSend } from './config.js'
 import { MSection, ParsedSdp, clockOf, codecOf, parse, rtxOf } from './parse.js'
 
 /** 연§9-3 — 후보가 하나뿐이라 우선순위는 호스트 고정값이다. */
@@ -135,9 +135,9 @@ export function publishAnswer(offer: string | ParsedSdp, cfg: ServerConfig, opts
   return `${lines.join('\r\n')}\r\n`
 }
 
-/** 연§9-5 — 받기 m-line 에서 `sdes:mid` 는 뺀다. BUNDLE 구분이 SSRC 로 떨어져야 한다. */
+/** 연§4-2-1 ③ — 받기 m-line 도 `sdes:mid` 를 선언한다(12차에 뒤집혔다 — `config.ts` 참조). */
 function extmapOfSection(m: MSection): readonly { id: number; uri: string }[] {
-  return [...m.extmap].filter(([, uri]) => uri !== URI_MID).map(([id, uri]) => ({ id, uri }))
+  return [...m.extmap].map(([id, uri]) => ({ id, uri }))
 }
 
 function answerSection(m: MSection, cfg: ServerConfig, opts: PublishOptions): string[] {
@@ -292,21 +292,47 @@ export function unifiedOffer(seats: readonly Seat[], cfg: ServerConfig, opts: Un
   // 한 mid 가 BUNDLE 에 두 번 들어가고 m-line 이 겹친다.
   const seatMids = new Set(ordered.map((s) => s.mid))
   const send = mine.sections.filter((m) => !seatMids.has(m.mid))
-  const bundle = [...send.map((m) => m.mid), ...ordered.map((s) => s.mid)]
+
+  // ★★**자리 순서는 역사가 정한다**(RFC 3264 §8 — m-line 은 자리를 지킨다).
+  //
+  //   ★**mid 수치로 줄을 세우면 안 된다.** 새 보내기 절(화면공유 `mid:3`)이 받기 절
+  //   (`mid:32`) **앞으로** 끼어들어 ★**이전 협상과 자리가 어긋나고**, 브라우저가
+  //   *"order of m-lines … doesn't match"* 로 통째로 거부한다(실측 20260913).
+  //   ★17차가 자리 확보 트랜시버를 철거하면서 **새 절이 실제로 생기게** 되어 드러난 자리다.
+  //   ★**새 절은 맨 뒤에 붙인다** — 그 안에서만 mid 수치 오름차순이다.
+  //   ★**자리 권위는 브라우저 offer(`mine`) 다** — 그 PC 가 이전 협상에서 세운 절을
+  //   전부, ★**그 순서 그대로** 들고 있다(받기 절도 그 PC 의 트랜시버다). 확정본은 첫
+  //   협상 것이라 뒤에 붙은 절을 모른다 — 그것으로 줄을 세우면 자리가 어긋난다.
+  const seatBy = new Map(ordered.map((s) => [s.mid, s]))
+  const was = mine.sections.map((m) => m.mid)
+  const seen = new Set(was)
+  // ★아직 그 PC 에 절이 없는 받기(갓 배정된 mid)만 뒤에 붙는다.
+  const fresh = ordered.map((s) => s.mid).filter((m) => !seen.has(m))
+  const bundle = [...was, ...fresh]
+  const sendBy = new Map(send.map((m) => [m.mid, m]))
+
   const lines = header(bundle, sid)
-  for (const m of send) lines.push(...sendSection(m, byMid.get(m.mid), cfg))
-  for (const s of ordered) lines.push(...offerSection(s, cfg, extmapOf(confirmed, s.kind), false))
+  for (const mid of bundle) {
+    const seat = seatBy.get(mid)
+    if (seat) {
+      lines.push(...offerSection(seat, cfg, extmapOf(confirmed, seat.kind), false))
+      continue
+    }
+    const m = sendBy.get(mid)
+    if (m) lines.push(...sendSection(m, byMid.get(mid), cfg))
+  }
   return `${lines.join('\r\n')}\r\n`
 }
 
-/** 연§9-10-1 — 받기 확장 번호도 그 연결의 확정본을 쓴다. 한 BUNDLE 에 URI 마다 번호가 하나다. */
+/** 연§9-10-1 — 받기 확장 번호도 그 연결의 확정본을 쓴다. 한 BUNDLE 에 URI 마다 번호가 하나다.
+ *  ★`sdes:mid` 를 포함한다(§4-2-1 ③) — 12차 전에는 뺐다. */
 function extmapOf(confirmed: ParsedSdp, kind: 'audio' | 'video'): readonly { id: number; uri: string }[] {
   // ★보내기 절에서 읽는다 — 확정본에는 받기 절도 함께 있고(연§9-10 규칙 1), 번호는 한 BUNDLE 에
   // URI 마다 하나라 값은 같지만 출처를 정해 두지 않으면 절 순서에 따라 답이 흔들린다.
   const m = confirmed.sections.find((s) => s.kind === kind && s.direction === 'recvonly')
     ?? confirmed.sections.find((s) => s.kind === kind)
   if (!m) return []
-  return [...m.extmap].filter(([, uri]) => uri !== URI_MID).map(([id, uri]) => ({ id, uri }))
+  return [...m.extmap].map(([id, uri]) => ({ id, uri }))
 }
 
 function sendSection(m: MSection, confirmed: MSection | undefined, cfg: ServerConfig): string[] {
@@ -320,25 +346,29 @@ function sendSection(m: MSection, confirmed: MSection | undefined, cfg: ServerCo
       ...tail(cfg),
     ]
   }
-  if (!confirmed) {
-    throw new SdpError('negotiation', `mid=${m.mid} 의 확정 answer 가 없다 — 코덱 줄의 출처가 없다`)
-  }
+  // ★★**새 보내기 절에는 확정본이 없다**(연§9-10-1 · 17차) — 자리 확보 트랜시버를 철거한
+  //   뒤로 화면공유 같은 둘째 video 는 ★**m-line 을 새로 붙인다.** 그 절의 코덱 줄 출처는
+  //   ★**내 offer** 다(아직 서버와 합의한 적이 없으므로 확정본이 있을 수가 없다).
+  //   ★규칙 2(무중단 불변)는 **새 절을 더하는 것을 막지 않는다** — 무관한 절이 안 바뀌면 된다.
+  //   ★**있는 절은 반드시 확정본에서 짓는다** — 내 offer 에서 가져오면 걸러냈던 코덱이
+  //   되살아나 ★**보고한 것과 다른 코덱으로 보낸다**(§9-10-3 증상).
+  const from = confirmed ?? m
 
   const attrs: string[] = []
   const pts: number[] = []
-  for (const pt of confirmed.pts) {
-    const rtpmap = confirmed.rtpmap.get(pt)
+  for (const pt of from.pts) {
+    const rtpmap = from.rtpmap.get(pt)
     if (rtpmap === undefined) continue
     pts.push(pt)
     attrs.push(`a=rtpmap:${pt} ${rtpmap}`)
-    const params = confirmed.fmtp.get(pt)
+    const params = from.fmtp.get(pt)
     if (params !== undefined) attrs.push(`a=fmtp:${pt} ${params}`)
-    if (!confirmed.rtx.has(pt)) {
+    if (!from.rtx.has(pt)) {
       for (const fb of sendFeedback(cfg, m.kind, codecOf(rtpmap))) attrs.push(`a=rtcp-fb:${pt} ${fb}`)
     }
   }
   if (pts.length === 0) {
-    throw new SdpError('negotiation', `mid=${m.mid} 확정 answer 에 코덱이 없다`)
+    throw new SdpError('negotiation', `mid=${m.mid} 에 코덱이 없다 — 지어내지 않는다`)
   }
   // 연§9-10-1 — 확장 번호만 내 offer 것이다. 새로 매기면 와이어 번호가 조용히 바뀐다.
   const declared = new Set(cfg.extmap.map((e) => e.uri))

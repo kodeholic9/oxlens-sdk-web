@@ -7,7 +7,7 @@ import {
   TransceiverLike,
 } from '../../platform/webrtc.js'
 import { publishAnswer, Seat, sessionIdOf, subscribeOffer, unifiedOffer } from '../sdp/build.js'
-import { ServerConfig, URI_MID } from '../sdp/config.js'
+import { ServerConfig } from '../sdp/config.js'
 import { parse } from '../sdp/parse.js'
 import { Serial } from './serial.js'
 
@@ -24,6 +24,8 @@ export interface LinkOptions {
   readonly disconnectGraceMs?: number
   /** 연§9-4 예외 — opus `fmtp` 의 받는 쪽 선호. 정책서 §4-1 `opusFmtpDefault`(앱이 주는 형 그대로). */
   readonly opusFmtpDefault?: OpusFmtpPrefs
+  /** ★**클라가 정한 모드**(연§6-2) — `cfg` 보다 먼저 필요하다(§9-10-3 2③). */
+  readonly pcMode?: '1pc' | '2pc'
 }
 
 /** 정책서 §4-1 `opusFmtpDefault` — 앱이 주는 형. wire 이름으로 옮기는 것은 `opusPrefsOf` 하나다. */
@@ -51,6 +53,40 @@ export function opusPrefsOf(o: OpusFmtpPrefs): Record<string, string | number | 
 }
 
 /** 연§6-3 READY{transport} 의 재료 — 1pc 확정본에서 뽑는다. */
+/**
+ * 한 SDP 에서 번호표를 읽는다 — ★**PT 표와 확장 ID 표**.
+ *
+ * ★★**`sdes:mid` 도 포함한다**(연§9-4) — 서버가 ①수신에서 SSRC 학습 재료로 읽고
+ * ②송신에서 ★**그 번호로 받기 mid 를 다시 쓴다**(§4-2-1 ③).
+ * ★빼면 서버가 제 선언값(1)으로 쓰는데 SDP 에는 브라우저 번호가 서 있어 ★**확장이 안 읽히고**,
+ * 같은 PT 의 받기 절 둘에서 demuxer 기준이 겹친다(3층 `ONEPC-03` 실측 20260913).
+ * ★★**읽는 대상이 바뀌었다**(14차) — 종전엔 **확정본**에서 읽어 `READY{transport}` 로
+ * 신고했는데, 그러면 첫 배정을 되돌리는 재협상이 필요했다. 지금은 ★**브라우저 offer**
+ * 에서 읽어 `ROOM_JOIN` 요청에 싣는다 — 서버가 처음부터 겹치지 않게 배정한다.
+ */
+export function tableOf(sdp: string): TransportReport {
+  const parsed = parse(sdp)
+  const extmap = new Map<string, number>()
+  const codecs: { kind: 'audio' | 'video'; pt: number; name: string; fmtp?: string; rtx_pt?: number }[] = []
+  for (const m of parsed.sections) {
+    if (m.kind === 'application') continue
+    for (const [id, uri] of m.extmap) extmap.set(uri, id)
+    for (const pt of m.pts) {
+      const rtpmap = m.rtpmap.get(pt)
+      if (rtpmap === undefined || m.rtx.has(pt)) continue
+      const fmtp = m.fmtp.get(pt)
+      let rtxPt: number | undefined
+      for (const [candidate, apt] of m.rtx) if (apt === pt) rtxPt = candidate
+      codecs.push({
+        kind: m.kind, pt, name: rtpmap.split('/')[0]!,
+        ...(fmtp === undefined ? {} : { fmtp }),
+        ...(rtxPt === undefined ? {} : { rtx_pt: rtxPt }),
+      })
+    }
+  }
+  return { extmap: [...extmap].map(([uri, id]) => ({ id, uri })), codecs }
+}
+
 export interface TransportReport {
   readonly extmap: readonly { id: number; uri: string }[]
   readonly codecs: readonly {
@@ -78,13 +114,36 @@ export class PeerLink {
   private recvVersion = 1
   private droppedAt = new Map<PeerConnectionLike, number>()
 
-  constructor(readonly cfg: ServerConfig, private readonly opts: LinkOptions) {
+  /**
+   * ★**`cfg` 가 나중에 올 수 있다**(연§9-10-3 2) — `1pc` 첫 협상은 ★**서버 재료 없이**
+   * 연결과 offer 를 먼저 만들고, `ROOM_JOIN` 응답이 와야 `server_config` 를 안다.
+   */
+  bind(cfg: ServerConfig): void {
+    this.late = cfg
+  }
+
+  /** 아직 안 붙었으면 실패다 — ★**없는 재료로 조립하지 않는다.** */
+  get cfg(): ServerConfig {
+    const c = this.late
+    if (c === null) throw new LinkError('no_confirmed', 'server_config 가 아직 없다')
+    return c
+  }
+
+  constructor(cfg: ServerConfig | null, private readonly opts: LinkOptions) {
+    this.late = cfg
+    this.mode = opts.pcMode ?? cfg?.pc_mode ?? '2pc' 
     this.clock = opts.clock ?? systemClock
     this.grace = opts.disconnectGraceMs ?? DISCONNECT_GRACE_MS
   }
 
   get sfuId(): string { return this.cfg.sfu_id }
-  get onePc(): boolean { return this.cfg.pc_mode === '1pc' }
+  /**
+   * ★**모드는 클라가 정한다**(연§6-2 — 서버가 조용히 다른 모드로 돌리는 경로는 없다).
+   *
+   * ★종전엔 `cfg.pc_mode` 에서 읽었는데, `1pc` 첫 협상은 ★**`cfg` 가 오기 전에**
+   * 연결을 세워야 해서(§9-10-3 2③) 그 자리에서 읽을 것이 없다. 부르는 쪽이 준다.
+   */
+  get onePc(): boolean { return this.mode === '1pc' }
 
   /**
    * 연§9-10 규칙 1 — `1pc` 은 발행 재협상도 합성 서버 offer 라 받기 자리를 같이 다시 조립한다.
@@ -94,6 +153,10 @@ export class PeerLink {
 
   /** 연§9-10-3 2단계가 세운 예비 자리. 되쓸 수 있는 것은 ★이것뿐이다. */
   private spares: TransceiverLike[] = []
+  /** 씨앗 offer — ★**`ROOM_JOIN` 응답을 기다리는 동안** 들고 있는다(§9-10-3 2③→2④). */
+  private pendingOffer: string | null = null
+  private late: ServerConfig | null = null
+  private readonly mode: '1pc' | '2pc' 
   get channel(): DataChannelLike | null { return this.dc }
   get isOpen(): boolean { return this.pub !== null }
   get queued(): number { return this.serial.pending }
@@ -105,28 +168,72 @@ export class PeerLink {
   open(): Promise<void> {
     return this.serial.run(async () => {
       if (this.pub) return
-      const pub = this.opts.peers.create()
-      this.pub = pub
-      this.watch(pub)
-      this.dc = pub.createDataChannel(DC_LABEL, { ordered: false, maxRetransmits: 0 })
-      // 연§9-10-3 2② — 확정 answer 를 만들어 둔다. 없으면 첫 마이크에서 코덱 줄의 출처가 없다.
-      if (this.onePc) {
-        // 연§9-10-3 2② — PT·확장 번호의 씨앗. ★우리가 만든 셋만 나중에 되쓴다.
-        // ★video 가 둘인 것은 카메라 + 화면공유다. 규칙 1(언제나 서버 offer) 아래에선
-        // 새 보내기 m-line 의 mid 를 지을 주체가 클라에 없고, 규칙 2(무중단 불변)는 m-line 이
-        // 느는 순간을 가장 싫어한다 — inactive m-line 하나가 그 규칙을 새로 세우는 것보다 싸다.
-        this.spares = [
-          pub.addTransceiver('audio', { direction: 'inactive' }),
-          pub.addTransceiver('video', { direction: 'inactive' }),
-          pub.addTransceiver('video', { direction: 'inactive' }),
-        ]
-      }
+      const pub = this.seed()
       await this.clientOffer(pub)
       if (!this.onePc) {
         const sub = this.opts.peers.create()
         this.sub = sub
         this.watch(sub)
       }
+    })
+  }
+
+  /**
+   * 연§9-10-3 2①② — 연결과 씨앗 트랜시버. ★**여기까지는 서버 재료가 필요 없다.**
+   *
+   * ★★**자리 확보 트랜시버를 두지 않는다**(17차, M5 실측) — 첫 협상은 ★**audio 1 + video 1
+   * + DC** 다. 트랙이 늘면 합성 offer 로 보내기 m-line 을 붙인다(§9-10-1). 규칙 2(무중단
+   * 불변)는 **새 절을 더하는 것을 막지 않는다** — 무관한 절이 한 글자도 안 바뀌면 된다.
+   * ★종전엔 둘째 video 를 미리 세워 두고 되썼는데, 그 한 줄이 ★**쓰지도 않는 m-line 을
+   * 모두에게 영구히 지운다**(BUNDLE 천장은 동시 개수가 아니라 누적이다, §4-1).
+   */
+  private seed(): PeerConnectionLike {
+    const pub = this.opts.peers.create()
+    this.pub = pub
+    this.watch(pub)
+    this.dc = pub.createDataChannel(DC_LABEL, { ordered: false, maxRetransmits: 0 })
+    if (this.onePc) {
+      // ★**번호표(PT·확장 ID)를 얻는 데 필요한 최소**다. 안 세우면 내 번호가 없는 채로
+      //   서버가 받기 번호를 배정하고, 뒤늦게 마이크를 켤 때 ★**한 BUNDLE 안에서 부딪힌다.**
+      this.spares = [
+        pub.addTransceiver('audio', { direction: 'inactive' }),
+        pub.addTransceiver('video', { direction: 'inactive' }),
+      ]
+    }
+    return pub
+  }
+
+  /**
+   * 연§9-10-3 2③ — ★**`ROOM_JOIN` 보내기 전**에 여기까지 온다.
+   *
+   * 브라우저 offer 를 만들어 `setLocalDescription` 까지 하고, ★**그 offer 의 번호표**를 낸다.
+   * ★★**왜 먼저 신고하나** — 한 BUNDLE 안에서 PT·확장 ID 는 코덱·URI 마다 하나여야 한다.
+   * 내 번호를 먼저 알려야 서버가 받기 PT 를 겹치지 않게 배정한다(§4-2-1 ④).
+   * ★옛 `READY{transport}` 갈래는 확정본 **뒤에** 신고해 첫 배정을 되돌리는 재협상이
+   * 필요했다 — 14차가 없앴다.
+   */
+  seedOffer(): Promise<TransportReport> {
+    return this.serial.run(async () => {
+      const pub = this.pub ?? this.seed()
+      const offer = await pub.createOffer()
+      await pub.setLocalDescription(offer)
+      const sdp = pub.localDescription?.sdp ?? offer.sdp ?? ''
+      this.pendingOffer = sdp
+      return tableOf(sdp)
+    })
+  }
+
+  /**
+   * 연§9-10-3 2④ — 응답의 `server_config` 로 answer 를 조립한다.
+   * ★**이 answer 가 첫 협상 확정본**이고, 뒤의 모든 보내기 절이 여기서 나온다.
+   */
+  seedAnswer(): Promise<void> {
+    return this.serial.run(async () => {
+      const pub = this.require(this.pub)
+      const local = this.pendingOffer
+      if (local === null) throw new LinkError('no_confirmed', '씨앗 offer 가 없다')
+      this.pendingOffer = null
+      await this.applyAnswer(pub, local)
     })
   }
 
@@ -138,6 +245,11 @@ export class PeerLink {
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
     const local = pc.localDescription?.sdp ?? offer.sdp ?? ''
+    await this.applyAnswer(pc, local)
+  }
+
+  /** 내 offer 에 서버 answer 를 만들어 물린다 — ★확정본이 여기서 굳는다. */
+  private async applyAnswer(pc: PeerConnectionLike, local: string): Promise<void> {
     const answer = publishAnswer(local, this.cfg, {
       seats: [],
       session: { id: sessionIdOf(this.cfg.sfu_id), version: this.sendVersion },
@@ -253,35 +365,6 @@ export class PeerLink {
     if (pc.signalingState !== 'stable') await pc.setLocalDescription({ type: 'rollback' })
   }
 
-  /** 연§6-3 — 서버가 egress 확장 번호·PT 를 이 표로 재기록한다.
-   *  ★신고하는 것은 **받기 절이 쓰는 표**다(연§9-10-1) — `sdes:mid` 는 빠진다.
-   *  이것을 넣어 신고하면 서버가 egress 에 ★발행자의 mid 값을 구독자가 읽는 번호로 옮겨 적고,
-   *  받는 쪽은 그 이름을 자기 보내기 m-line 으로 읽어 그 SSRC 의 주인을 옮긴다(연§9-5 · §9-10). */
-  transportReport(): TransportReport {
-    if (this.confirmed === null) {
-      throw new LinkError('no_confirmed', '신고할 확정본이 없다')
-    }
-    const parsed = parse(this.confirmed)
-    const extmap = new Map<string, number>()
-    const codecs: { kind: 'audio' | 'video'; pt: number; name: string; fmtp?: string; rtx_pt?: number }[] = []
-    for (const m of parsed.sections) {
-      if (m.kind === 'application') continue
-      for (const [id, uri] of m.extmap) if (uri !== URI_MID) extmap.set(uri, id)
-      for (const pt of m.pts) {
-        const rtpmap = m.rtpmap.get(pt)
-        if (rtpmap === undefined || m.rtx.has(pt)) continue
-        const fmtp = m.fmtp.get(pt)
-        let rtxPt: number | undefined
-        for (const [candidate, apt] of m.rtx) if (apt === pt) rtxPt = candidate
-        codecs.push({
-          kind: m.kind, pt, name: rtpmap.split('/')[0]!,
-          ...(fmtp === undefined ? {} : { fmtp }),
-          ...(rtxPt === undefined ? {} : { rtx_pt: rtxPt }),
-        })
-      }
-    }
-    return { extmap: [...extmap].map(([uri, id]) => ({ id, uri })), codecs }
-  }
 
   /**
    * SDK§10-2 — 모든 PC 가 connected·completed 여야 살아 있다.

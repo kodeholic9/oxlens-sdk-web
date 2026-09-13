@@ -282,7 +282,9 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     const server = this.roomsDomain.serverOf(roomId)
     if (!server) return null
     for (const t of server.store.tracks(roomId)) {
-      if (t.kind !== 'video' || t.duplex !== 'half' || t.codec === undefined) continue
+      // ★★**구독자는 발행자의 `duplex` 를 모른다**(연§4-1-1 규칙 ①) — 14차가 그 필드를
+      //   구독자 스냅샷에서 뺐다. 무전 코덱을 든 것은 ★**`slot` video 스트림**이다.
+      if (t.kind !== 'video' || t.type !== 'slot' || t.codec === undefined) continue
       return { codec: t.codec, ...(t.fmtp === undefined ? {} : { fmtp: t.fmtp }) }
     }
     return null
@@ -435,6 +437,19 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
       return
     }
 
+    // ★★**연§4-6-3 — `version` 이 없는 `TRACK_EVENT` 는 배정만 바뀐 프레임**이다.
+    //   나에게만 오고 `seq` 가 못 세는 층이라 번호가 없다. ★종전엔 `&& version` 에
+    //   걸려 ★**통째로 버려졌다** — 서버가 옮겨 준 내 m-line 자리를 영영 모른 채
+    //   옛 자리로 조립했다(15차 이후 형상, 20260913 규명).
+    if (note.op === Op.TrackEvent && !version) {
+      const tracks = (note.body.tracks ?? []) as TrackEntry[]
+      const server = this.roomsDomain.serverOf(roomId)
+      if (server && this.roomsDomain.applyAssign(roomId, tracks) === 'ok') {
+        void this.renegotiate(server, roomId)
+      }
+      return
+    }
+
     // 연§6-7 — TRACK_EVENT 의 갈래는 action 이다(type 이 아니다).
     if (note.op === Op.TrackEvent && version) {
       const action = note.body.action as string
@@ -576,7 +591,9 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     const handle = this.handles.get(roomId)
     if (!server || !handle) return
     for (const entry of server.store.tracks(roomId)) {
-      const media = server.link.mediaFor(entry.mid!)
+      // ★자리가 없으면 받을 m-line 이 없다 — 미디어를 찾을 근거 자체가 없다(연§4-1).
+      if (!entry.assign) continue
+      const media = server.link.mediaFor(entry.assign.mid)
       if (!media) continue
       const { track, fresh } = handle.adopt(entry, media as unknown as MediaStreamTrack, server.link)
       // SDK§6-2 — ★수신 오디오는 SDK 가 낸다. 앱이 `<audio>` 를 열 개 열지 않게 하는 결정이라

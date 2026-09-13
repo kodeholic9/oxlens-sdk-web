@@ -53,36 +53,39 @@ test('2pc 는 연결 둘, 1pc 는 하나다', async () => {
   assert.equal(one.peers.made.length, 1, '전송로가 하나여야 keepalive 가 한 벌로 준다')
 })
 
-test('1pc 는 세우면서 audio 1 + video 2 를 inactive 로 함께 세운다', async () => {
+test('★1pc 첫 협상은 audio 1 + video 1 + DC 다 — 자리 확보는 없다(17차)', async () => {
+  // ★★**둘째 video(자리 확보 트랜시버)를 철거했다**(17차, M5 실측) — 트랙이 늘면
+  //   합성 offer 로 보내기 m-line 을 붙인다(연§9-10-1). 규칙 2(무중단 불변)는
+  //   ★**새 절을 더하는 것을 막지 않는다** — 무관한 절이 한 글자도 안 바뀌면 된다.
+  // ★미리 세워 두면 ★**쓰지도 않는 m-line 을 모두에게 영구히 지운다**(BUNDLE 천장은
+  //   동시 개수가 아니라 그 연결이 지금까지 만든 누적이다, 연§4-1).
   const { peers, link } = stand('1pc')
   await link.open()
   assert.deepEqual(
     peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')),
-    ['addTransceiver:audio:inactive', 'addTransceiver:video:inactive', 'addTransceiver:video:inactive'],
-    '안 세우면 첫 마이크에서 가져올 코덱 확정본이 없다',
+    ['addTransceiver:audio:inactive', 'addTransceiver:video:inactive'],
+    '번호표(PT·확장 ID)를 얻는 데 필요한 최소다 — 안 세우면 내 번호 없이 서버가 배정한다',
   )
 })
 
-// ★연§9-10-3 2② — video 가 둘인 것은 카메라 + 화면공유다. 규칙 1 아래에선 새 보내기 m-line 의
-// mid 를 지을 주체가 클라에 없고, 규칙 2(무중단 불변)는 m-line 이 느는 순간을 가장 싫어한다.
-test('★1pc 에서 카메라와 화면공유가 m-line 을 안 늘린다', async () => {
+test('★씨앗을 다 쓰면 새 m-line 을 붙인다 — 화면공유가 그 자리다(17차)', async () => {
+  // ★종전 시험은 *"카메라와 화면공유가 m-line 을 안 늘린다"* 였다 — 둘째 video 를 미리
+  //   세워 뒀기 때문이다. 17차가 그것을 철거했으므로 ★**화면공유는 절을 늘린다.**
   const { peers, link } = stand('1pc')
   await link.open()
   const before = peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length
 
-  const cam = link.sender('video')
-  const screen = link.sender('video')
-  assert.notEqual(cam.mid, screen.mid, '두 자리는 서로 다른 m-line 이다')
+  const cam = link.sender('video')      // 씨앗 video 를 되쓴다 — 안 는다
   assert.equal(
     peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length, before,
-    '★미리 세운 자리를 되쓴다 — 늘리면 무중단 불변이 깨지고 BUNDLE 천장을 먹는다',
+    '씨앗이 남아 있으면 되쓴다 — SSRC·대역 추정이 보존된다',
   )
-
-  // 셋을 다 쓴 뒤에야 늘린다(그때는 규칙 1 이 그 mid 를 정할 수 없다 — 값을 늘리는 것이 답이다).
-  link.sender('video')
+  const screen = link.sender('video')   // 씨앗이 없다 — 는다
   assert.equal(
     peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length, before + 1,
+    '★씨앗이 없으면 늘린다 — 그 절의 코덱 줄 출처는 확정본이 아니라 내 offer 다',
   )
+  assert.notEqual(cam.mid, screen.mid, '두 자리는 서로 다른 m-line 이다')
 })
 
 test('2pc 는 트랜시버를 미리 세우지 않는다', async () => {
@@ -175,9 +178,10 @@ test('★opusFmtpDefault 가 확정 answer 에 박힌다 — 앱 값이 wire 에
   const answer = peers.made[0]!.remoteDescription!.sdp!
   assert.ok(answer.includes('a=fmtp:111 minptime=10;useinbandfec=1;usedtx=0;maxaveragebitrate=24000'),
     'offer 원문(minptime=10;useinbandfec=1)에 앱 선호가 얹힌 값이라야 한다')
-  const opus = link.transportReport().codecs.find((c) => c.name === 'opus')!
-  assert.equal(opus.fmtp, 'minptime=10;useinbandfec=1;usedtx=0;maxaveragebitrate=24000',
-    '신고표와 등록 신고는 이 한 출처에서 나온다 — 이중 출처 0')
+  // ★번호표는 14차부터 **브라우저 offer** 에서 읽어 `ROOM_JOIN` 에 싣는다 — 확정본이 아니다.
+  //   여기서 보는 것은 ★**확정본에 박혔나** 하나다(등록 신고 `fmtp` 의 출처, 연§6-3).
+  assert.ok(link.confirmedAnswer()?.includes('usedtx=0;maxaveragebitrate=24000'),
+    '확정본이 등록 신고 fmtp 의 유일한 출처다')
 })
 
 test('★2pc 는 opusFmtpDefault 를 쓰지 않는다 — 발행마다 조립한다(정책서 §4-1)', async () => {
@@ -189,15 +193,15 @@ test('★2pc 는 opusFmtpDefault 를 쓰지 않는다 — 발행마다 조립한
   assert.ok(!answer.includes('usedtx'), '2pc 는 PeerLink 단위 값을 굳히지 않는다')
 })
 
-test('READY{transport} 재료는 확정본에서 뽑는다', async () => {
+test('★번호표는 브라우저 offer 에서 뽑아 ROOM_JOIN 에 싣는다(14차)', async () => {
   const { link } = stand('1pc')
-  await link.open()
-  const report = link.transportReport()
+  const report = await link.seedOffer()
 
-  // ★연§9-4 예외 · 정책서 §4-1 — opus 받는 쪽 선호는 answer 가 정한다. 확정본에 `ptt` 프로필이
-  // 박혀 있고(usedtx·useinbandfec·mono), 그 값이 그대로 신고표에도 PUBLISH_TRACKS.fmtp 에도 간다.
+  // ★★**번호표는 브라우저 offer 의 것**이다(14차) — 아직 answer 가 없으므로 앱 선호가
+  //   안 얹혀 있다. ★그것이 맞다: 서버가 피해 배정해야 하는 것은 ★**내가 제안한 번호**이고,
+  //   앱 선호(`usedtx`·`stereo`)는 ★**등록 신고 `fmtp`** 의 축이라 확정본에서 따로 간다(연§6-3).
   assert.deepEqual(report.codecs, [
-    { kind: 'audio', pt: 111, name: 'opus', fmtp: 'minptime=10;useinbandfec=1;usedtx=1;stereo=0' },
+    { kind: 'audio', pt: 111, name: 'opus', fmtp: 'minptime=10;useinbandfec=1' },
     {
       kind: 'video', pt: 102, name: 'H264',
       fmtp: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f',
@@ -206,10 +210,11 @@ test('READY{transport} 재료는 확정본에서 뽑는다', async () => {
   ])
   const uris = report.extmap.map((e) => `${e.id}:${e.uri.split(/[:/]/).pop()!}`)
   assert.ok(uris.includes('4:ssrc-audio-level'), '받기 절이 쓰는 확장은 번호째로 신고한다')
-  // 연§9-10-1 — 신고하는 것은 ★받기 절이 쓰는 표다. mid 를 넣어 신고하면 서버가 egress 에
-  // 발행자의 mid 값을 구독자가 읽는 번호로 옮겨 적고, 받는 쪽은 그 이름을 자기 보내기 m-line 으로
-  // 읽어 그 SSRC 의 주인을 옮긴다(연§9-5 · §9-10).
-  assert.ok(!uris.some((u) => u.endsWith(':mid')), '★sdes:mid 는 신고표에 없다')
+  // ★★**`sdes:mid` 도 신고한다**(연§9-4) — 서버가 ①수신에서 SSRC 학습 재료로 읽고
+  //   ②송신에서 ★**그 번호로 받기 mid 를 다시 쓴다**(§4-2-1 ③).
+  //   ★빼면 서버가 제 선언값으로 쓰는데 SDP 에는 브라우저 번호가 서 있어 ★**확장이 안 읽히고**,
+  //   같은 PT 의 받기 절 둘에서 demuxer 기준이 겹친다(3층 `ONEPC-03` 실측 20260913).
+  assert.ok(uris.some((u) => u.endsWith(':mid')), '★sdes:mid 를 신고표에 넣는다')
 })
 
 test('SDK§10-2 — 모든 PC 가 붙어 있어야 살아 있다', async () => {

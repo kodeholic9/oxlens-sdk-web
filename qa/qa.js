@@ -199,6 +199,13 @@ const qa = {
    * 연§9-10 규칙 1 을 어긴다 — 산 연결에서 ★브라우저가 자기 offer 를 내게 한다.
    * 성공하면 되돌려 세션을 원래대로 둔다(대조군이 그 뒤로도 돌아야 한다).
    */
+  /** ★진단용 — 산 연결의 SDP 두 벌. 판정하지 않는다(재료만 낸다). */
+  sdpDump() {
+    const pc = seenPcs[seenPcs.length - 1]
+    if (!pc) return null
+    return { remote: pc.remoteDescription?.sdp ?? null, local: pc.localDescription?.sdp ?? null }
+  },
+
   async forceBrowserOffer() {
     const pc = seenPcs[seenPcs.length - 1]
     if (!pc) return { refused: false, message: 'no pc', mids: [] }

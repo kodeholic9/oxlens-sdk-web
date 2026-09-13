@@ -6,10 +6,20 @@ import { TrackEntry, TrackStore, Version } from '../src/domain/store.js'
 
 const V = (seq: number, epoch = 'sfu-1'): Version => ({ epoch, seq })
 
+/** ★**세 층을 가른 형**(연§4-1 15차) — `mid`·`pt` 는 배정 층(`assign`)이다. */
 function track(mid: string, over: Partial<TrackEntry> = {}): TrackEntry {
   return {
-    room_id: 'r1', kind: 'audio', ssrc: 1000 + Number(mid), track_id: `t${mid}`, mid, pt: 111, ...over,
+    type: 'individual', room_id: 'r1', kind: 'audio',
+    ssrc: 1000 + Number(mid), track_id: `t${mid}`,
+    assign: { mid, pt: 111 },
+    ...over,
   }
+}
+
+/** 자리 없는 항목 — ★**미배정·비점유·고갈**. 보관은 되고 절은 못 짓는다. */
+function unseated(id: string, over: Partial<TrackEntry> = {}): TrackEntry {
+  const { assign: _drop, ...rest } = track('0', over)
+  return { ...rest, track_id: id }
 }
 
 function seeded(): TrackStore {
@@ -29,7 +39,7 @@ test('★같은 seq 는 에코다 — 내용을 반영하고 번호는 그대로
   const s = seeded()
   const r = s.apply('event', 'r1', V(10), { kind: 'add', tracks: [track('2')] })
   assert.equal(r.accepted, true, '나에게만 온 프레임이라 서버가 seq 를 안 올렸다 — 버리면 결과가 삼켜진다')
-  assert.deepEqual(s.tracks('r1').map((t) => t.mid), ['0', '1', '2'])
+  assert.deepEqual(s.tracks('r1').map((t) => t.assign?.mid), ['0', '1', '2'])
   assert.deepEqual(s.versionOf('r1'), V(10), '번호는 안 오른다')
   assert.equal(s.apply('event', 'r1', V(12), { kind: 'add', tracks: [track('3')] }).accepted, false,
     '에코를 받아도 그다음 갭 판정의 기준은 그대로다')
@@ -51,7 +61,7 @@ test('epoch 가 갈리면 통째로 버리고 재구축한다', () => {
   const r = s.apply('join', 'r1', V(1, 'sfu-2'), { kind: 'snapshot', tracks: [track('0')] })
   assert.equal(r.accepted, true)
   assert.equal(r.reset, true, 'epoch 를 안 보면 재기동 뒤 통지를 영원히 버린다')
-  assert.deepEqual(s.tracks('r1').map((t) => t.mid), ['0'])
+  assert.deepEqual(s.tracks('r1').map((t) => t.assign?.mid), ['0'])
   assert.equal(s.seats().length, 1, '재기동은 자리까지 버린다')
 })
 
@@ -77,15 +87,16 @@ test('갭 뒤의 통지는 이어서 막힌다 — 통짜가 와야 풀린다', 
   const fix = s.apply('http', 'r1', V(13), { kind: 'snapshot', tracks: [track('0'), track('2')] })
   assert.equal(fix.accepted, true)
   assert.equal(s.isDesynced('r1'), false)
-  assert.deepEqual(s.tracks('r1').map((t) => t.mid), ['0', '2'])
+  assert.deepEqual(s.tracks('r1').map((t) => t.assign?.mid), ['0', '2'])
 })
 
-test('같은 mid 가 다시 오면 통째로 바뀐다 — 병합이 아니다', () => {
+test('★같은 track_id 가 다시 오면 스트림 층이 통째로 바뀐다 — 병합이 아니다', () => {
+  // ★**키는 `track_id`** 다(연§4-1-1) — `mid` 는 배정 층이라 있다 없다 하고 옮겨 다닌다.
   const s = seeded()
   s.apply('event', 'r1', V(11), {
-    kind: 'add', tracks: [track('1', { kind: 'video', codec: 'VP8', pt: 96, ssrc: 77 })],
+    kind: 'add', tracks: [track('1', { kind: 'video', codec: 'VP8', assign: { mid: '1', pt: 96 }, ssrc: 77 })],
   })
-  const got = s.tracks('r1').find((t) => t.mid === '1')!
+  const got = s.tracks('r1').find((t) => t.track_id === 't1')!
   assert.equal(got.kind, 'video')
   assert.equal(got.ssrc, 77)
   assert.equal(got.codec, 'VP8')
@@ -94,11 +105,15 @@ test('같은 mid 가 다시 오면 통째로 바뀐다 — 병합이 아니다',
 test('remove 는 항목을 지우되 그 mid 자리는 남는다', () => {
   const s = new TrackStore()
   s.apply('join', 'r1', V(1), {
-    kind: 'snapshot', tracks: [track('0'), track('1', { kind: 'video', codec: 'H264', pt: 102, fmtp: 'packetization-mode=1' })],
+    kind: 'snapshot',
+    tracks: [
+      track('0'),
+      track('1', { kind: 'video', codec: 'H264', assign: { mid: '1', pt: 102 }, fmtp: 'packetization-mode=1' }),
+    ],
   })
   s.apply('event', 'r1', V(2), { kind: 'remove', tracks: [track('1')] })
 
-  assert.deepEqual(s.tracks('r1').map((t) => t.mid), ['0'])
+  assert.deepEqual(s.tracks('r1').map((t) => t.assign?.mid), ['0'])
   const seats = s.seats()
   assert.deepEqual(seats.map((x) => x.mid), ['0', '1'], '자리를 안 남기면 m-line 이 줄어 협상이 깨진다')
   const seat = seats[1] as { pt?: number; codec?: string; fmtp?: string }
@@ -120,23 +135,26 @@ test('같은 kind 의 새 트랙이 그 mid 로 오면 자리가 되살아난다
 test('조립 순서는 mid 수치다 — 문자열이면 10 이 2 보다 앞선다', () => {
   const s = new TrackStore()
   s.apply('join', 'r1', V(1), { kind: 'snapshot', tracks: [track('10'), track('2'), track('0')] })
-  assert.deepEqual(s.tracks('r1').map((t) => t.mid), ['0', '2', '10'])
+  assert.deepEqual(s.tracks('r1').map((t) => t.assign?.mid), ['0', '2', '10'])
 })
 
-test('mid 없는 트랙은 조립에 안 넣고 받을 수 없다고 알린다', () => {
+test('★자리 없는 트랙은 보관은 하되 절을 못 짓는다 — 그 사실을 알린다', () => {
+  // ★★**보관과 조립이 다른 축이다**(15차) — `assign` 이 없는 것은 ★**미배정·비점유·고갈**
+  //   이고 스트림은 엄연히 존재한다. 종전엔 `mid` 로 색인해 ★**보관본에 아예 못 들어갔다.**
   const s = new TrackStore()
   const r = s.apply('event', 'r1', V(1), {
-    kind: 'add', tracks: [{ room_id: 'r1', kind: 'audio', ssrc: 5, track_id: 'x' }],
+    kind: 'add', tracks: [unseated('x')],
   })
   assert.equal(r.accepted, true)
   assert.equal(r.unreachable.length, 1, '조용히 없는 것처럼 두지 않는다')
-  assert.equal(s.tracks('r1').length, 0)
+  assert.equal(s.tracks('r1').length, 1, '★스트림은 있다 — 받을 자리가 없을 뿐이다')
+  assert.equal(s.seats().length, 0, '자리가 없으니 m-line 도 없다')
 })
 
 test('active:false 는 지우라는 뜻이 아니다 — 자리도 항목도 남는다', () => {
   const s = seeded()
   s.apply('event', 'r1', V(11), { kind: 'add', tracks: [track('1', { active: false })] })
-  const got = s.tracks('r1').find((t) => t.mid === '1')!
+  const got = s.tracks('r1').find((t) => t.track_id === 't1')!
   assert.equal(got.active, false)
   assert.equal(s.tracks('r1').length, 2)
 })
@@ -146,8 +164,8 @@ test('보관본은 방을 room_id 로만 가른다', () => {
   s.apply('join', 'r1', V(1), { kind: 'snapshot', tracks: [track('0')] })
   s.apply('join', 'r2', V(1), { kind: 'snapshot', tracks: [track('1', { room_id: 'r2' })] })
 
-  assert.deepEqual(s.tracks('r1').map((t) => t.mid), ['0'])
-  assert.deepEqual(s.tracks('r2').map((t) => t.mid), ['1'])
+  assert.deepEqual(s.tracks('r1').map((t) => t.assign?.mid), ['0'])
+  assert.deepEqual(s.tracks('r2').map((t) => t.assign?.mid), ['1'])
   assert.equal(s.seats().length, 2, '한 연결의 m-line 은 방을 가리지 않고 한 줄이다')
 })
 

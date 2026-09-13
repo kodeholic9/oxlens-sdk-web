@@ -34,10 +34,21 @@ export const URI_TWCC = 'http://www.ietf.org/id/draft-holmer-rmcat-transport-wid
 export const URI_RID = 'urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id'
 export const URI_REPAIRED_RID = 'urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id'
 
-/** 연§4-2 — 받기에 실을 수 있는 확장. sdes:mid 는 뺀다(연§9-5). */
+/**
+ * 연§4-2-1 ③ — 받기에 실을 확장. ★★**`sdes:mid` 를 **선언한다.**
+ *
+ * ★**12차에 뒤집혔다.** 옛 규격은 이 확장을 빼고 SSRC 로만 갈랐는데(알고 하는 이탈),
+ * ★**받기 절이 둘 이상이고 PT 가 같으면**(opus 둘은 한 튜플이라 늘 그렇다, §4-2-1 ①)
+ * ★**브라우저가 demuxer 기준을 못 세운다** — 그 연결이 재협상에서 통째로 거부된다
+ * (3층 `ONEPC-03` 실측 20260913).
+ *
+ * ★**발행자 mid 값이 새지 않는다** — 서버가 송신에서 확장 값을 ★**그 m-line 의
+ * `assign.mid`** 로 새로 쓴다(§4-2-1 ② 발행자 확장 영역은 통째로 버려진다).
+ * RFC 8843 §9.1 도 *"in each bundled RTP-based m= section in every offer and answer"* 다.
+ */
 const RECV_URIS: Readonly<Record<'audio' | 'video', readonly string[]>> = {
-  audio: [URI_AUDIO_LEVEL, URI_ABS_SEND_TIME, URI_TWCC],
-  video: [URI_ABS_SEND_TIME, URI_TWCC],
+  audio: [URI_MID, URI_AUDIO_LEVEL, URI_ABS_SEND_TIME, URI_TWCC],
+  video: [URI_MID, URI_ABS_SEND_TIME, URI_TWCC],
 }
 
 export function recvExtmap(cfg: ServerConfig, kind: 'audio' | 'video'): readonly { id: number; uri: string }[] {

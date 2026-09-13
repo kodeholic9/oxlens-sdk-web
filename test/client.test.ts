@@ -18,9 +18,10 @@ const BIND_OK = {
   heartbeat_interval: 10_000, session_id: 's-1', resume_window_ms: 60_000, pc_mode: '2pc',
 }
 
+/** ★**세 층을 가른 형**(연§4-1 15차) — `mid`·`pt` 는 배정 층이다. */
 const MIC_TRACK = {
-  room_id: 'r1', kind: 'audio' as const, user_id: 'u2', ssrc: 1001,
-  track_id: 't-u2-mic', mid: '0', pt: 111,
+  type: 'individual' as const, room_id: 'r1', kind: 'audio' as const, user_id: 'u2', ssrc: 1001,
+  track_id: 't-u2-mic', assign: { mid: '0', pt: 111 },
 }
 
 interface Stand {

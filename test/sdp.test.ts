@@ -187,7 +187,7 @@ const SEATS: Seat[] = [
 
 // ★연§9-5 표는 받기 audio 확장을 4·5·6 으로 정하는데 §9-9-2 예시에는 5 가 없다.
 // 규격이 "표가 이긴다"고 못박으므로 표를 따른다.
-test('연§9-9-2 받기 offer — 예시와 전 줄이 같다(표가 이기는 한 줄만 다르다)', () => {
+test('연§9-9-2 받기 offer — 예시와 전 줄이 같다(표가 이기는 줄만 다르다)', () => {
   const got = subscribeOffer(SEATS, CFG, { session: { id: '1756000000000', version: 1 } })
   assert.deepEqual(lines(got), [
     'v=0',
@@ -209,6 +209,8 @@ test('연§9-9-2 받기 offer — 예시와 전 줄이 같다(표가 이기는 �
     'a=rtpmap:111 opus/48000/2',
     'a=fmtp:111 minptime=10;useinbandfec=1',
     'a=rtcp-fb:111 transport-cc',
+    // ★12차 — 받기 절에도 mid 확장을 선언한다(연§4-2-1 ③).
+    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
     'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
     'a=extmap:5 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time',
     'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
@@ -234,6 +236,7 @@ test('연§9-9-2 받기 offer — 예시와 전 줄이 같다(표가 이기는 �
     'a=rtcp-fb:102 transport-cc',
     'a=rtpmap:103 rtx/90000',
     'a=fmtp:103 apt=102',
+    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
     'a=extmap:5 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time',
     'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
     'a=msid:ox-ptt ptt-r1-video',
@@ -258,9 +261,14 @@ test('연§9-9-2 받기 offer — 예시와 전 줄이 같다(표가 이기는 �
   ])
 })
 
-test('받기에서 sdes:mid 는 어느 m-line 에도 없다', () => {
-  assert.ok(!subscribeOffer(SEATS, CFG).includes('sdes:mid'),
-    '선언하면 브라우저가 RTP mid 로 m-line 을 골라 BUNDLE 구분이 깨진다')
+test('★받기 m-line 에도 sdes:mid 를 선언한다 — 12차에 뒤집혔다', () => {
+  // ★★**옛 규격은 이 확장을 빼고 SSRC 로만 갈랐다**(알고 하는 이탈). 12차가 되돌렸다:
+  //   서버가 송신에서 확장 값을 ★**그 m-line 의 `assign.mid`** 로 다시 쓰므로(연§4-2-1 ③)
+  //   발행자 mid 값이 새지 않고, 브라우저는 SSRC 로도 mid 로도 같은 절을 고른다.
+  // ★**안 선언하면** 받기 절이 둘이고 PT 가 같을 때(opus 둘은 한 튜플이다, §4-2-1 ①)
+  //   ★**브라우저가 demuxer 기준을 못 세운다** — 3층 `ONEPC-03` 이 그 자리다.
+  assert.ok(subscribeOffer(SEATS, CFG).includes('sdes:mid'),
+    'RFC 8843 §9.1 — bundled 절 전부에 mid 확장을 선언한다')
 })
 
 test('조립 순서는 mid 수치다', () => {
@@ -376,12 +384,17 @@ test('보내기 코덱 줄은 확정 answer 에서 온다 — 내 offer 목록�
   assert.ok(audio[0]!.endsWith('SAVPF 111'))
 })
 
-test('확정 answer 가 없는 m-line 은 조용히 넘어가지 않는다', () => {
-  assert.throws(() => unifiedOffer([], CFG, { mine: BROWSER_OFFER, confirmed: 'v=0\r\n' }), (e) => {
-    assert.ok(e instanceof SdpError)
-    assert.equal(e.reason, 'negotiation')
-    return true
-  }, '2단계에서 inactive 트랜시버를 안 세우면 여기서 멈춘다')
+test('★확정본에 없는 보내기 절은 내 offer 로 짓는다 — 새 절이다(17차)', () => {
+  // ★★**17차가 자리 확보 트랜시버를 철거한 뒤로 새 절이 실제로 생긴다**(화면공유).
+  //   그 절은 ★**아직 서버와 합의한 적이 없으므로 확정본이 있을 수가 없다** — 던지면
+  //   화면공유가 원리적으로 불가능해진다. 코덱 줄 출처는 내 offer 다.
+  // ★**있는 절은 여전히 확정본에서 짓는다** — 내 offer 에서 가져오면 걸러냈던 코덱이
+  //   되살아나 보고한 것과 다른 코덱으로 보낸다(연§9-10-3 증상).
+  const sdp = unifiedOffer([], CFG, { mine: BROWSER_OFFER, confirmed: 'v=0\r\n' })
+  const got = parse(sdp)
+  assert.ok(got.sections.length > 0, '새 절을 지어야 한다 — 던지면 화면공유가 막힌다')
+  assert.ok(got.sections.every((m) => m.kind === 'application' || m.pts.length > 0),
+    '코덱 없는 절을 지어내지는 않는다')
 })
 
 test('extmap 번호는 내 offer 것이고 받기도 확정본 번호를 쓴다', () => {
@@ -396,10 +409,13 @@ test('extmap 번호는 내 offer 것이고 받기도 확정본 번호를 쓴다'
     '한 BUNDLE 이라 URI 마다 번호가 하나여야 한다')
 })
 
-test('1pc 받기에서도 sdes:mid 는 뺀다', () => {
+test('★1pc 받기에도 sdes:mid 를 선언한다 — 보내기와 같은 번호다', () => {
   const sdp = unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, { mine: BROWSER_OFFER, confirmed: CONFIRMED })
-  assert.ok(!section(sdp, 3).some((l) => l.includes('sdes:mid')))
-  assert.ok(section(sdp, 0).some((l) => l.includes('sdes:mid')), '보내기에는 남는다')
+  assert.ok(section(sdp, 3).some((l) => l.includes('sdes:mid')), '12차 — 받기에도 선언한다')
+  assert.ok(section(sdp, 0).some((l) => l.includes('sdes:mid')), '보내기에는 원래 있다')
+  // ★**한 BUNDLE 에 URI 마다 번호가 하나다** — 갈리면 서버가 쓴 번호를 브라우저가 못 읽는다.
+  const idOf = (i: number) => section(sdp, i).find((l) => l.includes('sdes:mid'))?.split(' ')[0]
+  assert.equal(idOf(3), idOf(0), '받기와 보내기의 mid 확장 번호는 같다')
 })
 
 test('msid 는 따로 줄로 쓰고 ssrc 에는 cname 만 단다', () => {
@@ -468,7 +484,8 @@ test('연§9-10 규칙 1 — 딸려 나온 받기 자리를 sendonly + SSRC 로 
   assert.ok(recv.includes('a=mid:32') && recv.includes('a=sendonly'), '받기 자리는 서버가 보낸다')
   assert.ok(!recv.includes('a=recvonly'), 'recvonly 로 답하면 방향 불일치로 거부된다')
   assert.ok(recv.includes('a=msid:ox-u2 t-u2-mic') && recv.includes('a=ssrc:1001 cname:ox-sfu'))
-  assert.ok(!recv.some((l) => l.startsWith('a=extmap:1 ')), '받기에서 sdes:mid 는 뺀다(연§9-5)')
+  assert.ok(recv.some((l) => l.startsWith('a=extmap:1 ')),
+    '★받기에도 sdes:mid 를 선언한다(연§4-2-1 ③ — 12차에 뒤집혔다)')
   assert.equal(section(got, 0).find((l) => l.startsWith('a=recv') || l.startsWith('a=send')), 'a=recvonly')
   assert.ok(lines(got).includes('a=group:BUNDLE 0 32'), 'm-line 개수와 순서는 offer 그대로다')
 })
@@ -476,6 +493,8 @@ test('연§9-10 규칙 1 — 딸려 나온 받기 자리를 sendonly + SSRC 로 
 test('연§9-10 규칙 2 — 상대 축 번호는 offer 에 선 것 그대로다', () => {
   const recv = section(publishAnswer(ONE_PC_OFFER, CFG, { seats: [SEAT_32] }), 1)
   assert.deepEqual(recv.filter((l) => l.startsWith('a=extmap:')), [
+    // ★12차 — 받기 절에도 mid 확장을 선언한다(연§4-2-1 ③).
+    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
     'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
     'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
   ])

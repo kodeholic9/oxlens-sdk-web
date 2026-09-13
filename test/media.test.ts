@@ -145,8 +145,11 @@ test('등록에 실을 값은 내 offer 에서, ★fmtp 는 확정본에서 읽�
   // ★연§6-3 — fmtp 는 kind 를 안 가린다. audio 도 확정본에 있으면 싣는다.
   // opus 는 연§9-4 예외로 answer 가 받는 쪽 선호를 정하므로, offer 에서 읽으면
   // useinbandfec·minptime 협상 결과가 구독자에게 영영 안 간다.
+  // ★★**wire 의 `source` 는 video 전용 닫힌 집합 `{camera, screen}`** 이다(연§4-4-1) —
+  //   SDK 안쪽 `source`(캡처 종류)와 어휘가 다르다. audio 에 `"microphone"` 을 실으면
+  //   서버가 ★**전체를 `1002` 로 거절**한다(3층 실측 20260913).
   assert.deepEqual(body.tracks, [{
-    kind: 'audio', ssrc: 11111, mid: '0', pt: 111, duplex: 'full', source: 'microphone',
+    kind: 'audio', ssrc: 11111, mid: '0', pt: 111, duplex: 'full',
     fmtp: 'minptime=10;useinbandfec=1',
   }])
   assert.equal(body.mid_extmap_id, 1, '협상 결과 번호를 신고한다')

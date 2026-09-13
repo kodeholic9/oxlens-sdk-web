@@ -19,6 +19,18 @@ const SOURCE_OF: Readonly<Record<CaptureKind, string>> = {
   microphone: 'microphone', camera: 'camera', screen: 'screen',
 }
 
+/**
+ * 연§4-4-1 — wire 로 나가는 `source`. ★**video 만 · `{camera, screen}` 둘뿐**이다.
+ *
+ * ★SDK 안쪽 `source` 는 캡처 종류라 `microphone` 을 포함한다 — 뜻이 다른 두 어휘가
+ * 같은 글자를 쓰므로 ★**경계에서 가른다.** 안 가르면 audio 항목에 `"microphone"` 이
+ * 실려 서버가 ★**전체를 `1002` 로 거절**한다(권한 비트 사상표도 이 값을 본다).
+ */
+function wireSource(track: { kind: 'audio' | 'video'; source: string }): { source?: string } {
+  if (track.kind !== 'video') return {}
+  return { source: track.source === 'screen' ? 'screen' : 'camera' }
+}
+
 export interface LocalTrack {
   readonly id: string
   readonly kind: 'audio' | 'video'
@@ -401,6 +413,7 @@ export class MediaRegistry {
    * 연§6-3 — 등록에 실을 값은 전부 ★내 offer 에서 읽는다.
    * pt·ssrc·mid 는 폴백이 없고, video 는 codec·fmtp 도 없으면 서버가 전체를 거절한다.
    */
+  // eslint-disable-next-line @typescript-eslint/member-ordering
   private lineOf(to: PublishTarget, transceiver: TransceiverLike, track: LocalTrack): {
     entry: Record<string, unknown>
     extmap: Record<string, number>
@@ -421,7 +434,12 @@ export class MediaRegistry {
     if (ssrc === undefined) throw new PublishError('no_ssrc', `mid=${mid} 에 ssrc 가 없다`)
 
     const entry: Record<string, unknown> = {
-      kind: track.kind, ssrc, mid, pt, duplex: track.duplex, source: track.source,
+      kind: track.kind, ssrc, mid, pt, duplex: track.duplex,
+      // ★★**wire 의 `source` 는 video 전용 닫힌 집합 `{camera, screen}`** 이다(연§4-4-1).
+      //   ★SDK 안쪽의 `source` 는 **캡처 종류**(microphone 포함)라 뜻이 더 넓다 — 그대로
+      //   실으면 audio 에 `"microphone"` 이 실려 ★**전체가 `1002` 로 거절**된다(20260913 실측).
+      //   같은 글자를 쓰는 두 어휘를 경계에서 가른다.
+      ...wireSource(track),
     }
     // 연§6-3 — ★`fmtp` 는 kind 를 가리지 않는다. 확정본에 있으면 반드시 싣는다.
     // ★출처는 offer 가 아니라 ★확정본(answer)이다: video 는 두 값이 같지만(연§9-4 "원문 줄을

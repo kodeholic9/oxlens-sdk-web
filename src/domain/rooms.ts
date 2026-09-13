@@ -60,6 +60,14 @@ export interface RoomsOptions {
 
 export class Rooms {
   private readonly servers = new Map<string, Server>()
+  /**
+   * 연§9-10-3 2 — ★**서버를 알기 전에 세운 연결**(`1pc`).
+   *
+   * 번호표를 `ROOM_JOIN` 요청에 실으려면 offer 가 먼저여야 하는데, 그때는 아직
+   * `server_config` 가 없다. ★**번호표를 낸 바로 그 연결**을 응답 뒤에 붙인다 —
+   * 다시 만들면 그 offer 의 PT·SSRC 와 어긋난다.
+   */
+  private seeded: PeerLink | null = null
   private readonly state = new Map<string, RoomState>()
   private readonly homeOf = new Map<string, string>()
   private readonly clock: Clock
@@ -111,11 +119,26 @@ export class Rooms {
     const body: Record<string, unknown> = { room_id: roomId, select }
     if (opts.role !== undefined) body.role = opts.role
 
+    // ★★**연§9-10-3 2③ — `1pc` 은 번호표를 `ROOM_JOIN` **전**에 만든다.**
+    //   ★한 BUNDLE 안에서 PT·확장 ID 는 코덱·URI 마다 하나여야 하고, 내 번호를 먼저
+    //   알려야 서버가 받기 PT 를 겹치지 않게 배정한다(§4-2-1 ④).
+    //   ★옛 `READY{transport}` 갈래는 확정본 **뒤에** 신고해 첫 배정을 되돌리는 재협상이
+    //   필요했다 — 14차가 없앴다(그 갈래를 보내면 서버가 `1002` 로 거절한다).
+    const seed = this.opts.pcMode === '1pc' ? await this.seedLink() : null
+    if (seed) {
+      const table = await seed.seedOffer()
+      body.extmap = table.extmap
+      body.codecs = table.codecs
+    }
+
     let res: JoinResponse
     try {
       res = await request(this.sig(), this.clock, Op.RoomJoin, body, JOIN_SETTLED) as unknown as JoinResponse
     } catch (e) {
       this.state.set(roomId, 'none')
+      // ★씨앗을 놓는다 — 안 놓으면 다음 입장이 옛 offer 를 들고 간다.
+      seed?.close()
+      this.seeded = null
       throw asRoomError(e)
     }
 
@@ -129,9 +152,6 @@ export class Rooms {
 
     const server = await this.attach(res.server_config)
     server.rooms.add(roomId)
-    // 연§9-10-3 2-0 — `1pc` 은 확정본을 ★신고하고 응답을 기다린다. 신고 전에 조립하면
-    // 서버가 보내는 PT·확장 번호와 내 SDP 가 어긋나 ★패킷은 오는데 트랙에 안 실린다.
-    await this.reportTransport(server, roomId)
     this.homeOf.set(roomId, server.sfuId)
     server.store.apply('join', roomId, res.version, { kind: 'snapshot', tracks: res.tracks })
     if (select) this.pubRoom = { room: roomId, sfuId: server.sfuId }
@@ -196,9 +216,22 @@ export class Rooms {
     return verdict.added.length + verdict.removed.length + verdict.unreachable.length === 0 && !verdict.reset ? 'noop' : 'ok'
   }
 
+  /**
+   * 연§4-6-3 — ★**`version` 없는 `TRACK_EVENT{add}`** — 배정만 바뀌었다.
+   * 견주기 밖이라 갭·stale 판정을 태우지 않는다.
+   */
+  applyAssign(roomId: string, tracks: readonly TrackEntry[]): 'ok' | 'noop' | 'stale' {
+    const server = this.serverOf(roomId)
+    if (!server) return 'stale'
+    const verdict = server.store.applyAssign(roomId, tracks)
+    if (!verdict.accepted) return 'stale'
+    return verdict.added.length === 0 ? 'noop' : 'ok'
+  }
+
   /** 연§9-8 — 받을 것이 바뀌면 그 서버 하나만 다시 협상한다. */
   async renegotiate(server: Server): Promise<void> {
-    const seats = server.store.seats() as readonly Seat[]
+    // ★캐스트를 두지 않는다 — 형이 어긋나면 그 자리에서 걸려야 한다(조립은 되돌릴 수 없다).
+    const seats: readonly Seat[] = server.store.seats()
     await server.link.negotiateSubscribe(seats)
     // 연§7-5-2 5 · §6-3 — 협상이 성공해야 보낸다. 빠뜨리면 수신 영상이 영구히 검다.
     for (const room of server.rooms) {
@@ -207,28 +240,47 @@ export class Rooms {
     }
   }
 
-  /** 연§6-3 `READY{type:"transport"}` — `1pc` 전용이고 그 연결에 한 번이다(정§7-4). */
-  private async reportTransport(server: Server, roomId: string): Promise<void> {
-    if (server.cfg.pc_mode !== '1pc' || server.reported === true) return
-    const report = server.link.transportReport()
-    await request(this.sig(), this.clock, Op.Ready, {
-      room_id: roomId, type: 'transport', extmap: report.extmap, codecs: report.codecs,
+  /** 연§9-10-3 2①② — 서버를 알기 전에 세우는 씨앗 연결(`1pc` 전용). */
+  private async seedLink(): Promise<PeerLink> {
+    if (this.seeded) return this.seeded
+    const link = new PeerLink(null, {
+      peers: this.opts.peers,
+      pcMode: '1pc',
+      ...(this.opts.clock ? { clock: this.opts.clock } : {}),
+      ...(this.opts.opusFmtpDefault ? { opusFmtpDefault: this.opts.opusFmtpDefault } : {}),
     })
-    server.reported = true
+    this.seeded = link
+    return link
   }
 
   private async attach(cfg: ServerConfig): Promise<Server> {
     const known = this.servers.get(cfg.sfu_id)
     // 연§6-2 — 자격이 보관값과 다르면 그 서버 연결을 새로 세운다.
-    if (known && known.cfg.ice.publish_ufrag === cfg.ice.publish_ufrag) return known
+    if (known && known.cfg.ice.publish_ufrag === cfg.ice.publish_ufrag) {
+      // ★연§9-10-3 2④ — ★**이미 붙은 서버면 씨앗을 버린다.** 두 연결을 남기면
+      //   같은 서버에 전송로가 둘이 되어 그 방 미디어가 어느 쪽으로 오는지 갈린다.
+      this.seeded?.close()
+      this.seeded = null
+      return known
+    }
     known?.link.close()
 
-    const link = new PeerLink(cfg, {
+    // ★씨앗이 있으면 그것을 쓴다 — 번호표를 낸 바로 그 연결이어야 한다(다시 만들면 어긋난다).
+    const seeded = this.seeded
+    this.seeded = null
+    const link = seeded ?? new PeerLink(cfg, {
       peers: this.opts.peers,
+      pcMode: this.opts.pcMode ?? '2pc',
       ...(this.opts.clock ? { clock: this.opts.clock } : {}),
       ...(this.opts.opusFmtpDefault ? { opusFmtpDefault: this.opts.opusFmtpDefault } : {}),
     })
-    await link.open()
+    if (seeded) {
+      seeded.bind(cfg)
+      // 연§9-10-3 2④ — ★**이 answer 가 첫 협상 확정본이다.**
+      await seeded.seedAnswer()
+    } else {
+      await link.open()
+    }
     const server: Server = { sfuId: cfg.sfu_id, cfg, link, store: known?.store ?? new TrackStore(), rooms: known?.rooms ?? new Set() }
     this.servers.set(cfg.sfu_id, server)
     return server

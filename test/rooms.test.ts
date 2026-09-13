@@ -215,8 +215,10 @@ test('통지는 보관본 문 하나를 지난다', async () => {
   const s = stand()
   await joinOnce(s, 'r1')
   const v = { epoch: CFG.sfu_id, seq: 2 }
+  // ★**세 층을 가른 형**(연§4-1 15차) — `mid`·`pt` 는 배정 층이다.
   const track = {
-    room_id: 'r1', kind: 'audio' as const, ssrc: 1, track_id: 't1', mid: '0', pt: 111,
+    type: 'individual' as const, room_id: 'r1', kind: 'audio' as const,
+    ssrc: 1, track_id: 't1', assign: { mid: '0', pt: 111 },
   }
   assert.equal(s.rooms.applyEvent('r1', v, { kind: 'add', tracks: [track] }), 'ok')
   // ★연§4-6 둘째 예외 — 같은 seq 는 에코다(나에게만 온 프레임). 버리면 재배정·소속 결과가 삼켜진다.
