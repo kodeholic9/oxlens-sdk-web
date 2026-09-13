@@ -58,6 +58,36 @@ export async function sfuIds(): Promise<string[]> {
   return ids
 }
 
+/**
+ * ★★**위상을 이름 단계에서 못 박는다**(가이드 §3-2) — 방 둘이 ★**같은 node** 냐
+ * ★**다른 node** 냐를 시험이 **선언**한다.
+ *
+ * ★**안 하면 위상이 운이다.** 배치는 `room_id` 의 순수 함수라 node 수가 바뀌는 순간
+ * 같은 이름이 다른 곳으로 간다 — 그때 ★**전제가 조용히 깨지고 시험은 초록인 채로
+ * 다른 것을 잰다**(구판 `qa_test_02` 가 RoundRobin→HRW 전환에서 그랬다).
+ * ★node 셋 형상에서 실제로 확인했다(20260913): `qa_onepc_width`·`width2` 가 둘 다
+ * node-a 로 떨어져 있었고 그것은 **선언된 적 없는 우연**이었다.
+ *
+ * ★못 찾으면 던진다 — 조용히 한쪽으로 떨어뜨리면 그 시험이 거짓말을 한다.
+ */
+export async function roomPairFor(
+  tag: string,
+  topology: 'same' | 'different',
+  max = 400,
+): Promise<[string, string]> {
+  const ids = await sfuIds()
+  if (topology === 'different' && ids.length < 2) {
+    throw new Error(`node 가 ${ids.length} 대라 'different' 가 성립 불가다 — same 으로 떨어뜨리지 않는다`)
+  }
+  for (let n = 0; n < max; n += 1) {
+    const a = roomFor(tag, `a${n}`)
+    const b = roomFor(tag, `b${n}`)
+    const sameNode = placementOf(a, ids) === placementOf(b, ids)
+    if (sameNode === (topology === 'same')) return [a, b]
+  }
+  throw new Error(`${tag}: ${topology} 위상을 만드는 이름을 ${max} 번에 못 찾았다`)
+}
+
 /** ★그 이름의 방이 이 노드에 떨어지는지 확인한다 — 정책이 바뀌면 주석은 썩지만 이것은 안 썩는다. */
 export async function roomOn(tag: string, sfuId: string, role?: string): Promise<string> {
   const ids = await sfuIds()

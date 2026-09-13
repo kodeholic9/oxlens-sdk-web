@@ -3,12 +3,24 @@
 // `1pc` 은 SDP 가 한 벌이라 어느 사건이든 전체를 다시 낸다. 그래서 ★이번 사건과 무관한
 // 트랙이 그 창에서 멎는지를 본다. 두 스냅샷 차분으로는 창 안의 끊김을 못 보므로 촘촘히 훑는다.
 import { test } from '@playwright/test'
+import { roomPairFor } from '../fixtures/env.js'
 import { Scope, ensureRoom, expect } from '../fixtures/scope.js'
 import { msOf, stalls, TrackStat, watch } from '../fixtures/delta.js'
 
 const S = new Scope('onepc')
 const ROOM = S.room()
-const ROOM2 = S.room('second')
+
+/**
+ * ★★**위상을 선언한다**(가이드 §3-2) — `1pc` 은 ★**전송로 한 벌**이 알맹이라
+ * 두 방이 ★**같은 node** 여야 한 연결 위에서 증설이 일어난다.
+ *
+ * ★안 선언하면 node 수가 바뀌는 순간 둘이 갈려 ★**서버가 둘이 되고**, 이 시험이 재는
+ * *"한 BUNDLE 안의 재협상"* 이 아예 안 일어난 채 초록이 난다(20260913 — 그때까지
+ * 한 node 에 몰려 있던 것은 **운**이었다).
+ */
+async function pair(tag: string): Promise<[string, string]> {
+  return roomPairFor(`onepc_${tag}`, 'same')
+}
 
 /** 남의 마이크 — 무전 슬롯(`ptt-`)이 아니라 개인 오디오다. */
 const peerAudio = (t: TrackStat): boolean => t.kind === 'audio' && !t.id.startsWith('ptt-')
@@ -52,6 +64,7 @@ test('ONEPC-01 보내기 증설 중에도 듣던 소리가 안 끊긴다', async
 
 test('ONEPC-02 받기 증설 중에도 듣던 소리가 안 끊긴다', async ({ browser }) => {
   const ctx = await browser.newContext()
+  const [ROOM, ROOM2] = await pair('second')
   await ensureRoom(ROOM)
   await ensureRoom(ROOM2)
   const a = await S.open(ctx, { userId: S.user('U03'), pcMode: '1pc' })
@@ -107,8 +120,7 @@ const grew = (a: TrackStat, b: TrackStat, k: keyof TrackStat): number =>
  */
 test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다', async ({ browser }) => {
   const ctx = await browser.newContext()
-  const ROOM4 = S.room('width')
-  const ROOM4B = S.room('width2')
+  const [ROOM4, ROOM4B] = await pair('width')
   await ensureRoom(ROOM4)
   await ensureRoom(ROOM4B)
   const a = await S.open(ctx, { userId: S.user('U07'), pcMode: '1pc' })

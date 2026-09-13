@@ -1,7 +1,7 @@
 // author: kodeholic (powered by Claude)
 // ★환경이 결정적이지 않으면 모든 초록이 거짓이다. 이 절이 그것을 매 실행 대조한다.
 import { test } from '@playwright/test'
-import { placementOf, roomFor, sfuIds, userFor } from '../fixtures/env.js'
+import { placementOf, roomFor, roomPairFor, sfuIds, userFor } from '../fixtures/env.js'
 import { Scope, ensureRoom, expect, roomHeadcount } from '../fixtures/scope.js'
 
 const S = new Scope('env')
@@ -13,6 +13,22 @@ test.afterEach(async () => { await S.teardown() })
  * `server_config.sfu_id`(프로세스 신원)는 다른 공간이라 문자열로 견줄 수 없다.
  * 포팅이 "같은 노드/다른 노드"라고 말한 것을 서버가 그대로 지키는지가 판정이다.
  */
+test('ENV-05 선언한 위상이 실제 배치와 같다 — 운에 기대지 않는다', async () => {
+  // ★★**위상을 안 선언하면 운이다**(가이드 §3-2). node 수가 바뀌는 순간 같은 이름이
+  //   다른 곳으로 가고, ★**전제가 조용히 깨진 채 시험은 초록**이 된다.
+  const ids = await sfuIds()
+  const [s1, s2] = await roomPairFor('envpair', 'same')
+  expect(placementOf(s1, ids), '같은 node 를 선언했으면 같아야 한다').toBe(placementOf(s2, ids))
+
+  if (ids.length < 2) {
+    // ★**조용히 넘어가지 않는다** — 한 대 형상에서는 cross-node 를 잴 수 없다는 사실을 적는다.
+    expect(roomPairFor('envpair', 'different')).rejects.toThrow()
+    return
+  }
+  const [d1, d2] = await roomPairFor('envpair', 'different')
+  expect(placementOf(d1, ids), '다른 node 를 선언했으면 달라야 한다').not.toBe(placementOf(d2, ids))
+})
+
 test('ENV-01 배치 포팅이 서버 판정과 같다', async ({ browser }) => {
   const ids = await sfuIds()
   expect(ids.length, 'hub registry 를 못 읽으면 cross-sfu 시험이 거짓말을 한다').toBeGreaterThan(0)
