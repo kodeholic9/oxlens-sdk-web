@@ -75,17 +75,24 @@ test('★씨앗을 다 쓰면 새 m-line 을 붙인다 — 화면공유가 그 �
   await link.open()
   const before = peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length
 
-  const cam = link.sender('video')      // 씨앗 video 를 되쓴다 — 안 는다
+  const cam = await link.sender('video')   // 씨앗 video 를 되쓴다
   assert.equal(
     peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length, before,
     '씨앗이 남아 있으면 되쓴다 — SSRC·대역 추정이 보존된다',
   )
-  const screen = link.sender('video')   // 씨앗이 없다 — 는다
+  assert.equal(cam.direction, 'sendonly')
+
+  // ★★**씨앗이 없으면 `addTransceiver` 를 하지 않는다**(연§9-10-1) — 클라가 ★**절을 붙이고**
+  //   브라우저가 트랜시버를 만든다(RFC 8829 §5.10). 먼저 만들면 ★**둘이 되어** 브라우저가
+  //   우리 절을 제 것에 안 붙이고 `inactive` 로 답한다(실측 20260913).
+  const screen = await link.sender('video')
   assert.equal(
-    peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length, before + 1,
-    '★씨앗이 없으면 늘린다 — 그 절의 코덱 줄 출처는 확정본이 아니라 내 offer 다',
+    peers.made[0]!.calls.filter((c) => c.startsWith('addTransceiver')).length, before,
+    '★`addTransceiver` 가 안 는다 — 늘었다면 클라가 먼저 만든 것이고, 그러면 둘이 된다',
   )
   assert.notEqual(cam.mid, screen.mid, '두 자리는 서로 다른 m-line 이다')
+  assert.ok(Number(screen.mid) < 32, '★보내기 mid 는 0~31 중 비어 있는 가장 작은 값이다(연§9-9-3)')
+  assert.equal(screen.direction, 'sendonly')
 })
 
 test('2pc 는 트랜시버를 미리 세우지 않는다', async () => {

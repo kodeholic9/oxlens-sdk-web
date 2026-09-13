@@ -6,7 +6,7 @@ import {
   DataChannelLike, IceState, MediaTrackLike, PeerConnectionLike, PeerFactory, RemoteTrackArrival,
   TransceiverLike,
 } from '../../platform/webrtc.js'
-import { publishAnswer, Seat, sessionIdOf, subscribeOffer, unifiedOffer } from '../sdp/build.js'
+import { NewSend, publishAnswer, Seat, sessionIdOf, subscribeOffer, unifiedOffer } from '../sdp/build.js'
 import { ServerConfig } from '../sdp/config.js'
 import { parse } from '../sdp/parse.js'
 import { Serial } from './serial.js'
@@ -273,20 +273,63 @@ export class PeerLink {
    * ★`1pc` 의 예비 트랜시버를 재사용할 때는 선호를 못 정한다 — 이미 협상된 m-line 이라
    * 코덱 줄이 서 있다. 그때는 서버가 `1006` 으로 가른다(찍어 보는 것이 아니라 못 맞추는 것이다).
    */
-  sender(kind: 'audio' | 'video', prefer?: { codec: string; fmtp?: string }): TransceiverLike {
-    const pub = this.require(this.pub)
-    // ★서버가 준 받기 트랜시버를 집으면 안 된다 — 잔존 자리도 `inactive` 라 방향으로는 못 가른다.
-    //   그 자리에 송신을 얹으면 브라우저가 demuxer 기준을 못 세워 `setLocalDescription` 이 던진다.
-    const spare = this.spares.findIndex((t) => this.kindOf(t) === kind)
-    if (spare >= 0) {
-      const t = this.spares[spare]!
-      this.spares.splice(spare, 1)
-      t.direction = 'sendonly'
-      return t
+  /**
+   * 보낼 자리 하나. ★**`1pc` 과 `2pc` 가 길이 다르다.**
+   *
+   * | | 어떻게 |
+   * |---|---|
+   * | `2pc` | 브라우저가 offer 를 내는 축이라 ★`addTransceiver` 가 정상 경로다 |
+   * | `1pc` 씨앗 있음 | 미리 세운 `inactive` 를 되쓴다 — SSRC·대역 추정이 보존된다 |
+   * | ★`1pc` 씨앗 없음 | ★★**클라가 절을 붙이고 브라우저가 트랜시버를 만든다**(연§9-10-1 · RFC 8829 §5.10) |
+   *
+   * ★★**마지막 줄이 이 함수의 알맹이다.** `addTransceiver` 를 먼저 하면 ★**트랜시버가 둘이
+   * 되어** 브라우저가 우리 절을 제 것에 안 붙이고 `inactive` 로 답한다 — `mid` 가 null 로
+   * 남아 등록에 실을 값을 못 읽는다(실측 20260913, 17차로 이 길이 처음 섰다).
+   */
+  async sender(kind: 'audio' | 'video', prefer?: { codec: string; fmtp?: string }): Promise<TransceiverLike> {
+    return this.serial.run(async () => {
+      const pub = this.require(this.pub)
+      // ★서버가 준 받기 트랜시버를 집으면 안 된다 — 잔존 자리도 `inactive` 라 방향으로는 못 가른다.
+      //   그 자리에 송신을 얹으면 브라우저가 demuxer 기준을 못 세워 `setLocalDescription` 이 던진다.
+      const spare = this.spares.findIndex((t) => this.kindOf(t) === kind)
+      if (spare >= 0) {
+        const t = this.spares[spare]!
+        this.spares.splice(spare, 1)
+        t.direction = 'sendonly'
+        if (this.onePc) await this.negotiate(pub, this.seats)
+        return t
+      }
+      if (!this.onePc) {
+        const t = pub.addTransceiver(kind, { direction: 'sendonly' })
+        if (prefer !== undefined) applyPreference(t, kind, prefer)
+        return t
+      }
+      const mid = this.freeMid(pub)
+      await this.negotiate(pub, this.seats, {
+        kind, mid, ...(prefer === undefined ? {} : { prefer }),
+      })
+      const made = pub.getTransceivers().find((t) => t.mid === mid)
+      if (made === undefined) {
+        throw new LinkError('no_confirmed', `mid=${mid} 절을 붙였는데 브라우저가 트랜시버를 안 만들었다`)
+      }
+      made.direction = 'sendonly'
+      if (prefer !== undefined) applyPreference(made, kind, prefer)
+      return made
+    })
+  }
+
+  /**
+   * 연§9-9-3 — ★**0~31 중 비어 있는 가장 작은 값.**
+   *
+   * ★**받기 몫(32~)과 겹치지 않는다** — 한 BUNDLE 이라 겹치면 그 자리를 둘이 주장한다.
+   * ★비게 된 절은 `a=inactive` 로 남지만 `mid` 는 쓰고 있는 것이라 비어 있지 않다.
+   */
+  private freeMid(pub: PeerConnectionLike): string {
+    const used = new Set(pub.getTransceivers().map((t) => t.mid).filter((m): m is string => m !== null))
+    for (let n = 0; n < 32; n += 1) {
+      if (!used.has(String(n))) return String(n)
     }
-    const t = pub.addTransceiver(kind, { direction: 'sendonly' })
-    if (prefer !== undefined) applyPreference(t, kind, prefer)
-    return t
+    throw new LinkError('no_confirmed', '보내기 mid 0~31 이 다 찼다 — 클라 몫을 넘어섰다')
   }
 
   /** 연§6-3 — 등록에 실을 ssrc·mid·pt·simulcast 는 내 offer 에서 읽는다(협상 후보와 브라우저가 정한 값). */
@@ -344,6 +387,15 @@ export class PeerLink {
   }
 
   private async unified(pc: PeerConnectionLike, seats: readonly Seat[]): Promise<void> {
+    return this.negotiate(pc, seats)
+  }
+
+  /** ★**자물쇠 밖**이다 — 부르는 쪽이 `serial.run` 안에서 부른다(안에서 또 잡으면 멎는다). */
+  private async negotiate(
+    pc: PeerConnectionLike,
+    seats: readonly Seat[],
+    add?: NewSend,
+  ): Promise<void> {
     if (this.confirmed === null) {
       throw new LinkError('no_confirmed', '확정 answer 가 없다 — 전송로 세우기가 끝나지 않았다')
     }
@@ -352,6 +404,7 @@ export class PeerLink {
       mine: mine.sdp ?? '',
       confirmed: this.confirmed,
       session: { id: sessionIdOf(this.cfg.sfu_id), version: this.recvVersion },
+      ...(add === undefined ? {} : { add }),
     })
     this.recvVersion += 1
     await this.rollbackIfBusy(pc)

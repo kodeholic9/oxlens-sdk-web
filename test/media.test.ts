@@ -293,7 +293,7 @@ test('1pc 는 m-line 을 늘리지 않고 세워 둔 자리를 되쓴다', async
   const s = stand('1pc')
   await s.link.open()
   const before = s.peers.made[0]!.transceivers.length
-  const t = s.link.sender('audio')
+  const t = await s.link.sender('audio')
   assert.equal(s.peers.made[0]!.transceivers.length, before,
     'addTransceiver 를 다시 부르면 최초 한 번만 허용된 클라 offer 경로가 또 필요해진다')
   assert.equal(t.direction, 'sendonly')

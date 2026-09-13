@@ -270,11 +270,29 @@ function offerSection(
   ]
 }
 
+/**
+ * 연§9-10-1 — ★**새 보내기 m-line**(트랙 추가). ★**클라가 절로 붙인다.**
+ *
+ * ★★**브라우저에 `addTransceiver` 를 하지 않는다** — 이 절을 받은 브라우저가
+ * ★**제 트랜시버를 만든다**(RFC 8829 §5.10). 클라가 먼저 만들면 ★**둘이 되어**
+ * 브라우저가 우리 절을 제 것에 안 붙이고 `inactive` 로 답한다(실측 20260913).
+ */
+export interface NewSend {
+  readonly kind: 'audio' | 'video'
+  /** ★**0~31 중 비어 있는 가장 작은 값**(§9-9-3) — 받기 몫(32~)과 겹치지 않는다. */
+  readonly mid: string
+  /** 연§6-3 무전 video — 그 방 슬롯 코덱으로 맞춘다. */
+  readonly prefer?: { codec: string; fmtp?: string }
+  readonly simulcast?: boolean
+}
+
 export interface UnifiedOptions extends SubscribeOptions {
   /** 연§9-10-1 — 보내기 코덱 줄의 출처. 내 offer 가 아니라 직전 협상이 확정한 answer 다. */
   readonly confirmed: string | ParsedSdp
   /** 브라우저가 지금 낸 offer — m-line 구조·extmap 번호·rid 의 출처. */
   readonly mine: string | ParsedSdp
+  /** 이번 협상에서 새로 붙이는 보내기 절. */
+  readonly add?: NewSend
 }
 
 /**
@@ -306,8 +324,11 @@ export function unifiedOffer(seats: readonly Seat[], cfg: ServerConfig, opts: Un
   const seatBy = new Map(ordered.map((s) => [s.mid, s]))
   const was = mine.sections.map((m) => m.mid)
   const seen = new Set(was)
-  // ★아직 그 PC 에 절이 없는 받기(갓 배정된 mid)만 뒤에 붙는다.
-  const fresh = ordered.map((s) => s.mid).filter((m) => !seen.has(m))
+  // ★아직 그 PC 에 절이 없는 받기(갓 배정된 mid)와 ★**새로 붙이는 보내기 절**이 뒤에 온다.
+  const fresh = [
+    ...ordered.map((s) => s.mid).filter((m) => !seen.has(m)),
+    ...(opts.add === undefined || seen.has(opts.add.mid) ? [] : [opts.add.mid]),
+  ]
   const bundle = [...was, ...fresh]
   const sendBy = new Map(send.map((m) => [m.mid, m]))
 
@@ -318,10 +339,66 @@ export function unifiedOffer(seats: readonly Seat[], cfg: ServerConfig, opts: Un
       lines.push(...offerSection(seat, cfg, extmapOf(confirmed, seat.kind), false))
       continue
     }
+    if (opts.add !== undefined && mid === opts.add.mid) {
+      lines.push(...newSendSection(opts.add, confirmed, cfg))
+      continue
+    }
     const m = sendBy.get(mid)
     if (m) lines.push(...sendSection(m, byMid.get(mid), cfg))
   }
   return `${lines.join('\r\n')}\r\n`
+}
+
+/**
+ * 연§9-10-1 — ★**새 보내기 절을 첫 협상 확정본에서 짓는다.**
+ *
+ * ★★**내 offer 에서 가져오면 안 된다** — 브라우저 offer 는 **협상 전 목록**이라 할 수 있는
+ * 코덱이 전부 들어 있다. 그것을 되비추면 ★**answer 가 걸러냈던 코덱이 되살아나고**,
+ * 브라우저가 거기에 자기 answer 를 새로 써서 ★**이미 서버에 보고한 합의를 조용히 갈아치운다.**
+ * ★번호(PT·extmap)도 확정본 것이다 — 새로 매기면 와이어 확장 번호가 조용히 바뀐다.
+ */
+function newSendSection(add: NewSend, confirmed: ParsedSdp, cfg: ServerConfig): string[] {
+  // ★그 kind 의 확정된 절을 본보기로 삼는다 — 없으면 지어낼 재료가 없다.
+  const like = confirmed.sections.find((m) => m.kind === add.kind)
+  if (!like) {
+    throw new SdpError('negotiation', `확정본에 ${add.kind} 절이 없다 — 새 절의 코덱 출처가 없다`)
+  }
+  const attrs: string[] = []
+  const pts: number[] = []
+  // ★무전 video 는 그 방 슬롯 코덱으로 맞춘다(연§6-3) — 그 코덱을 첫 줄로 세운다.
+  const wanted = add.prefer?.codec?.toLowerCase()
+  const order = [...like.pts].sort((a, b) => {
+    const rank = (pt: number) =>
+      wanted !== undefined && like.rtpmap.get(pt)?.toLowerCase().startsWith(wanted) ? 0 : 1
+    return rank(a) - rank(b)
+  })
+  for (const pt of order) {
+    const rtpmap = like.rtpmap.get(pt)
+    if (rtpmap === undefined) continue
+    pts.push(pt)
+    attrs.push(`a=rtpmap:${pt} ${rtpmap}`)
+    const params = like.fmtp.get(pt)
+    if (params !== undefined) attrs.push(`a=fmtp:${pt} ${params}`)
+    if (!like.rtx.has(pt)) {
+      for (const fb of sendFeedback(cfg, add.kind, codecOf(rtpmap))) attrs.push(`a=rtcp-fb:${pt} ${fb}`)
+    }
+  }
+  if (pts.length === 0) {
+    throw new SdpError('negotiation', `확정본 ${add.kind} 절에 코덱이 없다`)
+  }
+  for (const [id, uri] of like.extmap) attrs.push(`a=extmap:${id} ${uri}`)
+  // ★확정본의 것을 `recv` 로 뒤집는다 — 낮은 품질부터(§9-4).
+  if (add.simulcast === true) attrs.push('a=rid:l recv', 'a=rid:h recv', 'a=simulcast:recv l;h')
+  return [
+    `m=${add.kind} ${cfg.ice.port} UDP/TLS/RTP/SAVPF ${pts.join(' ')}`,
+    ...head(cfg, add.mid, false),
+    'a=rtcp-mux',
+    ...(add.kind === 'video' ? ['a=rtcp-rsize'] : []),
+    // ★서버 시각이다 — 서버가 받는다.
+    'a=recvonly',
+    ...attrs,
+    ...tail(cfg),
+  ]
 }
 
 /** 연§9-10-1 — 받기 확장 번호도 그 연결의 확정본을 쓴다. 한 BUNDLE 에 URI 마다 번호가 하나다.
