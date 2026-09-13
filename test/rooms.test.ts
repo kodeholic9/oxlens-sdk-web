@@ -34,13 +34,13 @@ interface Stand {
   fail(op: number, code: number, name: string): void
 }
 
-function stand(): Stand {
+function stand(iceTcp?: boolean): Stand {
   const sock = new FakeSocket()
   const clock = new FakeClock()
 
   const sig = new Signaling(sock, { clock, window: 10 })
   const peers = new FakePeers(DC_ONLY_OFFER)
-  const rooms = new Rooms(() => sig, { peers, clock })
+  const rooms = new Rooms(() => sig, { peers, clock, ...(iceTcp ? { iceTcp: true } : {}) })
   const answered = new Set<string>()
   const pending = (op: number): number[] => sock.sent.map(decode)
     .filter((x) => x.op === op && x.kind === Kind.Request && !answered.has(`${op}:${x.pid}`))
@@ -284,4 +284,22 @@ test('사건별 절차가 있는 실패는 다시 보내지 않는다', async ()
   await assert.rejects(p)
   assert.equal(s.sock.sent.filter((b) => decode(b).op === Op.RoomJoin).length, 1,
     '다른 방을 나가기 전에는 재시도해도 같다')
+})
+
+
+const tcpCfg = { ...CFG, ice: { ...CFG.ice, tcp_port: 7000 } }
+
+test('QA 스위치가 꺼져 있으면 조립한 SDP 에 tcp 후보가 없다', async () => {
+  const s = stand()
+  await joinOnce(s, 'r1', joinBody({ room_id: 'r1', server_config: tcpCfg }))
+  const sdp = s.peers.made.map((p) => p.remoteDescription?.sdp ?? '').join('')
+  assert.ok(sdp.includes('typ host generation'), '★udp 후보는 선다')
+  assert.ok(!sdp.includes('tcptype'), '★서버가 알려도 안 쓰면 아예 모른다')
+})
+
+test('QA 스위치를 켜면 조립한 SDP 에 tcptype passive 가 선다', async () => {
+  const s = stand(true)
+  await joinOnce(s, 'r1', joinBody({ room_id: 'r1', server_config: tcpCfg }))
+  const sdp = s.peers.made.map((p) => p.remoteDescription?.sdp ?? '').join('')
+  assert.ok(sdp.includes('tcptype passive'), '★3층이 ICE-TCP 를 잴 수 있다')
 })

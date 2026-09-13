@@ -6,6 +6,8 @@ import { MSection, ParsedSdp, clockOf, codecOf, parse, rtxOf } from './parse.js'
 
 /** 연§9-3 — 후보가 하나뿐이라 우선순위는 호스트 고정값이다. */
 const HOST_PRIORITY = 2113937151
+// RFC 6544 §4.2 — TCP 는 UDP 아래다. 둘 다 서면 UDP 가 이겨야 한다.
+const TCP_HOST_PRIORITY = 1518280447
 const CNAME = 'ox-sfu'
 const PTT_STREAM = 'ox-ptt'
 /** 연§9-5 — 안 쓰는 m-line 은 port 7 이다. 0 을 쓰면 BUNDLE 태그가 옮겨가 전송이 깨진다. */
@@ -82,12 +84,24 @@ function head(cfg: ServerConfig, mid: string, subscribe: boolean): string[] {
   ]
 }
 
-/** 연§9-3 — 후보 한 줄이 전부이고 end-of-candidates 가 그것을 형식으로 닫는다. */
+/**
+ * 연§9-3 — 후보 줄과 end-of-candidates 가 그것을 형식으로 닫는다.
+ *
+ * ★`tcp_port` 가 실려 있을 때만 TCP 후보가 한 줄 더 붙는다(RFC 6544). 서버가 `passive`
+ * 이고 브라우저가 `active` 로 건다. ★**우선순위를 UDP 아래로 둔다** — 둘 다 서면 UDP 가
+ * 이겨야 한다(RFC 6544 §4.2). 이 칸을 지우는 쪽은 `Rooms.attach` 다.
+ */
 function tail(cfg: ServerConfig): string[] {
-  return [
+  const lines = [
     `a=candidate:1 1 udp ${HOST_PRIORITY} ${cfg.ice.ip} ${cfg.ice.port} typ host generation 0`,
-    'a=end-of-candidates',
   ]
+  if (cfg.ice.tcp_port !== undefined) {
+    lines.push(
+      `a=candidate:2 1 tcp ${TCP_HOST_PRIORITY} ${cfg.ice.ip} ${cfg.ice.tcp_port} typ host tcptype passive generation 0`,
+    )
+  }
+  lines.push('a=end-of-candidates')
+  return lines
 }
 
 /**

@@ -56,6 +56,13 @@ export interface RoomsOptions {
   readonly pcMode?: '1pc' | '2pc'
   /** 정책서 §4-1 `opusFmtpDefault` — 클라가 조립하는 answer 의 opus 선호(연§9-4 예외). */
   readonly opusFmtpDefault?: OpusFmtpPrefs
+  /**
+   * ★**QA 전용** — 서버가 알린 `ice.tcp_port` 를 후보로 낼지. 기본 `false`.
+   *
+   * 웹 상용은 UDP 한 줄이 계약이다(`20260913c` §5). 이 스위치는 3층이 ICE-TCP 를
+   * 재기 위한 것이고, 꺼져 있으면 SDK 는 그 칸을 **아예 들고 있지 않다**(`attach`).
+   */
+  readonly iceTcp?: boolean
 }
 
 export class Rooms {
@@ -267,7 +274,15 @@ export class Rooms {
     return link
   }
 
-  private async attach(cfg: ServerConfig): Promise<Server> {
+  /** ★스위치가 꺼져 있으면 `tcp_port` 를 여기서 떨군다 — 아래는 그 칸을 모른 채 조립한다. */
+  private admit(cfg: ServerConfig): ServerConfig {
+    if (this.opts.iceTcp === true || cfg.ice.tcp_port === undefined) return cfg
+    const { tcp_port: _dropped, ...ice } = cfg.ice
+    return { ...cfg, ice }
+  }
+
+  private async attach(raw: ServerConfig): Promise<Server> {
+    const cfg = this.admit(raw)
     const known = this.servers.get(cfg.sfu_id)
     // 연§6-2 — 자격이 보관값과 다르면 그 서버 연결을 새로 세운다.
     if (known && known.cfg.ice.publish_ufrag === cfg.ice.publish_ufrag) {

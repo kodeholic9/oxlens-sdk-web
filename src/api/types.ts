@@ -105,6 +105,13 @@ export interface ClientOptions {
   readonly pcMode?: '1pc' | '2pc' | 'auto'
   /** 클라 프로토콜 세대. 이 SDK 판 = 1 (연§6-1). */
   readonly clientVer?: number
+  /**
+   * ★**QA 전용** — 서버가 알린 `ice.tcp_port` 를 ICE 후보로 낸다. 기본 `false`.
+   *
+   * 상용 웹은 UDP 한 줄이 계약이다. 이 스위치는 3층이 ICE-TCP(RFC 6544)를 재기 위한
+   * 것이고, 켜도 UDP 후보가 함께 서며 우선순위가 UDP 아래라 평시에는 UDP 가 이긴다.
+   */
+  readonly iceTcp?: boolean
   /** pagehide/beforeunload 에 close() 시도. 기본 true (§12-1). 선례: LiveKit disconnectOnPageLeave */
   readonly disconnectOnPageLeave?: boolean
   /** RemoteTrack.attach() 한 영상의 크기·가시성으로 setLayer(paused·spatial·priority)를 대신 한다. 기본 true (§6-2). 선례: LiveKit adaptiveStream */

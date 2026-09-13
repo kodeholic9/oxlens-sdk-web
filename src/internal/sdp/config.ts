@@ -4,6 +4,8 @@
 export interface IceConfig {
   readonly ip: string
   readonly port: number
+  /** 연§4-2 — 그 포트에서 TCP 도 들을 때만 실린다(RFC 6544). 없으면 그 서버는 UDP 뿐이다. */
+  readonly tcp_port?: number
   readonly publish_ufrag: string
   readonly publish_pwd: string
   readonly subscribe_ufrag?: string

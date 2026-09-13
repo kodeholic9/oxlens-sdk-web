@@ -123,6 +123,7 @@ export class Client extends Bus<ClientEvents> implements OxLensClient {
     this.roomsDomain = new Rooms(() => this.requireSignaling(), {
       peers, clock: this.clock, pcMode: mode,
       ...(opts.opusFmtpDefault ? { opusFmtpDefault: opts.opusFmtpDefault } : {}),
+      ...(opts.iceTcp === true ? { iceTcp: true } : {}),
     })
     this.devicePort = wiring.devices ?? requireBrowserDevices()
     this.playback = new Playback(wiring.audioOut ?? defaultAudioOut())

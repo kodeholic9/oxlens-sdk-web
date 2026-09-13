@@ -526,3 +526,24 @@ test('연§9-2 — 조립된 SDP 의 o= 줄이 실제로 숫자를 싣는다', (
     assert.match(o, /^o=- [0-9]+ [0-9]+ IN IP4 /, `o= 줄이 RFC 4566 꼴이 아니다: ${o}`)
   }
 })
+
+test('연§9-3 RFC 6544 — tcp_port 가 없으면 후보는 udp 한 줄이다', () => {
+  const got = section(publishAnswer(BROWSER_OFFER, CFG, { session: { id: '1', version: 1 } }), 0)
+  const cands = got.filter((l) => l.startsWith('a=candidate:'))
+  assert.deepEqual(cands, ['a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0'])
+})
+
+test('연§9-3 RFC 6544 — tcp_port 가 실리면 tcptype passive 가 한 줄 더 선다', () => {
+  const cfg = { ...CFG, ice: { ...CFG.ice, tcp_port: 7000 } }
+  const got = section(publishAnswer(BROWSER_OFFER, cfg, { session: { id: '1', version: 1 } }), 0)
+  const cands = got.filter((l) => l.startsWith('a=candidate:'))
+  assert.deepEqual(cands, [
+    'a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0',
+    'a=candidate:2 1 tcp 1518280447 203.0.113.10 7000 typ host tcptype passive generation 0',
+  ])
+  const udpPrio = Number(cands[0]!.split(' ')[3])
+  const tcpPrio = Number(cands[1]!.split(' ')[3])
+  assert.ok(tcpPrio < udpPrio, '★RFC 6544 §4.2 — TCP 는 UDP 아래다')
+  const closes = got.indexOf('a=end-of-candidates')
+  assert.ok(closes > got.indexOf(cands[1]!), '★닫는 줄이 두 후보 뒤에 온다')
+})
