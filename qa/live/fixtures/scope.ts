@@ -20,7 +20,8 @@ export class Scope {
 
   /** ★참가자는 이 문으로만 연다 — 회수 목록에 들어가야 방이 비워진다. */
   async open(
-    context: BrowserContext, opts: { userId: string; priority?: number; pcMode?: '1pc' | '2pc' },
+    context: BrowserContext,
+    opts: { userId: string; priority?: number; pcMode?: '1pc' | '2pc'; iceTcp?: boolean; dropUdpCandidate?: boolean },
   ): Promise<Participant> {
     const page = await context.newPage()
     // ★누구의 콘솔인지 붙인다 — 두 페이지가 섞이면 증거가 증거 노릇을 못 한다.
@@ -41,7 +42,11 @@ export class Scope {
       ) as Promise<T>,
     }
     await part.call('connect', {
-      base: BASE, token: await userToken(opts.userId), ...(opts.pcMode ? { pcMode: opts.pcMode } : {}),
+      base: BASE,
+      token: await userToken(opts.userId),
+      ...(opts.pcMode ? { pcMode: opts.pcMode } : {}),
+      ...(opts.iceTcp ? { iceTcp: true } : {}),
+      ...(opts.dropUdpCandidate ? { dropUdpCandidate: true } : {}),
     })
     this.parts.push(part)
     return part

@@ -91,10 +91,23 @@ function head(cfg: ServerConfig, mid: string, subscribe: boolean): string[] {
  * 이고 브라우저가 `active` 로 건다. ★**우선순위를 UDP 아래로 둔다** — 둘 다 서면 UDP 가
  * 이겨야 한다(RFC 6544 §4.2). 이 칸을 지우는 쪽은 `Rooms.attach` 다.
  */
+/**
+ * ★**QA 전용 — 상용 경로에서 절대 부르지 않는다.**
+ *
+ * `false` 면 UDP 후보 줄을 빼서 **TCP 만 남긴다**. 브라우저가 ICE-TCP 를 *할 수 있는가*
+ * 와 *경쟁에서 지는가* 를 가르는 실험에만 쓴다(20260913 실측: Chrome 이 passive 후보를
+ * 받고도 TCP 연결을 시도하지 않는다).
+ */
+let qaUdpCandidate = true
+
+export function __qaSetUdpCandidate(on: boolean): void {
+  qaUdpCandidate = on
+}
+
 function tail(cfg: ServerConfig): string[] {
-  const lines = [
-    `a=candidate:1 1 udp ${HOST_PRIORITY} ${cfg.ice.ip} ${cfg.ice.port} typ host generation 0`,
-  ]
+  const lines = qaUdpCandidate
+    ? [`a=candidate:1 1 udp ${HOST_PRIORITY} ${cfg.ice.ip} ${cfg.ice.port} typ host generation 0`]
+    : []
   if (cfg.ice.tcp_port !== undefined) {
     lines.push(
       `a=candidate:2 1 tcp ${TCP_HOST_PRIORITY} ${cfg.ice.ip} ${cfg.ice.tcp_port} typ host tcptype passive generation 0`,

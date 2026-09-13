@@ -1,6 +1,7 @@
 // author: kodeholic (powered by Claude)
 // 3층 어댑터 — spec 은 이 표면만 쓴다. SDK 내부를 직접 만지지 않는다.
 import { createClient } from '../dist/index.js'
+import { __qaSetUdpCandidate } from '../dist/internal/sdp/build.js'
 
 // ★시험 전용 관측 — 산 연결의 손잡이를 여기서 잡는다. 제품에 구멍을 내지 않으려고
 //   페이지가 생성자를 감싼다. 갈래B 가 "브라우저에게 offer 를 시키면 어떻게 되나" 를 재현하는 자리다.
@@ -31,11 +32,19 @@ function note(kind, detail) {
 // 시험에서는 하니스(node)가 그 자리를 맡아 토큰을 넣어 준다.
 
 const qa = {
-  async connect({ base, token, pcMode }) {
+  async connect({ base, token, pcMode, iceTcp, dropUdpCandidate }) {
+    // ★QA 전용 실험 손잡이 — 브라우저가 ICE-TCP 를 할 수 있는지 가른다.
+    __qaSetUdpCandidate(!dropUdpCandidate)
     state.base = base
     state.token = token
     // 연§9-10-2 — `pc_mode` 는 붙기 전에 정해진다. 시험이 모드를 지정하는 자리가 여기다.
-    const client = createClient(pcMode ? { base, token, pcMode } : { base, token })
+    // ★`iceTcp` 는 QA 전용(RFC 6544) — 서버가 알린 tcp_port 를 후보로 낼지.
+    const client = createClient({
+      base,
+      token,
+      ...(pcMode ? { pcMode } : {}),
+      ...(iceTcp ? { iceTcp: true } : {}),
+    })
     state.client = client
     client.on('track', (room, t) => {
       state.tracks.set(t.id, { track: t, roomId: room.id })
@@ -133,6 +142,82 @@ const qa = {
       out.push({
         id: t.id, kind: t.kind, state: t.state, duplex: t.duplex, owner: t.owner,
         server: t.server ?? null, packets,
+      })
+    }
+    return out
+  },
+
+  /**
+   * ★전송로 후보쌍 — RFC 6544 축(구멍 A). `sender.getStats()` 가 그 transport 의
+   * candidate-pair·local/remote-candidate 를 함께 낸다.
+   *
+   * ★**prune 된 쌍도 여기 남는다** — `state` 와 `requestsSent` 가 *"STUN 을 보내기나
+   * 했는가"* 를 말한다. 그것이 판정의 축이다.
+   */
+  /** ★진단 — 클라가 조립해 심은 remote SDP 의 후보 줄. */
+  remoteCandidateLines() {
+    const out = []
+    for (const server of state.client.roomsDomain.allServers()) {
+      for (const pc of server.link.peerList()) {
+        const sdp = pc.remoteDescription?.sdp ?? ''
+        for (const l of sdp.split(/\r?\n/)) if (l.startsWith('a=candidate:')) out.push(l)
+      }
+    }
+    return out
+  },
+
+  /** ★진단 — 서버가 무엇을 알렸나. tcp_port 가 없으면 클라 탓이 아니다. */
+  serverCfg() {
+    return state.client.roomsDomain.allServers().map((s) => ({ sfuId: s.sfuId, ice: s.cfg.ice }))
+  },
+
+  /** ★진단 — 어느 후보가 실제로 섰는지. 쌍이 안 서면 후보부터 없는지 가른다. */
+  async iceCandidates() {
+    const out = []
+    for (const server of state.client.roomsDomain.allServers()) {
+      for (const report of await server.link.statsAll()) {
+        for (const row of report.values()) {
+          if (row.type === 'local-candidate' || row.type === 'remote-candidate') {
+            out.push({
+              side: row.type, protocol: row.protocol ?? null, port: row.port ?? null,
+              candidateType: row.candidateType ?? null, tcpType: row.tcpType ?? null,
+            })
+          }
+        }
+      }
+    }
+    return out
+  },
+
+  async icePairs() {
+    // ★track.getStats() 는 ssrc 로 거른다 — candidate-pair 는 ssrc 가 없어 걸러진다.
+    //   전량은 link.statsAll() 이다. 어댑터라 내부에 닿아도 되고, spec 은 이 표면만 쓴다.
+    const rows = new Map()
+    for (const server of state.client.roomsDomain.allServers()) {
+      for (const report of await server.link.statsAll()) {
+        for (const [id, row] of report) rows.set(id, row)
+      }
+    }
+    const cands = new Map()
+    for (const row of rows.values()) {
+      if (row.type === 'local-candidate' || row.type === 'remote-candidate') cands.set(row.id, row)
+    }
+    const out = []
+    for (const row of rows.values()) {
+      if (row.type !== 'candidate-pair') continue
+      const local = cands.get(row.localCandidateId)
+      const remote = cands.get(row.remoteCandidateId)
+      out.push({
+        state: row.state ?? null,
+        nominated: row.nominated ?? null,
+        requestsSent: row.requestsSent ?? 0,
+        responsesReceived: row.responsesReceived ?? 0,
+        bytesSent: row.bytesSent ?? 0,
+        localProtocol: local?.protocol ?? null,
+        localType: local?.candidateType ?? null,
+        remoteProtocol: remote?.protocol ?? null,
+        remotePort: remote?.port ?? null,
+        remoteTcpType: remote?.tcpType ?? null,
       })
     }
     return out
