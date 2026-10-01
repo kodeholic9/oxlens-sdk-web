@@ -1,3 +1,6 @@
+// author: kodeholic (powered by Claude)
+// spec: v1.2 · 연§5-0 · §5-1 · 정§16-1-1 · §18-1 · model: claude-opus-5-5
+
 import { execFileSync } from 'node:child_process'
 import dgram from 'node:dgram'
 import fs from 'node:fs'
