@@ -21,6 +21,7 @@ const state = {
   tracks: new Map(),
   events: [],
   elements: new Map(),
+  speakers: new Map(),
 }
 
 function note(kind, detail) {
@@ -68,7 +69,10 @@ const qa = {
     const room = await state.client.join(roomId, mode ? { mode } : {})
     room.on('track', (t) => note('roomTrack', { room: roomId, id: t.id }))
     room.ptt.on('state', (st) => note('ptt', { room: roomId, phase: st.phase, trusted: st.trusted }))
-    room.ptt.on('speaker', (e) => note('speaker', { room: roomId, userId: e.userId }))
+    room.ptt.on('speaker', (e) => {
+      state.speakers.set(roomId, e.userId ?? null)
+      note('speaker', { room: roomId, userId: e.userId })
+    })
     room.on('resync', () => note('resync', { room: roomId }))
     room.on('message', (m) => note('message', { room: roomId, userId: m.userId, content: m.content }))
     room.on('error', (e) => note('roomError', { room: roomId, name: e.name, code: e.code }))
@@ -106,6 +110,29 @@ const qa = {
     const st = state.client.rooms.get(roomId)?.ptt.state
     return st ? { phase: st.phase, trusted: st.trusted, canRequest: st.canRequest, remainingSec: st.remainingSec ?? null } : null
   },
+
+  // 수동 시험(qa/lan) — 발언권 상태 전량과 설정 손잡이. SDK§5-2·§5-3 표면을 그대로 낸다.
+  pttFull(roomId) {
+    const p = state.client?.rooms.get(roomId)?.ptt
+    return p ? { ...p.state, input: p.input, wantPriority: p.priority } : null
+  },
+
+  pttSet(roomId, { input, priority } = {}) {
+    const p = state.client.rooms.get(roomId).ptt
+    if (input !== undefined) p.input = input
+    if (priority !== undefined) p.priority = priority
+    return { input: p.input, priority: p.priority }
+  },
+
+  async pttEnable(roomId) { await state.client.rooms.get(roomId).ptt.enable() },
+
+  keepWarm(roomId, ms) { state.client.rooms.get(roomId).ptt.keepWarm(ms) },
+
+  speaker(roomId) { return state.speakers.get(roomId) ?? null },
+
+  speakingRoom() { return state.client?.speakingRoom?.id ?? null },
+
+  mark(label) { note('mark', { label }) },
 
   /** 연§5-3 — SDK 표면으로 부른다. 페이지 origin 이 hub 와 다르면 CORS 가 없으면 막힌다. */
   async listRooms() {

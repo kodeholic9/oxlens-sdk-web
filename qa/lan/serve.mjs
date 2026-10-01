@@ -77,7 +77,9 @@ function isHiddenOrOutside(rel, file) {
 
 function serveStatic(req, res, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return void res.writeHead(405).end()
-  const rel = decodeURIComponent(url.pathname) === '/' ? '/qa/lan/index.html' : decodeURIComponent(url.pathname)
+  if (url.pathname === '/') return void res.writeHead(302, { location: '/qa/lan/' }).end()
+  const path0 = decodeURIComponent(url.pathname)
+  const rel = path0.endsWith('/') ? `${path0}index.html` : path0
   const file = path.resolve(ROOT, '.' + rel)
   if (isHiddenOrOutside(rel, file)) return void res.writeHead(404).end()
   fs.stat(file, (err, st) => {

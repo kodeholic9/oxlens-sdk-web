@@ -1,0 +1,123 @@
+<!doctype html>
+<!-- author: kodeholic (powered by Claude) -->
+<!-- spec: v1.2 · 연§2-6 · SDK§3 · §4 · §5 · model: claude-opus-5-5 -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>oxlens 수동 시험</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --ink: #1c1f24; --mute: #6b7280; --line: #e3e5e9;
+    --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --talk: #dc2626; --idle: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111317; --card: #1b1e24; --ink: #e8eaee; --mute: #9aa1ad; --line: #2b2f37; }
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 -apple-system, system-ui, sans-serif; padding-bottom: 130px; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--card); border-bottom: 1px solid var(--line); padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+  header .dev { font-weight: 700; font-size: 18px; }
+  .pill { padding: 2px 8px; border-radius: 999px; background: var(--line); font-size: 13px; }
+  .pill.ok { background: var(--ok); color: #fff; } .pill.warn { background: var(--warn); color: #fff; } .pill.bad { background: var(--bad); color: #fff; }
+  main { padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; max-width: 720px; margin: 0 auto; }
+  section { min-width: 0; overflow-wrap: anywhere; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  h2 { margin: 0 0 8px; font-size: 14px; color: var(--mute); font-weight: 600; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+  input, select, button { font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  input { min-width: 0; flex: 1; }
+  button { cursor: pointer; }
+  button.primary { background: var(--idle); color: #fff; border-color: transparent; }
+  button:disabled { opacity: .45; }
+  .room { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-top: 8px; }
+  .room.sel { outline: 2px solid var(--idle); }
+  .room .title { display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .phase { font-size: 22px; font-weight: 800; }
+  .phase.has_permission { color: var(--talk); } .phase.queued, .phase.pending_request, .phase.pending_release { color: var(--warn); }
+  .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; font-size: 13px; color: var(--mute); }
+  .kv b { color: var(--ink); font-weight: 600; word-break: break-all; }
+  #log { height: 220px; overflow: auto; font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; background: var(--bg); border-radius: 6px; padding: 6px; }
+  #ptt { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--card); border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
+  #ptt button.big { flex: 1; height: 86px; border-radius: 14px; font-size: 22px; font-weight: 800; background: var(--idle); color: #fff; border: 0; user-select: none; -webkit-user-select: none; touch-action: none; }
+  #ptt button.big.on { background: var(--talk); }
+  #ptt .side { font-size: 12px; color: var(--mute); width: 92px; }
+  #banner { display: none; background: var(--warn); color: #fff; padding: 10px 12px; text-align: center; font-weight: 700; }
+  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+  #tiles video { width: 100%; background: #000; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div id="banner">탭해서 소리 켜기</div>
+<header>
+  <span class="dev" id="devName">?</span>
+  <span class="pill" id="sess">disconnected</span>
+  <span class="pill" id="spk">발언 방 —</span>
+  <span class="pill" id="clock">±? ms</span>
+  <button id="markBtn">표시</button>
+</header>
+
+<main>
+  <section>
+    <h2>세션</h2>
+    <div class="row">
+      <select id="dev"><option>A</option><option>B</option><option>C</option><option>M</option></select>
+      <input id="user" placeholder="user_id (비우면 단말 이름)">
+    </div>
+    <div class="row">
+      <select id="pc"><option value="">pcMode 자동</option><option value="1pc">1pc</option><option value="2pc">2pc</option></select>
+      <button class="primary" id="connectBtn">접속</button>
+      <button id="closeBtn">종료</button>
+    </div>
+    <div class="kv" id="sessKv"></div>
+  </section>
+
+  <section>
+    <h2>방</h2>
+    <div class="row">
+      <input id="roomId" value="lan_ch1">
+      <button id="joinTalk" class="primary">참여</button>
+      <button id="joinListen">청취</button>
+    </div>
+    <div id="rooms"></div>
+  </section>
+
+  <section>
+    <h2>발언 설정 (선택한 방)</h2>
+    <div class="row">
+      <select id="input"><option value="hold">hold(누르는 동안)</option><option value="toggle">toggle(눌러서 켜고 끔)</option></select>
+      <input id="prio" type="number" min="0" max="255" value="0" style="max-width:90px">
+      <button id="applyPtt">적용</button>
+    </div>
+    <div class="row">
+      <button id="enableMic">마이크 데우기(enable)</button>
+      <button id="warm60">keepWarm 60s</button>
+    </div>
+    <div class="kv" id="pttKv"></div>
+  </section>
+
+  <section>
+    <h2>수신</h2>
+    <div id="tiles"></div>
+    <div class="kv" id="rxKv"></div>
+  </section>
+
+  <section>
+    <h2>로그</h2>
+    <div class="row">
+      <button id="uploadBtn">로그 올리기</button>
+      <span id="uploadRes" class="pill">—</span>
+    </div>
+    <div id="log"></div>
+  </section>
+</main>
+
+<div id="ptt">
+  <div class="side" id="pttSide">방 선택 전</div>
+  <button class="big" id="pttBtn">PTT</button>
+</div>
+
+<script type="module" src="../qa.js"></script>
+<script type="module" src="./lan.js"></script>
+</body>
+</html>
