@@ -15,7 +15,8 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "node test/run.mjs",
     "gate": "node scripts/gate.mjs",
-    "gate:live": "node scripts/gate.mjs --live"
+    "gate:live": "node scripts/gate.mjs --live",
+    "serve:lan": "node qa/lan/serve.mjs"
   },
   "license": "UNLICENSED",
   "private": true,
