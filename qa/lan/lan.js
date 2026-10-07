@@ -183,7 +183,7 @@ function renderPtt() {
     ? Math.max(0, st.remainingSec - Math.floor((Date.now() - st.talkingSince) / 1000)) : null
   kv($('pttKv'), [
     ['방', id], ['phase', st.phase], ['남은 시간', remain !== null ? `${remain}s / ${st.remainingSec}s` : null],
-    ['queue', st.queue ? `${st.queue.position}/${st.queue.size}` : null], ['acceptPending', st.acceptPending],
+    ['queue', st.queue ? `${st.queue.position}(p${st.queue.priority})` : null], ['acceptPending', st.acceptPending],
     ['canRequest', st.canRequest], ['trusted', st.trusted], ['mic', st.mic], ['input', st.input],
     ['우선순위(요청/허가)', `${st.wantPriority} / ${st.priority ?? '—'}`],
     ['lastDeny', causeText(st.lastDeny, DENY_CAUSE)], ['lastRevoke', causeText(st.lastRevoke, REVOKE_CAUSE)], ['lastEnd', st.lastEnd],

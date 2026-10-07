@@ -64,10 +64,8 @@ export async function main(): Promise<void> {
   active.ptt.on('state', (s) => {
     app.ui.ptt(active.id, s)                                                          // 버튼 활성 = canRequest ∨ has_permission ∨ queued
     if (!s.trusted) app.ui.warn(`${active.id}: floor display untrusted (DC down)`)   // 연§7-7-8
-    if (s.draining) app.ui.warn(`${active.id}: revoked — audio drains for up to 3s`)  // 연§7-7-6 4
     if (s.lastRevoke?.cause === 2) app.ui.warn('talked too long — wait T9 then press again')
     if (s.lastRevoke?.cause === 4) app.ui.warn('pre-empted — pressing again will be pre-empted too')
-    if (s.lastEnd === 't1_reclaimed') app.ui.warn('server reclaimed the floor (no audio sent)')
   })
 
   window.addEventListener('keydown', (ev) => {

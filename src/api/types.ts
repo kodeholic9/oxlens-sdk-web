@@ -347,8 +347,8 @@ export interface PttState {
   readonly remainingSec?: number
   /** 서버가 허가한 우선순위 */
   readonly priority?: number
-  /** QUEUE_INFO 로 갱신. queued 진입 때 한 번 묻고, 30초(연§8-4 T-queuepos) 소식 없으면 다시 묻는다(§5-3). */
-  readonly queue?: { readonly position: number; readonly size: number }
+  /** QUEUE_INFO 의 대기 정보 — 순번(1부터 · 254 = 큐에 없음 · 255 = 미상)과 대기 우선순위. 앱이 queuePosition() 으로 물을 때 갱신된다. */
+  readonly queue?: { readonly position: number; readonly priority: number }
   /** ★큐 승계 GRANTED 뒤 T132 가 도는 중 — toggle 의 press() 가 수락이 되는 창. 그 전의 queued 에서 클릭은 철회다. */
   readonly acceptPending: boolean
   /** ★SDK 가 오디오를 흘리기 시작한 시각(ms epoch) — remainingSec 카운트다운의 시작점(연§8-4 T2 = 첫 RTP). has_permission 밖에서는 없다. */
@@ -362,8 +362,6 @@ export interface PttState {
   readonly canRequest: boolean
   /** 마지막 press 의 출처 (Apple didBeginTransmittingFrom 의 짝) */
   readonly source?: TransmitSource
-  /** ★REVOKE 뒤 T3 3초 — 마이크는 껐는데 소리는 나간다 (연§7-7-6 4). */
-  readonly draining: boolean
   /** ★false = DC 가 끊겨 이 표시를 믿을 수 없다 (연§7-7-8). 미디어 지표로는 안 잡힌다. */
   readonly trusted: boolean
   readonly mic: MicPower
@@ -397,17 +395,19 @@ export interface Ptt extends Emitter<PttEvents> {
   enable(opts?: MicrophoneOptions & { readonly track?: MediaStreamTrack }): Promise<void>
   /**
    * 발언 의지. (등록 없으면 등록) → (발언 방이 아니면 전환) → REQUEST. resolve = 요청이 나갔다(허가는 'granted').
-   * 상태별: pending_request = 무시 · queued(T132 전) = 무시 · queued(acceptPending) = 수락 · pending_release = 확인 뒤 새 요청 ·
-   * has_permission = 새 REQUEST(서버 재허가로 remainingSec 갱신, 연§11-5). joining/rebuilding 이면 기다린다.
+   * 상태별: off·no_permission = REQUEST · queued(acceptPending, toggle) = 수락 · 그 밖(pending_request · has_permission ·
+   * pending_release · 승계 허가 전 queued) = 무시 — 그 상태에 누름 절이 없다(TS 24.380 6.2.4). joining/rebuilding 이면 기다린다.
    * reject = device · limit(4002) · negotiation · state(3002·STATE_*) · bug(1006 슬롯 코덱 불일치) · closed.
    * toggle 앱은 state.phase·acceptPending 으로 press/release 를 갈라야 한다 — 로컬 플래그로 반전하면 큐 승계 뒤 대기를 철회한다.
    */
   press(opts?: { readonly source?: TransmitSource }): Promise<void>
   /**
    * 발언 끝 / 대기 철회 / ★허가 전에 뗌(pending_request → RELEASE → pending_release, 연§7-7-1-1). resolve = RELEASE 가 나갔다.
-   * 서버 건너기 열차 중이면 열차를 멈춘다. 큐 철회는 확인 사건이 없어 표시는 즉시 no_permission·lastEnd 'released'(연§7-7-2-3).
+   * 서버 건너기 열차 중이면 열차를 멈춘다. 큐 철회도 pending_release 로 가고 서버의 TAKEN·IDLE 이 확인이다(TS 24.380 6.2.4.9.6).
    */
   release(): Promise<void>
+  /** 대기 순번을 묻는다(TS 24.380 6.2.4.9.9). queued 이고 승계 허가 전일 때만 나간다. 답은 'queued' 이벤트의 state.queue 다. */
+  queuePosition(): void
   /** cold 진입을 미룬다(ms). 0 = 기본값(정책서). §5-4 */
   keepWarm(ms: number): void
   /**

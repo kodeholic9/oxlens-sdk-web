@@ -31,11 +31,10 @@ export interface PttHost {
 }
 
 export class PttHandle extends Bus<PttEvents> implements Ptt {
-  input: 'hold' | 'toggle' = 'hold'
   private mic: LocalTrack | null = null
   private cam: LocalTrack | null = null
   /** SDK§5-4 — `hot`(허가 중) → `hot_standby`(트랙 유지) → `cold`(장치 반납).
-   *  SDK§7-3 — `trusted`·`draining` 은 이 표면이 내는 「지금 왜 이런가」 상태다. */
+   *  SDK§7-3 — `trusted` 는 이 표면이 내는 「지금 왜 이런가」 상태다. */
   private power: MicPower = 'hot_standby'
   /** 정책서 `micColdAfterMs` 기본 30초. `keepWarm(ms)` 가 이 값을 민다(0 = 기본). */
   private coldAfterMs = COLD_AFTER_MS
@@ -55,13 +54,15 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
   get priority(): number { return this.floor.priority }
   set priority(v: number) { this.floor.priority = v }
 
+  get input(): 'hold' | 'toggle' { return this.floor.input }
+  set input(v: 'hold' | 'toggle') { this.floor.input = v }
+
   get state(): PttState {
     const f = this.floor
     return {
       phase: f.phase,
       acceptPending: f.acceptPending,
       canRequest: f.canRequest,
-      draining: f.draining,
       trusted: f.trusted,
       mic: this.power,
       ...(f.remainingSec === undefined ? {} : { remainingSec: f.remainingSec }),
@@ -110,6 +111,11 @@ export class PttHandle extends Bus<PttEvents> implements Ptt {
   release(): Promise<void> {
     this.run(this.floor.release(this.clock.now()))
     return Promise.resolve()
+  }
+
+  /** 6.2.4.9.9 — 대기 순번을 묻는다. queued 이고 승계 허가 전일 때만 나간다. 답은 'queued' 이벤트다. */
+  queuePosition(): void {
+    this.run(this.floor.queuePosition(this.clock.now()))
   }
 
   /** DC 가 프레임을 물어 왔다. 방 가르기는 상태기가 0x1D 로 한다. */
