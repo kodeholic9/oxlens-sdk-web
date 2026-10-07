@@ -27,7 +27,10 @@ await build({
   outdir: out,
   outExtension: { '.js': '.mjs' },
   sourcemap: 'inline',
-  define: { __SPEC_VECTORS__: JSON.stringify(vectors) },
+  define: {
+    __SPEC_VECTORS__: JSON.stringify(vectors),
+    __FLOOR_TRACE__: JSON.stringify(resolve(here, 'data', 'floor_trace.json')),
+  },
 })
 
 const built = readdirSync(out).filter((f) => f.endsWith('.mjs')).map((f) => join(out, f))
