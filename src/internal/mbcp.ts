@@ -32,7 +32,6 @@ export const Tlv = {
   Cause: 2,
   QueueInfo: 3,
   Speaker: 4,
-  QueueSize: 7,
   Seq: 8,
   AckType: 12,
   PrevSpeaker: 0x1a,
