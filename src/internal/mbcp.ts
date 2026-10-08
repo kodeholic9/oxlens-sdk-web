@@ -54,7 +54,11 @@ export interface Message {
 const enc = new TextEncoder()
 const dec = new TextDecoder()
 
+/** 원문 Table 8.2.2.1-1 — subtype 이 x???? 꼴인 종류만 A 비트를 쓸 수 있다 */
+const ACK_ALLOWED = new Set<number>([Type.Granted, Type.Taken, Type.Deny, Type.Release, Type.Idle, Type.QueueInfo])
+
 export function encode(msg: Message): Uint8Array {
+  if (msg.ack && !ACK_ALLOWED.has(msg.type)) throw new RangeError(`종류 ${msg.type} 는 A 비트를 쓸 수 없다(원문 Table 8.2.2.1-1)`)
   let size = 2
   for (const f of msg.fields) size += 2 + f.value.length
   const out = new Uint8Array(size)
@@ -112,6 +116,12 @@ export function u8(msg: Message, id: number): number | undefined {
   return v === undefined || v.length < 1 ? undefined : v[0]
 }
 
+/** '값 + 예비' 꼴 읽기 — 길이가 2 가 아니면 없는 것이다(원문 8.1.4 — 형식이 틀린 선택 칸은 무시) */
+export function u8spare(msg: Message, id: number): number | undefined {
+  const v = field(msg, id)
+  return v === undefined || v.length !== 2 ? undefined : v[0]
+}
+
 export function u16(msg: Message, id: number): number | undefined {
   const v = field(msg, id)
   return v === undefined || v.length < 2 ? undefined : (v[0]! << 8) | v[1]!
@@ -123,6 +133,11 @@ export function str(id: number, value: string): Field {
 
 export function byte(id: number, value: number): Field {
   return { id, value: Uint8Array.of(value & 0xff) }
+}
+
+/** 원문 '값 1옥텟 + 예비 1옥텟' 꼴 — Floor Priority(Table 8.2.3.2-1) · Message Type(Table 8.2.3.14-1). 길이 2 */
+export function byteSpare(id: number, value: number): Field {
+  return { id, value: Uint8Array.of(value & 0xff, 0) }
 }
 
 export function short(id: number, value: number): Field {

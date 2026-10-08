@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  DC_MAX_PAYLOAD, Tlv, Type, byte, decode, encode, frame, short, str, text, u16, u8, unframe,
+  DC_MAX_PAYLOAD, Tlv, Type, byte, byteSpare, decode, encode, frame, short, str, text, u16, u8, u8spare, unframe,
 } from '../src/internal/mbcp.js'
 
 declare const __SPEC_VECTORS__: string
@@ -49,6 +49,17 @@ test('규격 벡터 전량 — 하나라도 빠지면 실패다', () => {
   }
 })
 
+test('원문 Table 8.2.2.1-1 — A 비트를 못 쓰는 종류에 세우면 짓지 않는다', () => {
+  for (const type of [Type.Request, Type.Revoke, Type.QueuePosRequest, Type.Ack]) {
+    assert.throws(() => encode({ type, ack: true, fields: [] }), RangeError)
+  }
+  assert.equal(encode({ type: Type.Release, ack: true, fields: [] })[0], 0x14)
+})
+
+test('원문 8.1.2 — P 자리(bit5)는 받을 때 보지 않는다', () => {
+  assert.equal(decode(Uint8Array.of(0x20, 0x00))?.type, Type.Request)
+})
+
 test('A 비트와 Type 은 한 바이트에 나눠 담긴다', () => {
   const granted = encode({ type: Type.Granted, ack: true, fields: [] })
   assert.equal(granted[0], 0x11, '합치면 원문의 5비트 subtype 이다')
@@ -84,12 +95,13 @@ test('우리가 안 쓰는 종류와 다른 버전은 버린다', () => {
 test('필드 도우미는 형을 지킨다', () => {
   const msg = decode(encode({
     type: Type.Granted, ack: true,
-    fields: [short(Tlv.Duration, 30), byte(Tlv.Priority, 7), str(Tlv.Room, 'r1')],
+    fields: [short(Tlv.Duration, 30), byteSpare(Tlv.Priority, 7), str(Tlv.Room, 'r1')],
   }))!
   assert.equal(u16(msg, Tlv.Duration), 30)
-  assert.equal(u8(msg, Tlv.Priority), 7)
+  assert.equal(u8spare(msg, Tlv.Priority), 7)
+  assert.equal(u8spare(decode(encode({ type: Type.Granted, ack: false, fields: [byte(Tlv.Priority, 7)] }))!, Tlv.Priority), undefined,
+    '원문 8.1.4 — 길이가 2 가 아닌 우선순위는 없는 것이다')
   assert.equal(text(msg, Tlv.Room), 'r1')
-  assert.equal(u16(msg, Tlv.Priority), undefined, '한 바이트를 u16 으로 읽지 않는다')
 })
 
 test('TLV 값은 255바이트 이하다', () => {

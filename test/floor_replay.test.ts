@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { Message, Tlv, Type, byte, short, str } from '../src/internal/mbcp.js'
+import { Message, Tlv, Type, byte, byteSpare, short, str } from '../src/internal/mbcp.js'
 import { FloorRoom, T100_MS, T101_MS, T104_MS, T132_MS } from '../src/domain/floor.js'
 
 declare const __FLOOR_TRACE__: string
@@ -27,7 +27,7 @@ const TIMER: Record<string, number> = { T101: T101_MS, T100: T100_MS, T104: T104
 function toClient(m: M, acked: boolean): Message {
   const room = str(Tlv.Room, ROOM)
   switch (m.t) {
-    case 'GRANTED': return { type: Type.Granted, ack: acked, fields: [short(Tlv.Duration, m.d), byte(Tlv.Priority, m.n), room] }
+    case 'GRANTED': return { type: Type.Granted, ack: acked, fields: [short(Tlv.Duration, m.d), byteSpare(Tlv.Priority, m.n), room] }
     case 'DENY': return { type: Type.Deny, ack: acked, fields: [byte(Tlv.Cause, m.n), room] }
     case 'REVOKE': return { type: Type.Revoke, ack: false, fields: [byte(Tlv.Cause, m.n), room] }
     case 'QINFO': return { type: Type.QueueInfo, ack: false, fields: [{ id: Tlv.QueueInfo, value: new Uint8Array([m.n, m.d]) }, room] }

@@ -3,7 +3,7 @@
 //
 // 판정은 여기, 집행은 밖이다 — 보낼 것과 알릴 것을 값으로 돌려주고 DC 송신·게이트는 주인이 한다.
 // 절이 없는 칸의 메시지는 버리고 상태를 유지한다(6.2.4.1). ACK 은 절차가 있는 칸에서만 보낸다.
-import { Message, Tlv, Type, byte, str, text, u8, u16 } from '../internal/mbcp.js'
+import { Message, Tlv, Type, byteSpare, str, text, u8, u8spare, u16 } from '../internal/mbcp.js'
 
 export type Phase = 'off' | 'no_permission' | 'pending_request' | 'has_permission' | 'pending_release' | 'queued'
 export type EndCause =
@@ -344,7 +344,7 @@ export class FloorRoom {
 
   private takeGrant(msg: Message): void {
     const d = u16(msg, Tlv.Duration)
-    const p = u8(msg, Tlv.Priority)
+    const p = u8spare(msg, Tlv.Priority)
     if (d !== undefined) this.remainingSec = d
     if (p !== undefined) this.grantedPriority = p
   }
@@ -361,11 +361,13 @@ export class FloorRoom {
 
   private ack(msg: Message, s: Step): void {
     if (!msg.ack) return
-    s.send.push({ type: Type.Ack, ack: false, fields: [byte(Tlv.AckType, msg.type), str(Tlv.Room, this.roomId)] })
+    s.send.push({ type: Type.Ack, ack: false, fields: [byteSpare(Tlv.AckType, msg.type), str(Tlv.Room, this.roomId)] })
   }
 
+  /** 원문 6.2.4.3.5 — 우선순위는 보통(0)과 다를 때만 싣는다. 없으면 서버가 기본값 0 으로 읽는다(8.2.3.2) */
   private request(): Message {
-    return { type: Type.Request, ack: false, fields: [byte(Tlv.Priority, this.priority), str(Tlv.Room, this.roomId)] }
+    const prio = this.priority === 0 ? [] : [byteSpare(Tlv.Priority, this.priority)]
+    return { type: Type.Request, ack: false, fields: [...prio, str(Tlv.Room, this.roomId)] }
   }
 
   private bare(type: number): Message {

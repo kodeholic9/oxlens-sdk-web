@@ -2,7 +2,7 @@
 // floor 원천 · TS 24.380 §6.2.4 — 클라 전이. 상태기가 값을 돌려주므로 시계만 돌려 전량을 잰다.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Message, Tlv, Type, byte, short, str } from '../src/internal/mbcp.js'
+import { Message, Tlv, Type, byte, byteSpare, short, str } from '../src/internal/mbcp.js'
 import { C100, C101, C104, FloorRoom, Outcome, T100_MS, T101_MS, T104_MS, T132_MS } from '../src/domain/floor.js'
 
 function room(input: 'hold' | 'toggle' = 'hold'): FloorRoom {
@@ -16,7 +16,7 @@ const names = (o: Outcome): string[] => o.signals.map((s) => s.kind)
 
 const granted = (priority = 0, duration = 30): Message => ({
   type: Type.Granted, ack: true,
-  fields: [short(Tlv.Duration, duration), byte(Tlv.Priority, priority), str(Tlv.Room, 'r1')],
+  fields: [short(Tlv.Duration, duration), byteSpare(Tlv.Priority, priority), str(Tlv.Room, 'r1')],
 })
 const deny = (cause: number): Message => ({ type: Type.Deny, ack: true, fields: [byte(Tlv.Cause, cause), str(Tlv.Room, 'r1')] })
 const revoke = (cause: number): Message => ({ type: Type.Revoke, ack: false, fields: [byte(Tlv.Cause, cause), str(Tlv.Room, 'r1')] })
@@ -34,6 +34,13 @@ test('6.2.4.3.5 — 누르면 REQUEST(우선순위 · 방)만 나가고 시간 �
   assert.deepEqual(o.send[0]!.fields.map((f) => f.id), [Tlv.Priority, Tlv.Room])
   assert.equal(r.phase, 'pending_request')
   assert.equal(o.gate, undefined)
+  assert.deepEqual([...o.send[0]!.fields[0]!.value], [3, 0], '원문 Table 8.2.3.2-1 — 값 + 예비')
+})
+
+test('6.2.4.3.5 · 8.2.3.2 — 보통 우선순위(0)는 싣지 않는다', () => {
+  const r = room()
+  const o = r.press(0)
+  assert.deepEqual(o.send[0]!.fields.map((f) => f.id), [Tlv.Room])
 })
 
 test('6.2.4.4.2 — 허가에 ACK 하고 has permission · 마이크를 연다', () => {
