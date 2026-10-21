@@ -1,120 +1,94 @@
-import { PeerLink } from './transport/link.js'
+// author: kodeholic (powered by Claude)
+// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/probe · SDK:IMPL-DIAG-PROBE · SDK:RULE-DIAG-STATS · SDK:RULE-DIAG-QUALITY · 연:AUX.op.TASK · model: claude-opus-5-5
 
-/**
- * SDK§8-2 층 경계 — ★`internal` 은 `domain` 을 모른다. 그래서 조립에 필요한 만큼만 여기서 형을 세운다.
- * 채우는 것은 부르는 쪽(`api/client`)이고, 이쪽은 ★**모양만 알고 뜻은 모른다.**
- */
-export interface PubRow {
-  readonly kind: string
-  readonly source: string
-  readonly duplex: string
-  readonly state: string
-  readonly owner: string
-  readonly muted: boolean
-  readonly trackId: string | null
-  readonly room: string | null
-  readonly ssrc: number | null
-  readonly link: PeerLink | null
-}
+type Row = Record<string, unknown> & { type: string; id: string }
 
-export interface SubRow {
-  readonly track_id: string
-  readonly kind: string
-  readonly room_id: string
-  readonly ssrc?: number
-  readonly mid?: string
-  readonly user_id?: string
-  readonly codec?: string
-  readonly pt?: number
-  readonly active?: boolean
-}
-
-export interface ProbeSources {
-  publishing(): readonly PubRow[]
-  subscribed(): readonly { entry: SubRow; link: PeerLink | null }[]
-  state(): Record<string, unknown>
-  env?(): Record<string, unknown> | undefined
-  devices?(): Promise<ReadonlyArray<Record<string, unknown>>>
-  permissions?(): Promise<Record<string, unknown>>
-  network?(): Promise<Record<string, unknown> | undefined>
-}
-
-export interface Probe {
-  error?: string
-  pub_tracks?: ReadonlyArray<Record<string, unknown>>
-  sub_tracks?: ReadonlyArray<Record<string, unknown>>
-  env?: Record<string, unknown>
-  devices?: ReadonlyArray<Record<string, unknown>>
-  permissions?: Record<string, unknown>
-  state: Record<string, unknown>
-  network?: Record<string, unknown>
-}
-
-export async function collect(src: ProbeSources): Promise<Probe> {
-  const out: Probe = { state: src.state() }
-  try {
-    const pub = await pubTracks(src.publishing())
-    if (pub.length > 0) out.pub_tracks = pub
-    const sub = await subTracks(src.subscribed())
-    if (sub.length > 0) out.sub_tracks = sub
-    put(out, 'env', src.env?.())
-    put(out, 'devices', await src.devices?.())
-    put(out, 'permissions', await src.permissions?.())
-    put(out, 'network', await src.network?.())
-  } catch (e) {
-    out.error = (e as Error).message
-  }
+function rows(r: RTCStatsReport): Row[] {
+  const out: Row[] = []
+  r.forEach((v) => out.push(v as Row))
   return out
 }
 
-function put<K extends keyof Probe>(out: Probe, key: K, value: Probe[K] | undefined): void {
-  if (value === undefined) return
-  if (Array.isArray(value) && value.length === 0) return
-  out[key] = value
+const PICK_OUT = ['ssrc', 'kind', 'mid', 'rid', 'packetsSent', 'bytesSent', 'framesEncoded', 'framesSent', 'frameWidth', 'frameHeight', 'framesPerSecond', 'qualityLimitationReason', 'retransmittedPacketsSent', 'nackCount', 'pliCount', 'targetBitrate', 'active'] as const
+const PICK_IN = ['ssrc', 'kind', 'mid', 'packetsReceived', 'packetsLost', 'bytesReceived', 'jitter', 'framesDecoded', 'framesReceived', 'framesDropped', 'frameWidth', 'frameHeight', 'freezeCount', 'pliCount', 'nackCount', 'jitterBufferDelay', 'jitterBufferEmittedCount', 'concealedSamples', 'totalSamplesReceived', 'lastPacketReceivedTimestamp'] as const
+
+function pick(r: Row, keys: readonly string[]): Record<string, unknown> {
+  const o: Record<string, unknown> = {}
+  for (const k of keys) if (r[k] !== undefined) o[k] = r[k]
+  return o
 }
 
-async function pubTracks(tracks: readonly PubRow[]): Promise<Array<Record<string, unknown>>> {
-  const rows: Array<Record<string, unknown>> = []
-  for (const t of tracks) {
-    const row: Record<string, unknown> = {
-      track_id: t.trackId ?? undefined,
-      kind: t.kind, source: t.source, duplex: t.duplex, state: t.state, owner: t.owner,
-      muted: t.muted,
-      ...(t.ssrc === null ? {} : { ssrc: t.ssrc }),
-      ...(t.room === null ? {} : { room_id: t.room }),
+/** 자기 쪽 값을 그대로 — 가공 · 평균 금지(SDK:RULE-DIAG-STATS) */
+export function outbound(reports: RTCStatsReport[]): Record<string, unknown>[] {
+  return reports.flatMap((r) => rows(r).filter((x) => x.type === 'outbound-rtp').map((x) => pick(x, PICK_OUT)))
+}
+
+export function inbound(reports: RTCStatsReport[]): Record<string, unknown>[] {
+  return reports.flatMap((r) => rows(r).filter((x) => x.type === 'inbound-rtp').map((x) => pick(x, PICK_IN)))
+}
+
+export interface NetSample {
+  readonly rttMs: number | null
+  readonly lost: number
+  readonly received: number
+  readonly outgoingBps: number | null
+}
+
+/** 선택된 후보 쌍 · 수신 손실 — RTT · 추정 대역 */
+export function network(reports: RTCStatsReport[]): NetSample {
+  let rtt: number | null = null
+  let bps: number | null = null
+  let lost = 0
+  let received = 0
+  for (const r of reports) {
+    const all = rows(r)
+    const tp = all.find((x) => x.type === 'transport')
+    const selId = tp ? String(tp['selectedCandidatePairId'] ?? '') : ''
+    const pair = all.find((x) => x.type === 'candidate-pair' && (x.id === selId || x['nominated'] === true) && x['state'] === 'succeeded')
+    if (pair) {
+      const t = pair['currentRoundTripTime']
+      if (typeof t === 'number') rtt = Math.max(rtt ?? 0, t * 1000)
+      const o = pair['availableOutgoingBitrate']
+      if (typeof o === 'number') bps = o
     }
-    if (t.link !== null && t.ssrc !== null && t.ssrc !== 0) {
-      const stats = await t.link.statsFor(t.ssrc, 'outbound').catch(() => null)
-      if (stats && stats.size > 0) row.stats = [...stats.values()]
+    for (const x of all) {
+      if (x.type !== 'inbound-rtp') continue
+      lost += typeof x['packetsLost'] === 'number' ? (x['packetsLost'] as number) : 0
+      received += typeof x['packetsReceived'] === 'number' ? (x['packetsReceived'] as number) : 0
     }
-    rows.push(prune(row))
   }
-  return rows
+  return { rttMs: rtt, lost, received, outgoingBps: bps }
 }
 
-async function subTracks(
-  subs: readonly { entry: SubRow; link: PeerLink | null }[],
-): Promise<Array<Record<string, unknown>>> {
-  const rows: Array<Record<string, unknown>> = []
-  for (const { entry, link } of subs) {
-    const row: Record<string, unknown> = {
-      track_id: entry.track_id, kind: entry.kind, room_id: entry.room_id,
-      ssrc: entry.ssrc, mid: entry.mid,
-      ...(entry.user_id === undefined ? {} : { user_id: entry.user_id }),
-      ...(entry.codec === undefined ? {} : { codec: entry.codec }),
-      ...(entry.pt === undefined ? {} : { pt: entry.pt }),
-      ...(entry.active === undefined ? {} : { active: entry.active }),
-    }
-    if (link !== null && typeof entry.ssrc === 'number') {
-      const stats = await link.statsFor(entry.ssrc, 'inbound').catch(() => null)
-      if (stats && stats.size > 0) row.stats = [...stats.values()]
-    }
-    rows.push(prune(row))
+export type Quality = 'excellent' | 'good' | 'poor' | 'lost'
+
+/** 4단 — 문턱은 정책서 SDK 기본값 quality · 여러 서버면 최악값(SDK:RULE-DIAG-QUALITY) */
+export function grade(prev: NetSample | null, cur: NetSample, alive: boolean, th: { excellent: { lossPct: number; rttMs: number }; good: { lossPct: number; rttMs: number } }): Quality {
+  if (!alive) return 'lost'
+  const dl = prev ? Math.max(0, cur.lost - prev.lost) : 0
+  const dr = prev ? Math.max(0, cur.received - prev.received) : 0
+  const loss = dr + dl > 0 ? (dl / (dr + dl)) * 100 : 0
+  const rtt = cur.rttMs ?? 0
+  if (loss < th.excellent.lossPct && rtt < th.excellent.rttMs) return 'excellent'
+  if (loss < th.good.lossPct && rtt < th.good.rttMs) return 'good'
+  return 'poor'
+}
+
+const ORDER: Record<Quality, number> = { excellent: 0, good: 1, poor: 2, lost: 3 }
+export function worst(a: Quality, b: Quality): Quality { return ORDER[a] >= ORDER[b] ? a : b }
+
+/** 송신 트랙의 media-source totalAudioEnergy — silence 판정 재료(SDK:IMPL-PUB-API LocalTrack.on('silence')) */
+export function audioEnergy(r: RTCStatsReport): number | null {
+  for (const x of rows(r)) if (x.type === 'media-source' && x['kind'] === 'audio' && typeof x['totalAudioEnergy'] === 'number') return x['totalAudioEnergy'] as number
+  return null
+}
+
+/** 첫 디코딩 프레임 판정 재료 — 수신 framesDecoded · totalSamplesReceived */
+export function decoded(r: RTCStatsReport): number {
+  for (const x of rows(r)) {
+    if (x.type !== 'inbound-rtp') continue
+    if (typeof x['framesDecoded'] === 'number') return x['framesDecoded'] as number
+    if (typeof x['totalSamplesReceived'] === 'number') return x['totalSamplesReceived'] as number
   }
-  return rows
-}
-
-function prune(row: Record<string, unknown>): Record<string, unknown> {
-  for (const k of Object.keys(row)) if (row[k] === undefined) delete row[k]
-  return row
+  return 0
 }

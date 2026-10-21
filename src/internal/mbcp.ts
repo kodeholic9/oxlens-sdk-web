@@ -1,156 +1,29 @@
 // author: kodeholic (powered by Claude)
-// 연§3-3 · §11-1~§11-3 — DC 프레임과 MBCP codec. 순수 함수라 발언권 규칙을 모른다.
-//
-// ★subtype 은 5비트다(3GPP TS 24.380 Table 8.2.2.1-1). 첫 비트가 곧 ACK 요구 비트이고
-// 우리 헤더는 그것을 A(bit4) + Type(bit3-0) 으로 나눠 담는다 — 합치면 같은 5비트다.
+// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/mbcp · 연:TRN.frame.DC · 연:RULE-FLR-HEADER · 연:RULE-FLR-TLV · 연:RULE-FLR-ROOM-KEY · model: claude-opus-5-5
+import * as C from './wire/floor_codec.js'
 
-export const DC_VER = 1
-/** 연§3-3 — 이 문서가 정하는 유일한 svc. 0x02 발성 감지는 확장이라 보내지도 읽지도 않는다. */
-export const SVC_MBCP = 0x01
-export const DC_MAX_PAYLOAD = 0xffff
+const SVC_FLOOR = 0x01
+const MAX_PAYLOAD = 65532
 
-export const Type = {
-  Request: 0,
-  Granted: 1,
-  Taken: 2,
-  Deny: 3,
-  Release: 4,
-  Idle: 5,
-  Revoke: 6,
-  QueuePosRequest: 8,
-  QueueInfo: 9,
-  Ack: 10,
-} as const
-export type MbcpType = (typeof Type)[keyof typeof Type]
+/** 서버 → 클라 발언권 사건 하나 — 방 키는 0x1D 단일(연:RULE-FLR-ROOM-KEY) */
+export type FloorRx =
+  | { t: 'TAKEN'; ack?: boolean; speaker: string; seq: number }
+  | { t: 'IDLE'; ack?: boolean; prev?: string; seq: number }
+  | { t: 'GRANTED'; ack?: boolean; priority: number; duration: number; seq: number }
+  | { t: 'DENY'; ack?: boolean; cause: number; reason?: string }
+  | { t: 'QINFO'; ack?: boolean; info: { position: number; priority: number } }
+  | { t: 'REVOKE'; ack?: boolean; cause: number; reason?: string }
 
-const ADOPTED = new Set<number>(Object.values(Type))
-
-/** 연§11-3 TLV id. 0~12 는 원문 그대로이고 0x1A 이상이 우리 확장이다. */
-export const Tlv = {
-  Priority: 0,
-  Duration: 1,
-  Cause: 2,
-  QueueInfo: 3,
-  Speaker: 4,
-  Seq: 8,
-  AckType: 12,
-  PrevSpeaker: 0x1a,
-  CauseText: 0x1b,
-  Room: 0x1d,
-} as const
-
-export interface Field {
-  readonly id: number
-  readonly value: Uint8Array
+export interface Received {
+  readonly room: string
+  readonly rx: FloorRx
 }
 
-export interface Message {
-  readonly type: number
-  /** 연§11-2 — A 비트. 이것이 서면 ACK 을 반드시 보낸다(§11-5). */
-  readonly ack: boolean
-  readonly fields: readonly Field[]
-}
-
-const enc = new TextEncoder()
-const dec = new TextDecoder()
-
-/** 원문 Table 8.2.2.1-1 — subtype 이 x???? 꼴인 종류만 A 비트를 쓸 수 있다 */
-const ACK_ALLOWED = new Set<number>([Type.Granted, Type.Taken, Type.Deny, Type.Release, Type.Idle, Type.QueueInfo])
-
-export function encode(msg: Message): Uint8Array {
-  if (msg.ack && !ACK_ALLOWED.has(msg.type)) throw new RangeError(`종류 ${msg.type} 는 A 비트를 쓸 수 없다(원문 Table 8.2.2.1-1)`)
-  let size = 2
-  for (const f of msg.fields) size += 2 + f.value.length
-  const out = new Uint8Array(size)
-  out[0] = (msg.ack ? 0x10 : 0) | (msg.type & 0x0f)
-  out[1] = msg.fields.length
-  let at = 2
-  for (const f of msg.fields) {
-    if (f.value.length > 255) throw new RangeError(`TLV ${f.id} 값이 255바이트를 넘는다`)
-    out[at] = f.id
-    out[at + 1] = f.value.length
-    out.set(f.value, at + 2)
-    at += 2 + f.value.length
-  }
-  return out
-}
-
-/**
- * 연§11-1·§11-2 — 못 읽거나 우리가 안 쓰는 종류는 null 이다.
- * ★잘렸으면 거기까지 읽고 멈춘다. 그때까지 읽은 것은 유효하다.
- * ★모르는 id 는 버리지 않고 그대로 담는다 — 나중에 필드를 더해도 구버전이 안 깨진다.
- */
-export function decode(buf: Uint8Array): Message | null {
-  if (buf.length < 2) return null
-  const head = buf[0]!
-  // 버전은 00 고정이다. 다른 값은 우리가 읽을 물건이 아니다.
-  if ((head & 0xc0) !== 0) return null
-  const type = head & 0x0f
-  if (!ADOPTED.has(type)) return null
-
-  const count = buf[1]!
-  const fields: Field[] = []
-  let at = 2
-  for (let i = 0; i < count; i += 1) {
-    if (at + 2 > buf.length) break
-    const id = buf[at]!
-    const len = buf[at + 1]!
-    if (at + 2 + len > buf.length) break
-    fields.push({ id, value: buf.subarray(at + 2, at + 2 + len) })
-    at += 2 + len
-  }
-  return { type, ack: (head & 0x10) !== 0, fields }
-}
-
-export function field(msg: Message, id: number): Uint8Array | undefined {
-  return msg.fields.find((f) => f.id === id)?.value
-}
-
-export function text(msg: Message, id: number): string | undefined {
-  const v = field(msg, id)
-  return v === undefined ? undefined : dec.decode(v)
-}
-
-export function u8(msg: Message, id: number): number | undefined {
-  const v = field(msg, id)
-  return v === undefined || v.length < 1 ? undefined : v[0]
-}
-
-/** '값 + 예비' 꼴 읽기 — 길이가 2 가 아니면 없는 것이다(원문 8.1.4 — 형식이 틀린 선택 칸은 무시) */
-export function u8spare(msg: Message, id: number): number | undefined {
-  const v = field(msg, id)
-  return v === undefined || v.length !== 2 ? undefined : v[0]
-}
-
-export function u16(msg: Message, id: number): number | undefined {
-  const v = field(msg, id)
-  return v === undefined || v.length < 2 ? undefined : (v[0]! << 8) | v[1]!
-}
-
-export function str(id: number, value: string): Field {
-  return { id, value: enc.encode(value) }
-}
-
-export function byte(id: number, value: number): Field {
-  return { id, value: Uint8Array.of(value & 0xff) }
-}
-
-/** 원문 '값 1옥텟 + 예비 1옥텟' 꼴 — Floor Priority(Table 8.2.3.2-1) · Message Type(Table 8.2.3.14-1). 길이 2 */
-export function byteSpare(id: number, value: number): Field {
-  return { id, value: Uint8Array.of(value & 0xff, 0) }
-}
-
-export function short(id: number, value: number): Field {
-  return { id, value: Uint8Array.of((value >> 8) & 0xff, value & 0xff) }
-}
-
-/** 연§3-3 — ver·svc·len 뒤에 payload. 넘치면 보내는 쪽이 거부한다. */
-export function frame(payload: Uint8Array, svc = SVC_MBCP): Uint8Array {
-  if (payload.length > DC_MAX_PAYLOAD) {
-    throw new RangeError(`DC payload ${payload.length}B 가 상한을 넘는다`)
-  }
+/** DC 프레임 — ver · svc · len(BE) · payload(연:TRN.frame.DC) */
+export function wrap(payload: Uint8Array, svc = SVC_FLOOR): Uint8Array {
+  if (payload.length > MAX_PAYLOAD) throw new RangeError('DC 프레임이 65532 바이트를 넘는다')
   const out = new Uint8Array(4 + payload.length)
-  out[0] = DC_VER
+  out[0] = 1
   out[1] = svc
   out[2] = (payload.length >> 8) & 0xff
   out[3] = payload.length & 0xff
@@ -158,10 +31,73 @@ export function frame(payload: Uint8Array, svc = SVC_MBCP): Uint8Array {
   return out
 }
 
-/** 연§3-3 — 잘린 프레임은 조용히 버린다. 예외를 던지지 않는다. */
-export function unframe(buf: Uint8Array): { svc: number; payload: Uint8Array } | null {
-  if (buf.length < 4 || buf[0] !== DC_VER) return null
+/** 잘린 프레임은 조용히 버린다 · 발언권 svc 만 푼다 */
+export function unwrap(buf: Uint8Array): Uint8Array | null {
+  if (buf.length < 4 || buf[0] !== 1 || buf[1] !== SVC_FLOOR) return null
   const len = (buf[2]! << 8) | buf[3]!
   if (buf.length < 4 + len) return null
-  return { svc: buf[1]!, payload: buf.subarray(4, 4 + len) }
+  return buf.subarray(4, 4 + len)
+}
+
+export function request(room: string, priority: number): Uint8Array {
+  return wrap(C.encode(priority > 0 ? C.buildRequest({ room, priority }) : C.buildRequest({ room })))
+}
+
+export function release(room: string): Uint8Array {
+  return wrap(C.encode(C.buildRelease({ room })))
+}
+
+export function queuePosRequest(room: string): Uint8Array {
+  return wrap(C.encode(C.buildQueuePosRequest({ room })))
+}
+
+const ACK_OF: Record<'TAKEN' | 'GRANTED' | 'DENY', number> = { TAKEN: C.Type.TAKEN, GRANTED: C.Type.GRANTED, DENY: C.Type.DENY }
+
+export function ack(room: string, of: 'TAKEN' | 'GRANTED' | 'DENY', seq?: number): Uint8Array {
+  return wrap(C.encode(seq === undefined ? C.buildAck({ of: ACK_OF[of], room }) : C.buildAck({ of: ACK_OF[of], room, seq })))
+}
+
+/** 바이트 → 사건 — 필수 칸이 빠진 것 · 방 키가 없는 것 · 클라가 받지 않는 종류는 버린다 */
+export function parse(buf: Uint8Array): Received | null {
+  const p = unwrap(buf)
+  if (!p) return null
+  const m = C.decode(p)
+  if (!m) return null
+  switch (m.type) {
+    case C.Type.TAKEN: {
+      const r = C.readTaken(m)
+      if (r.missing.length || r.value.room === undefined) return null
+      return { room: r.value.room, rx: { t: 'TAKEN', ack: m.ack, speaker: r.value.speaker!, seq: r.value.seq! } }
+    }
+    case C.Type.IDLE: {
+      const r = C.readIdle(m)
+      if (r.missing.length || r.value.room === undefined) return null
+      const rx: FloorRx = r.value.prev === undefined ? { t: 'IDLE', ack: m.ack, seq: r.value.seq! } : { t: 'IDLE', ack: m.ack, prev: r.value.prev, seq: r.value.seq! }
+      return { room: r.value.room, rx }
+    }
+    case C.Type.GRANTED: {
+      const r = C.readGranted(m)
+      if (r.missing.length || r.value.room === undefined) return null
+      return { room: r.value.room, rx: { t: 'GRANTED', ack: m.ack, priority: r.value.priority!, duration: r.value.duration!, seq: r.value.seq! } }
+    }
+    case C.Type.DENY: {
+      const r = C.readDeny(m)
+      if (r.missing.length || r.value.room === undefined) return null
+      const rx: FloorRx = r.value.reason === undefined ? { t: 'DENY', ack: m.ack, cause: r.value.cause! } : { t: 'DENY', ack: m.ack, cause: r.value.cause!, reason: r.value.reason }
+      return { room: r.value.room, rx }
+    }
+    case C.Type.QINFO: {
+      const r = C.readQueueInfo(m)
+      if (r.missing.length || r.value.room === undefined || !r.value.info) return null
+      return { room: r.value.room, rx: { t: 'QINFO', ack: m.ack, info: { position: r.value.info.position ?? 255, priority: r.value.info.priority ?? 0 } } }
+    }
+    case C.Type.REVOKE: {
+      const r = C.readRevoke(m)
+      if (r.missing.length || r.value.room === undefined) return null
+      const rx: FloorRx = r.value.reason === undefined ? { t: 'REVOKE', ack: m.ack, cause: r.value.cause! } : { t: 'REVOKE', ack: m.ack, cause: r.value.cause!, reason: r.value.reason }
+      return { room: r.value.room, rx }
+    }
+    default:
+      return null
+  }
 }
