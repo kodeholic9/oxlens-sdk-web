@@ -1,13 +1,14 @@
 // author: kodeholic (powered by Claude)
-// OxLens SDK 진입점. 표면은 api/types, 유일한 생성 경로는 createClient 다(SDK§2-1).
-export * from './api/types.js'
-export { NotImplementedError } from './api/not-implemented.js'
-export type { Wiring } from './api/client.js'
-
-import { Client, Wiring } from './api/client.js'
-import { browserDevices } from './platform/media.js'
-import type { ClientOptions, OxLensClient } from './api/types.js'
-
-export function createClient(opts: ClientOptions, wiring: Wiring = {}): OxLensClient {
-  return new Client(opts, { devices: browserDevices, ...wiring })
-}
+// spec: v1.2 @d626fda · SDK:RULE-API-SURFACE 얇은 표면 · SDK:RULE-API-HANDLES · model: claude-opus-5-5
+export { createClient, OxLensClient, Session, Media, Devices, Diagnostics } from './api/client.js'
+export type { RoomPreview } from './api/client.js'
+export { Room, Ptt, LocalTrack, RemoteTrack, RoomAudio } from './api/handles.js'
+export type { PttState } from './api/handles.js'
+export { OxLensError } from './api/errors.js'
+export type { ClientOptions } from './domain/defaults.js'
+export type { SessionInfo, SessionState, Health, Quality, Transition } from './domain/session.js'
+export type { LinkInfo, LinkState } from './domain/links.js'
+export type { Participant, Permission, ParticipantType } from './domain/store.js'
+export type { RemoteInfo } from './domain/remote.js'
+export type { TrackOptions, LocalState, Owner, EndReason, Profile } from './domain/media-registry.js'
+export type { Phase, LastEnd, ArmingStage, PressSource } from './domain/floor.js'
