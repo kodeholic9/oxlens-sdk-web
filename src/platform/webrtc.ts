@@ -7,6 +7,7 @@ export function createPeerConnection(): RTCPeerConnection {
 }
 
 let udpCandidate = true
+let tcpCandidate = false
 
 /** QA 스위치 — 3층 TCP 형상이 UDP 후보를 끄는 시험 수단이다. 상용 경로는 부르지 않는다(SDK:RULE-PLAT-WEB) */
 export function qaSetUdpCandidate(on: boolean): void {
@@ -17,8 +18,19 @@ export function udpCandidateOn(): boolean {
   return udpCandidate
 }
 
+/** QA 스위치 — 웹의 TCP 후보는 QA 전용이다(상용 웹은 UDP 한 줄 — 연:RULE-LINK-SDP-COMMON) */
+export function qaSetTcpCandidate(on: boolean): void {
+  tcpCandidate = on
+}
+
+export function tcpCandidateOn(): boolean {
+  return tcpCandidate
+}
+
 if (typeof globalThis !== 'undefined') {
-  (globalThis as unknown as { __qaSetUdpCandidate?: (on: boolean) => void }).__qaSetUdpCandidate = qaSetUdpCandidate
+  const g = globalThis as unknown as { __qaSetUdpCandidate?: (on: boolean) => void; __qaSetTcpCandidate?: (on: boolean) => void }
+  g.__qaSetUdpCandidate = qaSetUdpCandidate
+  g.__qaSetTcpCandidate = qaSetTcpCandidate
 }
 
 /** 수신 지연 손잡이 — 표준 jitterBufferTarget, 없으면 playoutDelayHint, 둘 다 없으면 못 건다(SDK:RULE-PLAT-WEB) */

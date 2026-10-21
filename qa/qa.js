@@ -1,7 +1,16 @@
 // author: kodeholic (powered by Claude)
 // 3층 어댑터 — spec 은 이 표면만 쓴다. SDK 내부를 직접 만지지 않는다.
 import { createClient } from '../dist/index.js'
-import { __qaSetUdpCandidate } from '../dist/internal/sdp/build.js'
+
+// ★QA 스위치 둘 — SDK 가 전역에 낸다(SDK:RULE-PLAT-WEB). 상용 경로는 부르지 않는다.
+const qaUdp = (on) => window.__qaSetUdpCandidate?.(on)
+const qaTcp = (on) => window.__qaSetTcpCandidate?.(on)
+
+/** 어댑터라 내부에 닿는다 — 서버마다 연결(LinkCore)과 그 PeerLink. spec 은 이 표면만 쓴다. */
+const links = () => [...(state.client?.core.links.values() ?? [])]
+const pcsOf = (l) => l.peer?.pcs ?? []
+/** ★산 연결 — 1pc 는 입장마다 새 연결로 번호표를 만들고 이미 붙은 서버면 버린다(연:RULE-ROOM-JOIN-NUMBER-TAGS). 버린 것은 닫혀 있다 */
+const livePc = () => [...seenPcs].reverse().find((pc) => pc.signalingState !== 'closed') ?? null
 
 // ★시험 전용 관측 — 산 연결의 손잡이를 여기서 잡는다. 제품에 구멍을 내지 않으려고
 //   페이지가 생성자를 감싼다. 갈래B 가 "브라우저에게 offer 를 시키면 어떻게 되나" 를 재현하는 자리다.
@@ -35,21 +44,17 @@ function note(kind, detail) {
 const qa = {
   async connect({ base, token, pcMode, iceTcp, dropUdpCandidate }) {
     // ★QA 전용 실험 손잡이 — 브라우저가 ICE-TCP 를 할 수 있는지 가른다.
-    __qaSetUdpCandidate(!dropUdpCandidate)
+    qaUdp(!dropUdpCandidate)
+    qaTcp(Boolean(iceTcp))
     state.base = base
     state.token = token
     // 연§9-10-2 — `pc_mode` 는 붙기 전에 정해진다. 시험이 모드를 지정하는 자리가 여기다.
-    // ★`iceTcp` 는 QA 전용(RFC 6544) — 서버가 알린 tcp_port 를 후보로 낼지.
-    const client = createClient({
-      base,
-      token,
-      ...(pcMode ? { pcMode } : {}),
-      ...(iceTcp ? { iceTcp: true } : {}),
-    })
+    // ★`iceTcp` 는 QA 스위치(__qaSetTcpCandidate) — 서버가 알린 tcp_port 를 후보로 낼지.
+    const client = createClient({ base, token, ...(pcMode ? { pcMode } : {}) })
     state.client = client
     client.on('track', (room, t) => {
       state.tracks.set(t.id, { track: t, roomId: room.id })
-      note('track', { id: t.id, kind: t.kind, roomId: room.id, slot: t.slot, userId: t.userId ?? null })
+      note('track', { id: t.id, kind: t.kind, roomId: room.id, slot: t.type === 'slot', userId: t.userId ?? null })
       if (t.kind === 'video') {
         const el = document.createElement('video')
         el.id = `v-${t.id}`
@@ -60,6 +65,9 @@ const qa = {
       }
     })
     client.on('closed', (e) => note('closed', e))
+    state.transitions = []
+    client.diagnostics.setLogLevel('debug')
+    client.diagnostics.on('transition', (t) => { state.transitions.push(t); if (state.transitions.length > 2000) state.transitions.shift() })
     client.on('session', (s) => note('session', { state: s.state, recovering: s.recovering }))
     await client.connect()
     return { userId: client.session.userId, pcMode: client.session.pcMode }
@@ -88,17 +96,17 @@ const qa = {
 
   async enableMic() {
     const t = await state.client.media.enableMicrophone()
-    return { id: t.id, state: t.state, duplex: t.duplex, server: t.server }
+    return { id: t.trackId, state: t.state, duplex: t.duplex, server: t.server }
   },
 
   async enableCamera() {
     const t = await state.client.media.enableCamera()
-    return { id: t.id, state: t.state, server: t.server }
+    return { id: t.trackId, state: t.state, server: t.server }
   },
 
   async enableScreen() {
     const t = await state.client.media.enableScreen()
-    return { id: t.id, state: t.state, source: t.source, server: t.server }
+    return { id: t.trackId, state: t.state, source: t.source, server: t.server }
   },
 
   async setSpeakingRoom(roomId) { await state.client.setSpeakingRoom(roomId) },
@@ -167,7 +175,7 @@ const qa = {
         if (row.type === 'outbound-rtp') packets = row.packetsSent ?? null
       }
       out.push({
-        id: t.id, kind: t.kind, state: t.state, duplex: t.duplex, owner: t.owner,
+        id: t.trackId, kind: t.kind, state: t.state, duplex: t.duplex, owner: t.owner,
         server: t.server ?? null, packets,
       })
     }
@@ -184,8 +192,8 @@ const qa = {
   /** ★진단 — 클라가 조립해 심은 remote SDP 의 후보 줄. */
   remoteCandidateLines() {
     const out = []
-    for (const server of state.client.roomsDomain.allServers()) {
-      for (const pc of server.link.peerList()) {
+    for (const link of links()) {
+      for (const pc of pcsOf(link)) {
         const sdp = pc.remoteDescription?.sdp ?? ''
         for (const l of sdp.split(/\r?\n/)) if (l.startsWith('a=candidate:')) out.push(l)
       }
@@ -195,14 +203,14 @@ const qa = {
 
   /** ★진단 — 서버가 무엇을 알렸나. tcp_port 가 없으면 클라 탓이 아니다. */
   serverCfg() {
-    return state.client.roomsDomain.allServers().map((s) => ({ sfuId: s.sfuId, ice: s.cfg.ice }))
+    return links().map((l) => ({ sfuId: l.server, ice: l.sc?.ice ?? null }))
   },
 
   /** ★진단 — 어느 후보가 실제로 섰는지. 쌍이 안 서면 후보부터 없는지 가른다. */
   async iceCandidates() {
     const out = []
-    for (const server of state.client.roomsDomain.allServers()) {
-      for (const report of await server.link.statsAll()) {
+    for (const link of links()) {
+      for (const report of (await link.peer?.stats()) ?? []) {
         for (const row of report.values()) {
           if (row.type === 'local-candidate' || row.type === 'remote-candidate') {
             out.push({
@@ -220,8 +228,8 @@ const qa = {
     // ★track.getStats() 는 ssrc 로 거른다 — candidate-pair 는 ssrc 가 없어 걸러진다.
     //   전량은 link.statsAll() 이다. 어댑터라 내부에 닿아도 되고, spec 은 이 표면만 쓴다.
     const rows = new Map()
-    for (const server of state.client.roomsDomain.allServers()) {
-      for (const report of await server.link.statsAll()) {
+    for (const link of links()) {
+      for (const report of (await link.peer?.stats()) ?? []) {
         for (const [id, row] of report) rows.set(id, row)
       }
     }
@@ -254,7 +262,7 @@ const qa = {
     return [...state.client.rooms.values()].map((r) => ({
       id: r.id, state: r.state, mode: r.mode, server: r.server,
       participants: r.participants.map((p) => p.userId),
-      tracks: r.tracks.map((t) => ({ id: t.id, kind: t.kind, slot: t.slot, userId: t.userId ?? null })),
+      tracks: r.tracks.map((t) => ({ id: t.id, kind: t.kind, slot: t.type === 'slot', userId: t.userId ?? null })),
     }))
   },
 
@@ -313,13 +321,13 @@ const qa = {
    */
   /** ★진단용 — 산 연결의 SDP 두 벌. 판정하지 않는다(재료만 낸다). */
   sdpDump() {
-    const pc = seenPcs[seenPcs.length - 1]
+    const pc = livePc()
     if (!pc) return null
     return { remote: pc.remoteDescription?.sdp ?? null, local: pc.localDescription?.sdp ?? null }
   },
 
   async forceBrowserOffer() {
-    const pc = seenPcs[seenPcs.length - 1]
+    const pc = livePc()
     if (!pc) return { refused: false, message: 'no pc', mids: [] }
     const mids = pc.getTransceivers().map((t) => `${t.mid}:${t.currentDirection}`)
     try {
@@ -336,7 +344,7 @@ const qa = {
    * ★판정 재료만이다. "늘었나" 를 spec 이 정한다(연§9-10-3 2② 의 씨앗 셋이 성립하는지).
    */
   mlines() {
-    const pc = seenPcs[seenPcs.length - 1]
+    const pc = livePc()
     if (!pc) return null
     return pc.getTransceivers().map((t) => ({
       mid: t.mid, kind: t.receiver.track.kind, direction: t.direction,
@@ -346,6 +354,13 @@ const qa = {
   session() {
     const s = state.client.session
     return { state: s.state, recovering: s.recovering, userId: s.userId, pcMode: s.pcMode }
+  },
+
+  /** ★진단 — SDK 로그 · 전이 기록(판정하지 않는다) */
+  diag() {
+    const c = state.client
+    if (!c) return null
+    return { logs: c.diagnostics.logs().slice(-200), transitions: state.transitions.slice(-300) }
   },
 
   events(kind) { return kind ? state.events.filter((e) => e.kind === kind) : state.events },
@@ -364,7 +379,7 @@ const qa = {
     }
   },
 
-  async startAudio() { await state.client.media.audio.startAudio() },
+  async startAudio() { await state.client.media.startAudio() },
 
   roomAudio(roomId, patch) {
     const r = state.client.rooms.get(roomId)

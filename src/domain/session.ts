@@ -504,6 +504,25 @@ export class Core {
 
   private affFault: Fault | null = null
 
+  /**
+   * 입 · 퇴장이 곁들여 바꾼 발행 방 — ROOM_JOIN · ROOM_LEAVE 응답의 affiliation(연:RULE-AFF-CAUSE-USER).
+   * 위 소속 상태기에 이 입구가 없어 SDK 가 응답이 말한 만큼만 투영한다(그 서버가 아는 만큼 — 연:RULE-AFF-PROC).
+   */
+  affImplicit(a: { readonly sub_rooms: readonly string[]; readonly pub_room: string | null } | undefined, sfuId: string | null, cause: string): void {
+    if (!a || this.aff.wait !== 'NONE') return
+    const cur = this.aff.pub
+    let next = cur
+    if (a.pub_room !== null && a.sub_rooms.includes(a.pub_room)) next = a.pub_room
+    else if (a.pub_room === null && cur !== 'NONE' && this.rooms.get(cur)?.sfuId === sfuId) next = 'NONE'
+    if (next === cur) return
+    const prev = this.aff
+    this.aff = { ...this.aff, pub: next }
+    this.record('AFF', 'client', `${prev.wait}:${prev.pub}`, `${this.aff.wait}:${this.aff.pub}`, 'SDK.aff_implicit', cause)
+    if (cur !== 'NONE') this.rooms.get(cur)?.floor.pubAway()
+    if (next !== 'NONE') this.rooms.get(next)?.floor.pubSelect()
+    this.events.emit('speakingRoom', this.speakingRoom)
+  }
+
   private affSend(tx: AFF.Tx): void {
     const body: Record<string, unknown> = {}
     if (tx.pub_select !== undefined) body['pub_select'] = tx.pub_select

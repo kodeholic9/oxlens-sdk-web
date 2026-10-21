@@ -12,7 +12,8 @@ interface Stat { id: string; kind: string; readyState: string; videoWidth?: numb
 
 async function videoOf(p: Participant): Promise<Stat | undefined> {
   const stats = await p.call<Stat[]>('trackStats')
-  return stats.find((s) => s.kind === 'video')
+  // ★무전 슬롯(`ptt-`)이 아니라 상대 개인 영상이다 — 서버가 방 미디어 코덱의 video 슬롯을 입장부터 싣는다(연:TRK.type.TrackEntry slot)
+  return stats.find((s) => s.kind === 'video' && !s.id.startsWith('ptt-'))
 }
 
 test('CONF-VIDEO-01 상대 영상이 디코딩되어 픽셀이 된다', async ({ browser }) => {

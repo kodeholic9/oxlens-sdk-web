@@ -127,7 +127,17 @@ export class LinkCore {
 
   // ── 층별 사실 → 위 입구(SDK:IMPL-LINK-PROJECTION 입구 표) ────────────
 
+  /** 그 서버 방이 전부 나가는 중이다 — 서버가 마지막 방 퇴장에 Peer 를 거둔다(연:RULE-ROOM-LEAVE-RES 2) */
+  private leavingAll(): boolean {
+    const rooms = this.core.roomsOn(this.server)
+    return rooms.length > 0 && rooms.every((r) => r.st.rs === 'LEAVING' || r.st.rs === 'NONE')
+  }
+
   private fact(f: import('../internal/transport.js').LinkFact): void {
+    if (f.t !== 'dcData' && f.t !== 'track' && this.leavingAll() && this.st.ls !== 'REBUILD') {
+      this.core.record('LINK', this.server, this.st.ls, this.st.ls, `SDK.teardown_expected.${f.t}`, 'leaving')
+      return
+    }
     if (f.t === 'ice') {
       const s = f.state
       if (s === 'connected' || s === 'completed') {
@@ -369,7 +379,11 @@ export class LinkCore {
     if (r.ok) this.sdpArev = this.buildArev
     else if (r.fault) this.negoFault = r.fault
     this.step('negoRes', LINK.negoRes(this.st, r.ok), r.ok ? 'nego.ok' : 'nego.fail')
-    for (const room of this.core.roomsOn(this.server)) room.syncRemotes()
+    for (const room of this.core.roomsOn(this.server)) {
+      if (!r.ok && room.joinPending) room.events.emit('error', this.negoFault ?? new Fault({ code: 0, name: 'NEGOTIATION_APPLY', category: 'negotiation' }))
+      if (room.joinPending && !this.st.nego) room.finishJoin()
+      else room.syncRemotes()
+    }
   }
 
   negoFault: Fault | null = null

@@ -581,12 +581,15 @@ export class Playback {
     if (doc) doc.addEventListener('visibilitychange', () => { if (doc.visibilityState === 'visible' && !this.allowed) void this.start() })
   }
 
+  /** 재생 요소는 문서에 붙인다(숨김) — 떼어 낸 요소는 탭 정책에 따라 재생이 멎는다 */
   add(el: HTMLAudioElement): void {
     this.els.add(el)
+    const doc = documentTarget()
+    if (doc?.body && !el.isConnected) { el.hidden = true; doc.body.appendChild(el) }
     if (this.sink && canSetSink()) void (el as HTMLAudioElement & { setSinkId(id: string): Promise<void> }).setSinkId(this.sink).catch(() => undefined)
   }
 
-  remove(el: HTMLAudioElement): void { this.els.delete(el); try { el.pause() } catch { /* 없다 */ } }
+  remove(el: HTMLAudioElement): void { this.els.delete(el); try { el.pause() } catch { /* 없다 */ } el.remove() }
 
   play(el: HTMLAudioElement): void {
     void el.play().then(() => this.mark(true), (e: unknown) => { if (e && typeof e === 'object' && (e as { name?: string }).name === 'NotAllowedError') this.mark(false) })

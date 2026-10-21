@@ -43,6 +43,8 @@ export interface RoomEvents extends Record<string, unknown[]> {
 /** 재시도 사다리 둘째~넷째 칸(연:RULE-ERR-CLIENT-FAIL-DEFAULT 4) */
 const RETRY = [300, 1200, 2700]
 const NO_RETRY = new Set([3001, 4001, 4004, 4005])
+/** 첫 협상이 끝내 안 오면 이만큼 뒤 resolve 한다(협상 실패는 room.error 로 따로 온다) */
+const JOIN_SETTLE_MS = 10_000
 
 /** 방 하나 — 위 방 상태기 · 구독 상태기 · 트랙 상태기를 방마다 하나씩 돌린다 */
 export class RoomCore {
@@ -58,6 +60,8 @@ export class RoomCore {
   sfuId: string | null = null
   closed = false
   rebuilding = false
+  /** 입장은 됐고 그 입장이 부른 첫 협상을 기다린다 — 초기 트랙이 장착 가능해야 join() 이 resolve 한다(SDK:RULE-API-ASYNC 재진입 금지) */
+  joinPending = false
   private joinWaiter: { resolve: (r: RoomCore) => void; reject: (f: Fault) => void } | null = null
   private leaveWaiter: (() => void) | null = null
   private lastJoin: RoomJoinRes | null = null
@@ -123,6 +127,12 @@ export class RoomCore {
     for (const tx of plan.send) this.roomSend(tx)
     for (const sm of plan.seams) this.roomSeam(sm.fx, plan.label)
     for (const f of step.fx) this.roomEffect(f, plan.label)
+    if (this.leaveWaiter && this.st.rs === 'NONE' && !this.st.rejoin && !this.closed) {
+      const w = this.leaveWaiter; this.leaveWaiter = null
+      this.finishClose()
+      w()
+      this.events.emit('left')
+    }
     if (prev.rs !== this.st.rs) this.events.emit('state', this.state)
   }
 
@@ -195,6 +205,7 @@ export class RoomCore {
     } else fresh?.peer?.close()
     const m = { code: 0, part: 'res' as const, server_config: { pc_mode: sc.pc_mode, sfu_id: this.core.epochs.id(sc.sfu_id) }, version: { epoch: this.core.epochs.id(b.version.epoch), seq: b.version.seq } }
     this.roomStep('joinRes', ROOM.joinRes(this.st, m, pcm), 'ROOM_JOIN.res')
+    if (this.st.rs === 'JOINED') this.core.affImplicit(b.affiliation, this.sfuId, 'ROOM_JOIN.res')
     this.lastJoin = null
   }
 
@@ -209,6 +220,7 @@ export class RoomCore {
   leave(): Promise<void> {
     if (this.closed || this.st.rs === 'NONE') { this.finishClose(); return Promise.resolve() }
     const p = new Promise<void>((resolve) => { const prev = this.leaveWaiter; this.leaveWaiter = () => { prev?.(); resolve() } })
+    this.joinPending = false
     this.roomStep('leave', ROOM.leave(this.st), 'app')
     return p
   }
@@ -249,8 +261,8 @@ export class RoomCore {
     const e = RB.effect(f).event
     if (e === 'joined') {
       this.rebuilding = false
-      const w = this.joinWaiter; this.joinWaiter = null
-      w?.resolve(this)
+      this.joinPending = true
+      setTimeout(() => this.finishJoin(), JOIN_SETTLE_MS)
       this.events.emit('joined')
       this.emitParticipants()
     } else if (e === 'joinFailed') {
@@ -276,6 +288,15 @@ export class RoomCore {
   }
 
   private forcedCause = 'missing'
+
+  /** 그 입장의 첫 협상이 끝났다 — join() resolve · 초기 track 이벤트는 다음 tick */
+  finishJoin(): void {
+    if (!this.joinPending) return
+    this.joinPending = false
+    const w = this.joinWaiter; this.joinWaiter = null
+    if (this.st.rs === 'JOINED') w?.resolve(this)
+    setTimeout(() => this.syncRemotes(), 0)
+  }
 
   private finishClose(): void {
     if (this.closed) return

@@ -34,10 +34,11 @@ test('연:RULE-LINK-SDP-SUB-MLINE RTX — 짝이 깨지면 실패로 다룬다',
   assert.throws(() => Sdp.subOffer(sub, { id: '1', version: 1 }, broken))
 })
 
-test('연:RULE-LINK-SDP-COMMON — tcp_port 가 오면 TCP passive 줄 · QA 스위치가 UDP 줄을 끈다', () => {
+test('연:RULE-LINK-SDP-COMMON — 웹의 TCP 후보는 QA 스위치 · tcp_port 가 오고 켜면 TCP passive 줄 · UDP 스위치가 UDP 줄을 끈다', () => {
   const sc = { ...SC, ice: { ...SC.ice, tcp_port: 7443 } }
-  const got = lines(Sdp.subOffer({ ...sub, sc, udp: false }, { id: '1', version: 1 }, [ROWS[0]!])).filter((l) => l.startsWith('a=candidate'))
-  assert.deepEqual(got, ['a=candidate:2 1 tcp 2113937150 203.0.113.10 7443 typ host tcptype passive generation 0'])
+  const cands = (w: Sdp.Wire): string[] => lines(Sdp.subOffer(w, { id: '1', version: 1 }, [ROWS[0]!])).filter((l) => l.startsWith('a=candidate'))
+  assert.deepEqual(cands({ ...sub, sc }), ['a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0'], '상용 웹은 UDP 한 줄')
+  assert.deepEqual(cands({ ...sub, sc, udp: false, tcp: true }), ['a=candidate:2 1 tcp 2113937150 203.0.113.10 7443 typ host tcptype passive generation 0'])
 })
 
 test('연:RULE-LINK-SDP-PUB-MLINE 남는 코덱 0 개 — 조용히 넘어가지 않는다', () => {

@@ -8,7 +8,7 @@ const S = new Scope('fault')
 
 test.afterEach(async () => { await S.teardown() })
 
-interface Track { id: string; slot: boolean; userId: string | null }
+interface Track { id: string; kind: string; slot: boolean; userId: string | null }
 interface Room { id: string; tracks: Track[] }
 const tracksOf = (p: Participant, room: string): Promise<Track[]> =>
   p.call<Room[]>('rooms').then((rs) => rs.find((r) => r.id === room)?.tracks ?? [])
@@ -47,8 +47,10 @@ test('FAULT-02 다른 방이면 안 보인다 — "같은 방에서 본다" 가 
   await b.call('enableMic')
 
   await new Promise((r) => setTimeout(r, 2_000))
-  expect(await tracksOf(a, A), '방을 안 가르면 남의 방 트랙이 섞인다').toHaveLength(1)
-  expect((await tracksOf(a, A))[0]!.slot, '남는 것은 이 방 무전 슬롯뿐이다').toBe(true)
+  // ★무전 슬롯은 방마다 audio 1 · video 0~1(연:RULE-FLR-SLOT-SPEAKER 절차 2 · 연:TRK.type.TrackEntry slot) — 서버가 방 미디어 코덱의 video 슬롯도 입장부터 싣는다
+  const mine = await tracksOf(a, A)
+  expect(mine.filter((t) => !t.slot), '방을 안 가르면 남의 방 트랙이 섞인다').toHaveLength(0)
+  expect(mine.filter((t) => t.slot && t.kind === 'audio'), '남는 것은 이 방 무전 슬롯뿐이다').toHaveLength(1)
 })
 
 test('FAULT-03 floor 없이는 소리가 안 나간다 — PTT 게이트가 실제로 닫혀 있다', async ({ browser }) => {

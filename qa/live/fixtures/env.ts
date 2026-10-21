@@ -51,8 +51,7 @@ export function placementOf(roomId: string, sfus: string[]): string {
 export async function sfuIds(): Promise<string[]> {
   const res = await fetch(`${ROOT}/admin/bus`)
   if (!res.ok) throw new Error(`admin/bus ${res.status}`)
-  const body = await res.json() as { open?: boolean; nodes?: { node: string }[] }
-  if (body.open !== true) throw new Error('버스가 안 열렸다 — 배치 후보를 알 수 없다')
+  const body = await res.json() as { nodes?: { node: string }[] }
   const ids = (body.nodes ?? []).map((n) => n.node).filter((n) => n !== '')
   if (ids.length === 0) throw new Error('버스가 비었다 — node 토큰이 하나도 안 서 있다')
   return ids

@@ -157,6 +157,8 @@ export interface Wire {
   readonly creds: Creds
   /** QA 스위치가 끄지 않는 한 UDP 후보 한 줄 — SDK:RULE-PLAT-WEB */
   readonly udp: boolean
+  /** tcp_port 가 와도 웹은 QA 스위치가 켤 때만 TCP 줄을 낸다 */
+  readonly tcp?: boolean
 }
 
 function head(w: Wire, mid: string, kind: Kind): string[] {
@@ -169,7 +171,7 @@ function head(w: Wire, mid: string, kind: Kind): string[] {
 function tail(w: Wire): string[] {
   const out: string[] = []
   if (w.udp) out.push(`a=candidate:1 1 udp ${UDP_PRIO} ${w.sc.ice.ip} ${w.sc.ice.port} typ host generation 0`)
-  if (w.sc.ice.tcp_port !== undefined) out.push(`a=candidate:2 1 tcp ${TCP_PRIO} ${w.sc.ice.ip} ${w.sc.ice.tcp_port} typ host tcptype passive generation 0`)
+  if (w.tcp && w.sc.ice.tcp_port !== undefined) out.push(`a=candidate:2 1 tcp ${TCP_PRIO} ${w.sc.ice.ip} ${w.sc.ice.tcp_port} typ host tcptype passive generation 0`)
   out.push('a=end-of-candidates')
   return out
 }

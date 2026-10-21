@@ -98,7 +98,7 @@ export class RemoteCore {
     }
     this.watchReceiving(now)
     this.applyPlayback()
-    if (!this.announced) {
+    if (!this.announced && !this.room.joinPending) {
       this.announced = true
       this.room.events.emit('track', this)
       this.core.events.emit('track', this.room, this)

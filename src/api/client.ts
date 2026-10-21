@@ -38,6 +38,15 @@ export interface RoomPreview {
   readonly version: { epoch: string; seq: number }
 }
 
+export interface RoomInfo {
+  readonly roomId: string
+  readonly name: string
+  readonly capacity: number
+  readonly userCount: number
+  readonly createdAt: number
+  readonly rec: boolean
+}
+
 /** 장치 — 목록 · 핫플러그 · 선택 정책(SDK:RULE-SRC-DEVICES) */
 export class Devices {
   constructor(private readonly core: Core) {}
@@ -179,9 +188,10 @@ export class OxLensClient {
     }
   }
 
-  async listRooms(): Promise<RoomSummary[]> {
+  /** 방 목록 — 표면은 사용자 어휘(camelCase · SDK:RULE-API-LAYERS) */
+  async listRooms(): Promise<RoomInfo[]> {
     const b = (await wrap(this.core.http('GET', '/rooms'))) as { rooms: RoomSummary[] }
-    return b.rooms
+    return b.rooms.map((r) => ({ roomId: r.room_id, name: r.name, capacity: r.capacity, userCount: r.user_count, createdAt: r.created_at, rec: r.rec }))
   }
 
   on(name: 'session', fn: Fn<[SessionInfo]>): Off

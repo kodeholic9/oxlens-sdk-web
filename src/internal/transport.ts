@@ -2,7 +2,7 @@
 // spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/transport · PeerLink · 연:RULE-LINK-SDP-RENEGOTIATE · 연:RULE-LINK-SDP-1PC-PROC · 연:RULE-LINK-SDP-DC-OPENER · 연:RULE-LINK-SDP-COMMON 재시작 조립 · model: claude-opus-5-5
 import type { ServerConfig, MlineEntry, ExtMap, PublishTrack } from './wire/ws.js'
 import * as Sdp from './sdp.js'
-import { createPeerConnection, udpCandidateOn } from '../platform/webrtc.js'
+import { createPeerConnection, udpCandidateOn, tcpCandidateOn } from '../platform/webrtc.js'
 import { negotiationFault, type Fault } from '../platform/fault.js'
 import { Queue } from '../platform/queue.js'
 import type { Logger } from '../platform/log.js'
@@ -148,7 +148,7 @@ export class PeerLink {
 
   private wire(creds: Sdp.Creds): Sdp.Wire {
     if (!this.sc) throw new Error('server_config 가 없다')
-    return { sc: this.sc, creds, udp: udpCandidateOn() }
+    return { sc: this.sc, creds, udp: udpCandidateOn(), tcp: tcpCandidateOn() }
   }
 
   /** 협상 큐 — 한 번에 하나씩(연:RULE-LINK-SDP-RENEGOTIATE) */
