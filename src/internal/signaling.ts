@@ -7,7 +7,6 @@ import { Queue } from '../platform/queue.js'
 import { now } from '../platform/clock.js'
 import type { Logger } from '../platform/log.js'
 
-const MAX_FRAME = 1_048_576
 const NAME_OF = new Map<number, OpName>(Object.entries(Op).map(([k, v]) => [v, k as OpName]))
 
 export type Inbound =
@@ -43,16 +42,54 @@ export interface SignalingOpts {
 const enc = new TextEncoder()
 const dec = new TextDecoder()
 
-function frame(flags: number, op: number, pid: number, body: unknown): Uint8Array {
-  const json = body === undefined ? new Uint8Array(0) : enc.encode(JSON.stringify(body))
+export type FrameKind = 'request' | 'ok' | 'fail'
+
+export interface Frame {
+  readonly kind: FrameKind
+  /** flags bit2-7 — 예약 · 원본을 보존한다 */
+  readonly reserved: number
+  readonly op: number
+  readonly pid: number
+  readonly body: unknown
+}
+
+export class FrameError extends Error {}
+
+export const MAX_FRAME = 1_048_576
+const KIND_BITS: Record<FrameKind, number> = { request: 0, ok: 1, fail: 2 }
+
+/** 8B 머리 + JSON — 빈 body 는 0바이트(연:TRN.frame.WS) */
+export function encodeFrame(kind: FrameKind, op: number, pid: number, body?: unknown, reserved = 0): Uint8Array {
+  const json = body === undefined || (body !== null && typeof body === 'object' && !Array.isArray(body) && Object.keys(body as object).length === 0) ? new Uint8Array(0) : enc.encode(JSON.stringify(body))
+  if (8 + json.length > MAX_FRAME) throw new FrameError('프레임이 1,048,576 바이트를 넘는다')
   const out = new Uint8Array(8 + json.length)
   out[0] = 1
-  out[1] = flags
+  out[1] = ((reserved & 0xfc) | KIND_BITS[kind]) & 0xff
   out[2] = (op >> 8) & 0xff
   out[3] = op & 0xff
   new DataView(out.buffer).setUint32(4, pid >>> 0)
   out.set(json, 8)
   return out
+}
+
+/** 8바이트 미만 · ver≠1 · flags 11 · 크기 초과 · JSON 아닌 body 는 FrameError — 끊는 사유다(연:RULE-TRN-CLOSE) */
+export function decodeFrame(b: Uint8Array): Frame {
+  if (b.length < 8) throw new FrameError('8바이트가 안 된다')
+  if (b.length > MAX_FRAME) throw new FrameError('프레임이 너무 크다')
+  if (b[0] !== 1) throw new FrameError('ver 가 1 이 아니다')
+  const bits = b[1]! & 3
+  if (bits === 3) throw new FrameError('flags 11 — 예약')
+  const op = (b[2]! << 8) | b[3]!
+  const pid = new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(4)
+  let body: unknown = {}
+  if (b.length > 8) {
+    try { body = JSON.parse(dec.decode(b.subarray(8))) } catch { throw new FrameError('body 가 JSON 이 아니다') }
+  }
+  return { kind: bits === 0 ? 'request' : bits === 1 ? 'ok' : 'fail', reserved: b[1]! & 0xfc, op, pid, body }
+}
+
+function frame(flags: number, op: number, pid: number, body: unknown): Uint8Array {
+  return encodeFrame(flags === 0 ? 'request' : flags === 1 ? 'ok' : 'fail', op, pid, body)
 }
 
 /**
@@ -94,11 +131,11 @@ export class Signaling {
       return
     }
     this.ws = ws
+    if (this.reqTimer === null) this.reqTimer = setInterval(() => this.checkTimeouts(), 1000)
     ws.onopen = () => { if (g === this.gen) { this.lastRx = now(); this.inbox.push({ t: 'open', gen: g }) } }
     ws.onmessage = (ev) => { if (g === this.gen) this.receive(ev.data) }
     ws.onclose = () => { if (g === this.gen) this.dropped() }
     ws.onerror = () => undefined
-    if (this.reqTimer === null) this.reqTimer = setInterval(() => this.checkTimeouts(), 1000)
   }
 
   /** LEAVE 없이 소켓을 닫는다 — 사유 없는 끊김으로 간다 */
@@ -177,15 +214,12 @@ export class Signaling {
   private receive(data: unknown): void {
     if (!(data instanceof ArrayBuffer)) { this.log.warn('text 프레임을 받았다 — 버린다'); return }
     this.lastRx = now()
-    const b = new Uint8Array(data)
-    if (b.length < 8 || b.length > MAX_FRAME || b[0] !== 1 || (b[1]! & 3) === 3) { this.log.error('손상 프레임 — 끊는다'); this.close(); return }
-    const flags = b[1]! & 3
-    const opNum = (b[2]! << 8) | b[3]!
-    const pid = new DataView(data).getUint32(4)
-    let body: unknown = {}
-    if (b.length > 8) {
-      try { body = JSON.parse(dec.decode(b.subarray(8))) } catch { this.log.error('JSON 아닌 body — 끊는다'); this.close(); return }
-    }
+    let f: Frame
+    try { f = decodeFrame(new Uint8Array(data)) } catch (e) { this.log.error(`손상 프레임 — 끊는다: ${String(e)}`); this.close(); return }
+    const flags = KIND_BITS[f.kind]
+    const opNum = f.op
+    const pid = f.pid
+    const body = f.body
     const op = NAME_OF.get(opNum)
     if (flags === 0) {
       if (!op) { this.sendRaw(1, opNum, pid, undefined); return }
@@ -232,6 +266,7 @@ export class Signaling {
     for (const p of this.waiting) p.reject(fault)
     this.inflight.clear()
     this.waiting.length = 0
+    if (this.reqTimer !== null) { clearInterval(this.reqTimer); this.reqTimer = null }
   }
 
   /** 소켓이 아예 끝났다 — 통을 닫는다 */

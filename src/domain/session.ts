@@ -270,17 +270,20 @@ export class Core {
     const plan = SB.plan(step)
     this.ses = plan.state
     this.record('SES', 'session', prev.cs, this.ses.cs, plan.label, cause, { attempt: this.ses.tries })
+    for (const tx of plan.send) this.sesSend(tx)
     this.sockFollow(prev)
     this.sesTimers(plan.timers)
-    for (const tx of plan.send) this.sesSend(tx)
     for (const sm of plan.seams) this.sesSeam(sm.fx)
     for (const f of step.fx) this.sesEffect(f, plan.label)
     this.lateClock(prev, plan.label)
     if (this.ses.cs === 'ACTIVE' && prev.cs !== 'ACTIVE') {
+      this.media.sessionActive(true)
       for (const w of this.activeWaiters.splice(0)) w.resolve()
       for (const l of this.links.values()) l.sessionBack()
     }
     if (this.ses.cs === 'DISCONNECTED' && prev.cs !== 'DISCONNECTED') {
+      this.media.sessionActive(false)
+      this.lateTimer.stop()
       for (const w of this.activeWaiters.splice(0)) w.reject(closedFault('CLOSED'))
     }
     this.surface()

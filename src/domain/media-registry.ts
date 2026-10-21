@@ -11,7 +11,7 @@ import { capture, enumerate, permission, deviceChanges, describe, canSetSink, do
 import { Timer, sleep } from '../platform/clock.js'
 import type { Core } from './session.js'
 import type { RoomCore } from './rooms.js'
-import { opusFmtpLine, type Layer } from './defaults.js'
+import type { Layer } from './defaults.js'
 
 export type Owner = 'app' | 'sdk' | 'external'
 export type LocalState = 'idle' | 'acquired' | 'staged' | 'registered' | 'sending'
@@ -200,15 +200,11 @@ export class LocalCore {
     return ls
   }
 
-  /** 2pc 트랙 단위 opus 선호(1pc 는 PeerLink 단위 값 하나 — SDK:RULE-SRC-PROFILE) */
+  /** opus answer fmtp — 방 고정값 하나 · 트랙별 dtx · fec · stereo 는 wire 에 닿지 않는다(로그 — SDK:RULE-SRC-PROFILE 증상) */
   private opusLine(): string {
-    if (this.kind !== 'audio') return this.core.opusLine
     const e = this.opts.encoding ?? {}
-    const ptt = this.profile === 'ptt'
-    const dtx = e.dtx ?? ptt
-    const fec = e.fec ?? true
-    if (this.core.ses.pcm === '1pc' && (e.dtx !== undefined || e.fec !== undefined)) this.core.log.info('1pc — 트랙별 dtx/fec 는 wire 에 닿지 않는다(PeerLink 단위 값 하나) · 무시한다', { track: this.key })
-    return opusFmtpLine({ usedtx: dtx ? 1 : 0, useinbandfec: fec ? 1 : 0, stereo: e.stereo ? 1 : 0, ...(e.maxBitrate ? { maxaveragebitrate: e.maxBitrate } : {}) })
+    if (this.kind === 'audio' && (e.dtx !== undefined || e.fec !== undefined || e.stereo !== undefined)) this.core.log.info('opus dtx/fec/stereo 는 answer 고정값(minptime=10;useinbandfec=1)이 정한다 — 무시한다', { track: this.key })
+    return this.core.opusLine
   }
 
   private releaseSlot(): void {
@@ -632,7 +628,12 @@ export class MediaRegistry {
     this.coldAfter = core.cfg.micColdAfterMs
     const md = deviceChanges()
     if (md) md.addEventListener('devicechange', () => void this.devicesChanged())
-    if (core.cfg.statsIntervalMs > 0) this.statsTimer = setInterval(() => void this.stats(), core.cfg.statsIntervalMs)
+  }
+
+  /** getStats 주기는 세션이 active 인 동안만 돈다 */
+  sessionActive(on: boolean): void {
+    if (on && this.statsTimer === null && this.core.cfg.statsIntervalMs > 0) this.statsTimer = setInterval(() => void this.stats(), this.core.cfg.statsIntervalMs)
+    if (!on && this.statsTimer !== null) { clearInterval(this.statsTimer); this.statsTimer = null }
   }
 
   register(t: LocalCore): void { this.tracks.add(t) }

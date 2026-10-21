@@ -1,549 +1,98 @@
 // author: kodeholic (powered by Claude)
-// 연§9 조립. 규격 §9-9 의 완성 예시와 줄 단위로 대조한다 — 표가 이기지만 예시와 어긋나면
-// 둘 중 하나가 틀린 것이라 그 자리에서 드러나야 한다.
+// 연:RULE-LINK-SDP-* 조립 — 판정 근거는 연동규격서 완성 예시(연:EX-LINK-SDP-PUB-ANSWER · SUB-OFFER · LISTEN-ONLY)다.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { publishAnswer, SdpError, Seat, sessionIdOf, subscribeOffer, unifiedOffer } from '../src/internal/sdp/build.js'
-import { parse } from '../src/internal/sdp/parse.js'
-import { BROWSER_OFFER, CFG, DC_ONLY_OFFER, FP } from './_sdp_fixtures.js'
+import * as Sdp from '../src/internal/sdp.js'
+import { pickRoom } from '../src/internal/transport.js'
+import { ROOM_OPUS_FMTP } from '../src/domain/defaults.js'
+import { SC, ROWS, SUB_OFFER, PUB_OFFER, PUB_ANSWER, DC_OFFER, DC_ANSWER } from './_fixtures.js'
 
-const lines = (sdp: string): string[] => sdp.split('\r\n').filter((l) => l.length > 0)
-const section = (sdp: string, i: number): string[] => {
-  const all = lines(sdp)
-  const heads = all.map((l, n) => (l.startsWith('m=') ? n : -1)).filter((n) => n >= 0)
-  return all.slice(heads[i]!, heads[i + 1] ?? all.length)
-}
+const sub: Sdp.Wire = { sc: SC, creds: { ufrag: 'subUf1', pwd: 'subPw1' }, udp: true }
+const pub: Sdp.Wire = { sc: SC, creds: { ufrag: 'pubUf1', pwd: 'pubPw1' }, udp: true }
+const lines = (s: string): string[] => s.split('\r\n').filter((l) => l)
 
-test('연§9-9-1 보내기 answer — 예시와 전 줄이 같다', () => {
-  const got = publishAnswer(BROWSER_OFFER, CFG, { session: { id: '4611731400430051336', version: 2 } })
-  assert.deepEqual(lines(got), [
-    'v=0',
-    'o=- 4611731400430051336 2 IN IP4 127.0.0.1',
-    's=-',
-    't=0 0',
-    'a=group:BUNDLE 0 1 2',
-    'a=msid-semantic: WMS *',
-    'a=ice-lite',
-    'm=audio 7000 UDP/TLS/RTP/SAVPF 111',
-    'c=IN IP4 203.0.113.10',
-    'a=ice-ufrag:pubUf1',
-    'a=ice-pwd:pubPw1',
-    `a=fingerprint:${FP}`,
-    'a=setup:passive',
-    'a=mid:0',
-    'a=rtcp-mux',
-    'a=recvonly',
-    'a=rtpmap:111 opus/48000/2',
-    'a=fmtp:111 minptime=10;useinbandfec=1',
-    'a=rtcp-fb:111 transport-cc',
-    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
-    'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
-    'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
-    'a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0',
-    'a=end-of-candidates',
-    'm=video 7000 UDP/TLS/RTP/SAVPF 102 103',
-    'c=IN IP4 203.0.113.10',
-    'a=ice-ufrag:pubUf1',
-    'a=ice-pwd:pubPw1',
-    `a=fingerprint:${FP}`,
-    'a=setup:passive',
-    'a=mid:1',
-    'a=rtcp-mux',
-    'a=rtcp-rsize',
-    'a=recvonly',
-    'a=rtpmap:102 H264/90000',
-    'a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f',
-    'a=rtcp-fb:102 nack',
-    'a=rtcp-fb:102 nack pli',
-    'a=rtcp-fb:102 ccm fir',
-    'a=rtcp-fb:102 transport-cc',
-    'a=rtpmap:103 rtx/90000',
-    'a=fmtp:103 apt=102',
-    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
-    'a=extmap:5 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time',
-    'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
-    'a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0',
-    'a=end-of-candidates',
-    'm=application 7000 UDP/DTLS/SCTP webrtc-datachannel',
-    'c=IN IP4 203.0.113.10',
-    'a=ice-ufrag:pubUf1',
-    'a=ice-pwd:pubPw1',
-    `a=fingerprint:${FP}`,
-    'a=setup:passive',
-    'a=mid:2',
-    'a=sendrecv',
-    'a=sctp-port:5000',
-    'a=max-message-size:65536',
-    'a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0',
-    'a=end-of-candidates',
+test('연:EX-LINK-SDP-SUB-OFFER — 배정표만으로 구독 offer 를 짓는다(빈 줄도 같은 모양)', () => {
+  assert.deepEqual(lines(Sdp.subOffer(sub, { id: '1756000000000', version: 1 }, ROWS)), SUB_OFFER)
+})
+
+test('연:EX-LINK-SDP-PUB-ANSWER — offer 의 m-line 순서 · 개수 그대로 · rtcp-fb 만 서버 값', () => {
+  assert.deepEqual(lines(Sdp.answer(pub, Sdp.parse(PUB_OFFER), () => ROOM_OPUS_FMTP)), PUB_ANSWER)
+})
+
+test('연:EX-LINK-SDP-LISTEN-ONLY — m=application 하나로 협상이 선다', () => {
+  assert.deepEqual(lines(Sdp.answer(pub, Sdp.parse(DC_OFFER), () => ROOM_OPUS_FMTP)), DC_ANSWER)
+})
+
+test('연:RULE-LINK-SDP-SUB-MLINE 정렬 — mid 수치 오름차순("10" 은 "2" 뒤)', () => {
+  const rows = [{ ...ROWS[2]!, mid: '10' }, { ...ROWS[0]!, mid: '2' }]
+  const got = lines(Sdp.subOffer(sub, { id: '1', version: 1 }, rows)).filter((l) => l.startsWith('a=mid:'))
+  assert.deepEqual(got, ['a=mid:2', 'a=mid:10'])
+})
+
+test('연:RULE-LINK-SDP-SUB-MLINE RTX — 짝이 깨지면 실패로 다룬다', () => {
+  const broken = [{ ...ROWS[1]!, rtx_ssrc: undefined } as unknown as (typeof ROWS)[number]]
+  assert.throws(() => Sdp.subOffer(sub, { id: '1', version: 1 }, broken))
+})
+
+test('연:RULE-LINK-SDP-COMMON — tcp_port 가 오면 TCP passive 줄 · QA 스위치가 UDP 줄을 끈다', () => {
+  const sc = { ...SC, ice: { ...SC.ice, tcp_port: 7443 } }
+  const got = lines(Sdp.subOffer({ ...sub, sc, udp: false }, { id: '1', version: 1 }, [ROWS[0]!])).filter((l) => l.startsWith('a=candidate'))
+  assert.deepEqual(got, ['a=candidate:2 1 tcp 2113937150 203.0.113.10 7443 typ host tcptype passive generation 0'])
+})
+
+test('연:RULE-LINK-SDP-PUB-MLINE 남는 코덱 0 개 — 조용히 넘어가지 않는다', () => {
+  const vp8only = PUB_OFFER.replace('a=rtpmap:102 H264/90000', 'a=rtpmap:102 VP9/90000')
+  const sc = { ...SC, codecs: SC.codecs.filter((c) => c.kind === 'audio') }
+  assert.throws(() => Sdp.answer({ ...pub, sc }, Sdp.parse(vp8only), () => ROOM_OPUS_FMTP))
+})
+
+test('연:RULE-LINK-SDP-PUB-MLINE 시뮬캐스트 — rid 를 recv 로 뒤집고 낮은 품질부터', () => {
+  const sim = PUB_OFFER.replace('a=mid:1\r\n', 'a=mid:1\r\na=rid:l send\r\na=rid:h send\r\na=simulcast:send l;h\r\n').replace(/a=inactive\r\na=rtcp-mux\r\na=rtpmap:102/, 'a=sendonly\r\na=rtcp-mux\r\na=rtpmap:102')
+  const got = lines(Sdp.answer(pub, Sdp.parse(sim), () => ROOM_OPUS_FMTP))
+  const v = got.slice(got.findIndex((l) => l.startsWith('m=video')))
+  assert.ok(v.includes('a=recvonly'))
+  assert.deepEqual(v.filter((l) => l.startsWith('a=rid') || l.startsWith('a=simulcast')), ['a=rid:l recv', 'a=rid:h recv', 'a=simulcast:recv l;h'])
+})
+
+test('연:RULE-LINK-SDP-PUB-MLINE 코덱 고르기 — H264 는 패킷화 · profile 이 방 값과 같은 줄(level 은 보지 않는다)', () => {
+  const cs: Sdp.Codec[] = [
+    { pt: 96, rtpmap: 'VP8/90000' },
+    { pt: 100, rtpmap: 'H264/90000', fmtp: 'level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f' },
+    { pt: 102, rtpmap: 'H264/90000', fmtp: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f' },
+    { pt: 108, rtpmap: 'H264/90000', fmtp: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e034', rtx: 109 },
+  ]
+  assert.deepEqual(pickRoom(cs, { name: 'H264' }).map((c) => c.pt), [108])
+  assert.deepEqual(pickRoom(cs, { name: 'VP8' }).map((c) => c.pt), [96])
+})
+
+test('연:RULE-LINK-SDP-1PC-FILL 구독 extmap — 번호표 번호 · 없으면 서버 번호 · 겹치면 둘 어디에도 없는 가장 작은 번호', () => {
+  const mine = [{ id: 1, uri: 'urn:ietf:params:rtp-hdrext:sdes:mid' }, { id: 3, uri: 'http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01' }, { id: 5, uri: 'urn:example:other' }]
+  assert.deepEqual(Sdp.onePcExtId(SC, mine, SC.extmap[0]!), { id: 1, uri: SC.extmap[0]!.uri })
+  assert.deepEqual(Sdp.onePcExtId(SC, mine, SC.extmap[3]!), { id: 3, uri: SC.extmap[3]!.uri })
+  assert.deepEqual(Sdp.onePcExtId(SC, mine, SC.extmap[1]!), { id: 4, uri: SC.extmap[1]!.uri })
+  assert.deepEqual(Sdp.onePcExtId(SC, mine, SC.extmap[2]!), { id: 2, uri: SC.extmap[2]!.uri })
+})
+
+test('연:RULE-ROOM-JOIN-NUMBER-TAGS — 번호표는 offer 의 코덱 줄 전량 · 확장 ID 전량', () => {
+  const t = Sdp.numberTags(PUB_OFFER)
+  assert.deepEqual(t.codecs, [
+    { kind: 'audio', pt: 111, name: 'opus', fmtp: 'minptime=10;useinbandfec=1' },
+    { kind: 'video', pt: 102, name: 'H264', fmtp: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f', rtx_pt: 103 },
   ])
+  assert.deepEqual(t.extmap.map((e) => e.id), [1, 4, 6, 5])
 })
 
-test('연§9-9-3 청취 전용 — 미디어 m-line 없이도 협상이 선다', () => {
-  const got = publishAnswer(DC_ONLY_OFFER, CFG, { session: { id: '4611731400430051336', version: 2 } })
-  assert.deepEqual(lines(got), [
-    'v=0',
-    'o=- 4611731400430051336 2 IN IP4 127.0.0.1',
-    's=-',
-    't=0 0',
-    'a=group:BUNDLE 0',
-    'a=msid-semantic: WMS *',
-    'a=ice-lite',
-    'm=application 7000 UDP/DTLS/SCTP webrtc-datachannel',
-    'c=IN IP4 203.0.113.10',
-    'a=ice-ufrag:pubUf1',
-    'a=ice-pwd:pubPw1',
-    `a=fingerprint:${FP}`,
-    'a=setup:passive',
-    'a=mid:0',
-    'a=sendrecv',
-    'a=sctp-port:5000',
-    'a=max-message-size:65536',
-    'a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0',
-    'a=end-of-candidates',
-  ], '트랙이 없다고 이 연결을 안 세우면 누가 말하는지 영영 안 뜬다')
-})
-
-test('answer 의 m-line 개수와 순서는 offer 와 같다', () => {
-  const got = parse(publishAnswer(BROWSER_OFFER, CFG))
-  const offer = parse(BROWSER_OFFER)
-  assert.deepEqual(got.sections.map((m) => [m.kind, m.mid]), offer.sections.map((m) => [m.kind, m.mid]))
-  assert.deepEqual(got.bundle, offer.bundle, 'BUNDLE 은 offer 에서 읽은 목록 그대로다')
-})
-
-test('서버가 모르는 코덱은 PT 줄째로 빠지고 아는 것은 남는다', () => {
-  const offer = BROWSER_OFFER
-    .replace('m=video 9 UDP/TLS/RTP/SAVPF 102 103', 'm=video 9 UDP/TLS/RTP/SAVPF 102 103 104')
-    .replace('a=rtpmap:103 rtx/90000', 'a=rtpmap:104 VP9/90000\r\na=rtpmap:103 rtx/90000')
-  const video = section(publishAnswer(offer, CFG), 1)
-  assert.ok(!video.some((l) => l.includes('VP9')), '서버가 못 알아보는 PT 로 보내게 두면 안 된다')
-  assert.ok(video[0]!.endsWith('102 103'), 'm-line 의 PT 목록에서도 빠진다')
-  assert.ok(video.includes('a=rtpmap:102 H264/90000'))
-})
-
-test('남는 코덱이 0개면 조용히 넘어가지 않고 협상 실패다', () => {
-  const offer = BROWSER_OFFER.replace('a=rtpmap:111 opus/48000/2', 'a=rtpmap:111 PCMU/8000')
-  assert.throws(() => publishAnswer(offer, CFG), (e) => {
-    assert.ok(e instanceof SdpError)
-    assert.equal(e.reason, 'negotiation')
-    return true
-  }, '코덱 없는 m-line 이 나가면 검은 화면이 된다')
-})
-
-test('extmap 번호는 offer 것을 쓴다 — 새로 매기면 rid·mid·twcc 파싱이 죽는다', () => {
-  const offer = BROWSER_OFFER.replace(
-    'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
-    'a=extmap:7 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
-  )
-  const audio = section(publishAnswer(offer, CFG), 0)
-  assert.ok(audio.includes('a=extmap:7 urn:ietf:params:rtp-hdrext:ssrc-audio-level'))
-  assert.ok(!audio.some((l) => l.startsWith('a=extmap:4 ')), '서버 번호로 되돌리면 안 된다')
-})
-
-test('서버가 선언하지 않은 확장은 answer 에 안 남는다', () => {
-  const offer = BROWSER_OFFER.replace(
-    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid\r\na=extmap:4',
-    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid\r\na=extmap:9 urn:3gpp:video-orientation\r\na=extmap:4',
-  )
-  assert.ok(!publishAnswer(offer, CFG).includes('video-orientation'))
-})
-
-test('시뮬캐스트는 방향을 recv 로 뒤집는다', () => {
-  const offer = BROWSER_OFFER.replace('a=mid:1', 'a=mid:1\r\na=simulcast:send h;l')
-  const video = section(publishAnswer(offer, CFG), 1)
-  assert.ok(video.includes('a=rid:h recv') && video.includes('a=rid:l recv'))
-  assert.ok(video.includes('a=simulcast:recv h;l'), '빼면 브라우저가 한 단만 보낸다')
-  assert.ok(!section(publishAnswer(BROWSER_OFFER, CFG), 1).some((l) => l.startsWith('a=rid:')),
-    'offer 에 없으면 넣지 않는다')
-})
-
-test('opus 받는 쪽 선호만 answer 가 정하고 이름·클럭·PT 는 원문이다', () => {
-  const audio = section(publishAnswer(BROWSER_OFFER, CFG, { audioPrefs: { usedtx: 1, stereo: 0 } }), 0)
-  assert.ok(audio.includes('a=rtpmap:111 opus/48000/2'), '코덱 줄은 offer 원문 그대로다')
-  const fmtp = audio.find((l) => l.startsWith('a=fmtp:111'))!
-  assert.match(fmtp, /minptime=10/)
-  assert.match(fmtp, /useinbandfec=1/)
-  assert.match(fmtp, /usedtx=1/)
-  assert.match(fmtp, /stereo=0/)
-})
-
-test('offer 가 inactive 면 answer 도 inactive 다', () => {
-  const offer = BROWSER_OFFER.replace('a=mid:1\r\na=sendrecv', 'a=mid:1\r\na=inactive')
-  assert.ok(section(publishAnswer(offer, CFG), 1).includes('a=inactive'))
-})
-
-const SEATS: Seat[] = [
-  {
-    mid: '0', kind: 'audio', room_id: 'r1', user_id: 'u2', track_id: 't-u2-mic',
-    ssrc: 1001, pt: 111, codec: 'opus', fmtp: 'minptime=10;useinbandfec=1',
-  },
-  {
-    mid: '1', kind: 'video', room_id: 'r1', track_id: 'ptt-r1-video',
-    ssrc: 2001, rtx_ssrc: 2002, pt: 102, rtx_pt: 103, codec: 'H264',
-    fmtp: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f',
-  },
-  { mid: '2', kind: 'video', room_id: 'r1', track_id: 't-u3-cam', pt: 102, codec: 'H264', active: false },
-]
-
-// ★연§9-5 표는 받기 audio 확장을 4·5·6 으로 정하는데 §9-9-2 예시에는 5 가 없다.
-// 규격이 "표가 이긴다"고 못박으므로 표를 따른다.
-test('연§9-9-2 받기 offer — 예시와 전 줄이 같다(표가 이기는 줄만 다르다)', () => {
-  const got = subscribeOffer(SEATS, CFG, { session: { id: '1756000000000', version: 1 } })
-  assert.deepEqual(lines(got), [
-    'v=0',
-    'o=- 1756000000000 1 IN IP4 127.0.0.1',
-    's=-',
-    't=0 0',
-    'a=group:BUNDLE 0 1 2',
-    'a=msid-semantic: WMS *',
-    'a=ice-lite',
-    'm=audio 7000 UDP/TLS/RTP/SAVPF 111',
-    'c=IN IP4 203.0.113.10',
-    'a=ice-ufrag:subUf1',
-    'a=ice-pwd:subPw1',
-    `a=fingerprint:${FP}`,
-    'a=setup:passive',
-    'a=mid:0',
-    'a=rtcp-mux',
-    'a=sendonly',
-    'a=rtpmap:111 opus/48000/2',
-    'a=fmtp:111 minptime=10;useinbandfec=1',
-    'a=rtcp-fb:111 transport-cc',
-    // ★12차 — 받기 절에도 mid 확장을 선언한다(연§4-2-1 ③).
-    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
-    'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
-    'a=extmap:5 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time',
-    'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
-    'a=msid:ox-u2 t-u2-mic',
-    'a=ssrc:1001 cname:ox-sfu',
-    'a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0',
-    'a=end-of-candidates',
-    'm=video 7000 UDP/TLS/RTP/SAVPF 102 103',
-    'c=IN IP4 203.0.113.10',
-    'a=ice-ufrag:subUf1',
-    'a=ice-pwd:subPw1',
-    `a=fingerprint:${FP}`,
-    'a=setup:passive',
-    'a=mid:1',
-    'a=rtcp-mux',
-    'a=rtcp-rsize',
-    'a=sendonly',
-    'a=rtpmap:102 H264/90000',
-    'a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f',
-    'a=rtcp-fb:102 nack',
-    'a=rtcp-fb:102 nack pli',
-    'a=rtcp-fb:102 ccm fir',
-    'a=rtcp-fb:102 transport-cc',
-    'a=rtpmap:103 rtx/90000',
-    'a=fmtp:103 apt=102',
-    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
-    'a=extmap:5 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time',
-    'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
-    'a=msid:ox-ptt ptt-r1-video',
-    'a=ssrc:2001 cname:ox-sfu',
-    'a=ssrc:2002 cname:ox-sfu',
-    'a=ssrc-group:FID 2001 2002',
-    'a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0',
-    'a=end-of-candidates',
-    'm=video 7 UDP/TLS/RTP/SAVPF 102',
-    'c=IN IP4 203.0.113.10',
-    'a=ice-ufrag:subUf1',
-    'a=ice-pwd:subPw1',
-    `a=fingerprint:${FP}`,
-    'a=setup:passive',
-    'a=mid:2',
-    'a=rtcp-mux',
-    'a=rtcp-rsize',
-    'a=inactive',
-    'a=rtpmap:102 H264/90000',
-    'a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0',
-    'a=end-of-candidates',
-  ])
-})
-
-test('★받기 m-line 에도 sdes:mid 를 선언한다 — 12차에 뒤집혔다', () => {
-  // ★★**옛 규격은 이 확장을 빼고 SSRC 로만 갈랐다**(알고 하는 이탈). 12차가 되돌렸다:
-  //   서버가 송신에서 확장 값을 ★**그 m-line 의 `assign.mid`** 로 다시 쓰므로(연§4-2-1 ③)
-  //   발행자 mid 값이 새지 않고, 브라우저는 SSRC 로도 mid 로도 같은 절을 고른다.
-  // ★**안 선언하면** 받기 절이 둘이고 PT 가 같을 때(opus 둘은 한 튜플이다, §4-2-1 ①)
-  //   ★**브라우저가 demuxer 기준을 못 세운다** — 3층 `ONEPC-03` 이 그 자리다.
-  assert.ok(subscribeOffer(SEATS, CFG).includes('sdes:mid'),
-    'RFC 8843 §9.1 — bundled 절 전부에 mid 확장을 선언한다')
-})
-
-test('조립 순서는 mid 수치다', () => {
-  const many: Seat[] = ['10', '2', '0'].map((mid) => ({
-    ...SEATS[0]!, mid, track_id: `t${mid}`, ssrc: 1000 + Number(mid),
-  }))
-  const got = parse(subscribeOffer(many, CFG))
-  assert.deepEqual(got.sections.map((m) => m.mid), ['0', '2', '10'])
-  assert.deepEqual(got.bundle, ['0', '2', '10'], 'BUNDLE 도 같은 차례다')
-})
-
-test('pt 가 없으면 정책표로 채우지 않고 실패로 다룬다', () => {
-  const seat = { ...SEATS[0]! } as Record<string, unknown>
-  delete seat.pt
-  assert.throws(() => subscribeOffer([seat as unknown as Seat], CFG), (e) => {
-    assert.ok(e instanceof SdpError)
-    assert.equal(e.reason, 'missing_pt')
-    return true
-  }, '폴백은 조용히 검은 화면을 만든다')
-})
-
-test('audio 에는 NACK 을 협상하지 않는다', () => {
-  const cfg = {
-    ...CFG,
-    codecs_sub: [{ kind: 'audio' as const, name: 'opus', rtcp_fb: ['nack', 'transport-cc'] }],
-  }
-  const audio = section(subscribeOffer([SEATS[0]!], cfg), 0)
-  assert.ok(!audio.some((l) => l.startsWith('a=rtcp-fb:111 nack')),
-    '반이중 슬롯은 화자 교대마다 seq 가 건너뛰어 NACK 이 폭주한다')
-  assert.ok(audio.includes('a=rtcp-fb:111 transport-cc'))
-})
-
-test('받기 rtcp_fb 는 codecs_sub 가 오면 그것이 지배한다', () => {
-  const cfg = {
-    ...CFG,
-    codecs_sub: [{ kind: 'video' as const, name: 'H264', rtcp_fb: ['nack pli'] }],
-  }
-  const video = section(subscribeOffer([SEATS[1]!], cfg), 0)
-  assert.deepEqual(video.filter((l) => l.startsWith('a=rtcp-fb:')), ['a=rtcp-fb:102 nack pli'])
-})
-
-test('codecs_sub 는 rtcp_fb 만 지배한다 — PT·코덱·fmtp 는 TrackEntry 것이다', () => {
-  const cfg = { ...CFG, codecs_sub: [{ kind: 'video' as const, name: 'VP8', rtcp_fb: ['nack'] }] }
-  const video = section(subscribeOffer([SEATS[1]!], cfg), 0)
-  assert.ok(video.includes('a=rtpmap:102 H264/90000'))
-  assert.ok(video.some((l) => l.startsWith('a=fmtp:102 level-asymmetry-allowed=1')))
-})
-
-test('rtx 는 ssrc 두 줄과 FID 를 짝으로 갖는다', () => {
-  const video = section(subscribeOffer([SEATS[1]!], CFG), 0).join('\n')
-  assert.ok(video.includes('a=ssrc-group:FID 2001 2002'),
-    'FID 를 빠뜨리면 재전송 패킷을 원본으로 오인한다')
-
-  const noRtx = { ...SEATS[1]! } as Record<string, unknown>
-  delete noRtx.rtx_ssrc; delete noRtx.rtx_pt
-  const plain = section(subscribeOffer([noRtx as unknown as Seat], CFG), 0).join('\n')
-  assert.ok(!plain.includes('ssrc-group') && !plain.includes('rtx/'))
-})
-
-test('무전 슬롯은 stream-id 가 ox-ptt 하나다', () => {
-  assert.ok(section(subscribeOffer([SEATS[1]!], CFG), 0).includes('a=msid:ox-ptt ptt-r1-video'))
-})
-
-test('일반 트랙의 stream-id 는 source 까지 붙는다', () => {
-  const seat: Seat = { ...SEATS[0]!, user_id: 'u9', source: 'screen', track_id: 't-u9-scr' }
-  assert.ok(section(subscribeOffer([seat], CFG), 0).includes('a=msid:ox-u9-screen t-u9-scr'))
-})
-
-test('안 쓰는 m-line 은 port 7 이고 msid·ssrc 가 없다', () => {
-  const seat = section(subscribeOffer([SEATS[2]!], CFG), 0)
-  assert.ok(seat[0]!.startsWith('m=video 7 '), 'port 0 이면 BUNDLE 태그가 옮겨가 전송이 깨진다')
-  assert.ok(!seat.some((l) => l.startsWith('a=msid') || l.startsWith('a=ssrc')))
-  assert.ok(seat.includes('a=rtpmap:102 H264/90000'), '코덱 줄은 그 자리의 pt·codec 으로 짓는다')
-})
-
-test('ICE 자격은 연결마다 다르다', () => {
-  assert.ok(subscribeOffer(SEATS, CFG).includes('a=ice-ufrag:subUf1'))
-  assert.ok(publishAnswer(BROWSER_OFFER, CFG).includes('a=ice-ufrag:pubUf1'))
-})
-
-// ── 연§9-10 1pc — 2pc 가 구조로 공짜로 얻는 것을 손으로 지키는 자리 ──────────────
-
-const CONFIRMED = publishAnswer(BROWSER_OFFER, CFG)
-
-test('통합 offer 는 보내기·받기를 한 BUNDLE 에 담는다', () => {
-  const got = parse(unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, {
-    mine: BROWSER_OFFER, confirmed: CONFIRMED,
-  }))
-  assert.deepEqual(got.bundle, ['0', '1', '2', '32'])
-  assert.deepEqual(got.sections.map((m) => m.mid), ['0', '1', '2', '32'])
-})
-
-test('1pc 는 ICE 자격을 publish 한 벌만 쓴다', () => {
-  const sdp = unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, { mine: BROWSER_OFFER, confirmed: CONFIRMED })
-  assert.ok(!sdp.includes('subUf1'), '한 BUNDLE 에 자격이 둘이면 전송로가 안 선다')
-  assert.equal(sdp.split('a=ice-ufrag:pubUf1').length - 1, 4)
-})
-
-test('보내기 방향은 서버 시각으로 뒤집힌다', () => {
-  const sdp = unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, { mine: BROWSER_OFFER, confirmed: CONFIRMED })
-  assert.equal(section(sdp, 0).includes('a=recvonly'), true, '내 트랙은 서버가 받는다')
-  assert.equal(section(sdp, 3).includes('a=sendonly'), true, '남의 트랙은 서버가 보낸다')
-  assert.ok(section(sdp, 2).includes('a=sendrecv'), '데이터 채널은 양방향이다')
-})
-
-test('보내기 코덱 줄은 확정 answer 에서 온다 — 내 offer 목록이 아니다', () => {
-  const mine = BROWSER_OFFER
-    .replace('m=audio 9 UDP/TLS/RTP/SAVPF 111', 'm=audio 9 UDP/TLS/RTP/SAVPF 111 8')
-    .replace('a=rtpmap:111 opus/48000/2', 'a=rtpmap:111 opus/48000/2\r\na=rtpmap:8 PCMA/8000')
-  const audio = section(unifiedOffer([], CFG, { mine, confirmed: CONFIRMED }), 0)
-  assert.ok(!audio.some((l) => l.includes('PCMA')),
-    '내 offer 를 되비추면 answer 가 걸러냈던 코덱이 되살아난다')
-  assert.ok(audio[0]!.endsWith('SAVPF 111'))
-})
-
-test('★확정본에 없는 보내기 절은 내 offer 로 짓는다 — 새 절이다(17차)', () => {
-  // ★★**17차가 자리 확보 트랜시버를 철거한 뒤로 새 절이 실제로 생긴다**(화면공유).
-  //   그 절은 ★**아직 서버와 합의한 적이 없으므로 확정본이 있을 수가 없다** — 던지면
-  //   화면공유가 원리적으로 불가능해진다. 코덱 줄 출처는 내 offer 다.
-  // ★**있는 절은 여전히 확정본에서 짓는다** — 내 offer 에서 가져오면 걸러냈던 코덱이
-  //   되살아나 보고한 것과 다른 코덱으로 보낸다(연§9-10-3 증상).
-  const sdp = unifiedOffer([], CFG, { mine: BROWSER_OFFER, confirmed: 'v=0\r\n' })
-  const got = parse(sdp)
-  assert.ok(got.sections.length > 0, '새 절을 지어야 한다 — 던지면 화면공유가 막힌다')
-  assert.ok(got.sections.every((m) => m.kind === 'application' || m.pts.length > 0),
-    '코덱 없는 절을 지어내지는 않는다')
-})
-
-test('extmap 번호는 내 offer 것이고 받기도 확정본 번호를 쓴다', () => {
-  const mine = BROWSER_OFFER.replace(
-    'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
-    'a=extmap:7 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
-  )
-  const confirmed = publishAnswer(mine, CFG)
-  const sdp = unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, { mine, confirmed })
-  assert.ok(section(sdp, 0).includes('a=extmap:7 urn:ietf:params:rtp-hdrext:ssrc-audio-level'))
-  assert.ok(section(sdp, 3).includes('a=extmap:7 urn:ietf:params:rtp-hdrext:ssrc-audio-level'),
-    '한 BUNDLE 이라 URI 마다 번호가 하나여야 한다')
-})
-
-test('★1pc 받기에도 sdes:mid 를 선언한다 — 보내기와 같은 번호다', () => {
-  const sdp = unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, { mine: BROWSER_OFFER, confirmed: CONFIRMED })
-  assert.ok(section(sdp, 3).some((l) => l.includes('sdes:mid')), '12차 — 받기에도 선언한다')
-  assert.ok(section(sdp, 0).some((l) => l.includes('sdes:mid')), '보내기에는 원래 있다')
-  // ★**한 BUNDLE 에 URI 마다 번호가 하나다** — 갈리면 서버가 쓴 번호를 브라우저가 못 읽는다.
-  const idOf = (i: number) => section(sdp, i).find((l) => l.includes('sdes:mid'))?.split(' ')[0]
-  assert.equal(idOf(3), idOf(0), '받기와 보내기의 mid 확장 번호는 같다')
-})
-
-test('msid 는 따로 줄로 쓰고 ssrc 에는 cname 만 단다', () => {
-  const recv = section(unifiedOffer([{ ...SEATS[0]!, mid: '32' }], CFG, {
-    mine: BROWSER_OFFER, confirmed: CONFIRMED,
-  }), 3)
-  assert.ok(recv.includes('a=msid:ox-u2 t-u2-mic'))
-  assert.ok(recv.includes('a=ssrc:1001 cname:ox-sfu'))
-  assert.ok(!recv.some((l) => l.startsWith('a=ssrc:') && l.includes('msid:')),
-    '합쳐 쓰면 같은 연결의 시뮬캐스트 송신 단이 증발한다')
-})
-
-test('비게 된 보내기 m-line 은 inactive 로 남는다', () => {
-  const mine = BROWSER_OFFER.replace('a=mid:1\r\na=sendrecv', 'a=mid:1\r\na=inactive')
-  const sdp = unifiedOffer([], CFG, { mine, confirmed: publishAnswer(mine, CFG) })
-  const video = section(sdp, 1)
-  assert.ok(video.includes('a=inactive'))
-  assert.ok(parse(sdp).bundle.includes('1'), '없애면 BUNDLE 태그가 옮겨가 전송이 깨진다')
-})
-
-// 연§9-10 규칙 1 — `1pc` 은 한 벌이라 브라우저 offer 에 받기 m-line 이 딸려 나온다.
-// 그 자리를 `recvonly` 로 답하면 브라우저가 방향 불일치로 거부한다.
-const ONE_PC_OFFER = [
-  'v=0',
-  'o=- 4611731400430051336 3 IN IP4 127.0.0.1',
-  's=-',
-  't=0 0',
-  'a=group:BUNDLE 0 32',
-  'a=msid-semantic: WMS *',
-  'm=audio 9 UDP/TLS/RTP/SAVPF 111',
-  'c=IN IP4 0.0.0.0',
-  'a=ice-ufrag:cliUf1',
-  'a=ice-pwd:cliPw1',
-  'a=fingerprint:sha-256 11:22:33',
-  'a=setup:actpass',
-  'a=mid:0',
-  'a=sendonly',
-  'a=rtcp-mux',
-  'a=rtpmap:111 opus/48000/2',
-  'a=fmtp:111 minptime=10;useinbandfec=1',
-  'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
-  'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
-  'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
-  'm=audio 9 UDP/TLS/RTP/SAVPF 111',
-  'c=IN IP4 0.0.0.0',
-  'a=ice-ufrag:cliUf1',
-  'a=ice-pwd:cliPw1',
-  'a=fingerprint:sha-256 11:22:33',
-  'a=setup:actpass',
-  'a=mid:32',
-  'a=recvonly',
-  'a=rtcp-mux',
-  'a=rtpmap:111 opus/48000/2',
-  'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
-  'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
-  'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
-].join('\r\n')
-
-const SEAT_32: Seat = {
-  mid: '32', kind: 'audio', pt: 111, codec: 'opus', ssrc: 1001, track_id: 't-u2-mic', user_id: 'u2', room_id: 'r1',
-}
-
-test('연§9-10 규칙 1 — 딸려 나온 받기 자리를 sendonly + SSRC 로 답한다', () => {
-  const got = publishAnswer(ONE_PC_OFFER, CFG, { seats: [SEAT_32] })
-  const recv = section(got, 1)
-  assert.ok(recv.includes('a=mid:32') && recv.includes('a=sendonly'), '받기 자리는 서버가 보낸다')
-  assert.ok(!recv.includes('a=recvonly'), 'recvonly 로 답하면 방향 불일치로 거부된다')
-  assert.ok(recv.includes('a=msid:ox-u2 t-u2-mic') && recv.includes('a=ssrc:1001 cname:ox-sfu'))
-  assert.ok(recv.some((l) => l.startsWith('a=extmap:1 ')),
-    '★받기에도 sdes:mid 를 선언한다(연§4-2-1 ③ — 12차에 뒤집혔다)')
-  assert.equal(section(got, 0).find((l) => l.startsWith('a=recv') || l.startsWith('a=send')), 'a=recvonly')
-  assert.ok(lines(got).includes('a=group:BUNDLE 0 32'), 'm-line 개수와 순서는 offer 그대로다')
-})
-
-test('연§9-10 규칙 2 — 상대 축 번호는 offer 에 선 것 그대로다', () => {
-  const recv = section(publishAnswer(ONE_PC_OFFER, CFG, { seats: [SEAT_32] }), 1)
-  assert.deepEqual(recv.filter((l) => l.startsWith('a=extmap:')), [
-    // ★12차 — 받기 절에도 mid 확장을 선언한다(연§4-2-1 ③).
-    'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
-    'a=extmap:4 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
-    'a=extmap:6 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01',
-  ])
-})
-
-test('연§9-10-1 — 받기 mid 가 내 offer 에도 있으면 한 번만 싣는다', () => {
-  const got = unifiedOffer([SEAT_32], CFG, { mine: ONE_PC_OFFER, confirmed: publishAnswer(ONE_PC_OFFER, CFG, { seats: [SEAT_32] }) })
-  assert.ok(lines(got).includes('a=group:BUNDLE 0 32'), 'mid 가 BUNDLE 에 두 번 들어가지 않는다')
-  assert.equal(lines(got).filter((l) => l === 'a=mid:32').length, 1, 'm-line 이 겹치지 않는다')
-})
-
-// 연§9-2 — `o=` 의 session-id 는 ★숫자 문자열이어야 한다(RFC 4566 §5.2).
-// 서버 신원(`sfu_id`)을 그대로 쓰면 Firefox 가 SDP 를 통째로 거부한다:
-//   "SDP Parse Error: Invalid owner session id specified for o=". Chrome 은 받아 준다.
-test('연§9-2 — o= 의 session-id 는 숫자다', () => {
-  const id = sessionIdOf('sfu-f8531b178cce4811ace3e2352d248931')
-  assert.match(id, /^[0-9]+$/, '숫자 문자열이라야 Firefox 가 받는다')
-  assert.equal(sessionIdOf('sfu-f8531b178cce4811ace3e2352d248931'), id, '★그 연결 내내 같은 값이다')
-  assert.notEqual(sessionIdOf('sfu-1'), sessionIdOf('sfu-2'), '서버가 다르면 값도 다르다')
-  assert.notEqual(sessionIdOf(''), '0', '0 은 내지 않는다')
-})
-
-test('연§9-2 — 조립된 SDP 의 o= 줄이 실제로 숫자를 싣는다', () => {
-  for (const sdp of [
-    publishAnswer(BROWSER_OFFER, CFG, { seats: [], session: { id: sessionIdOf(CFG.sfu_id), version: 1 } }),
-    subscribeOffer([], CFG, { session: { id: sessionIdOf(CFG.sfu_id), version: 1 } }),
-  ]) {
-    const o = lines(sdp).find((l) => l.startsWith('o='))!
-    assert.match(o, /^o=- [0-9]+ [0-9]+ IN IP4 /, `o= 줄이 RFC 4566 꼴이 아니다: ${o}`)
-  }
-})
-
-test('연§9-3 RFC 6544 — tcp_port 가 없으면 후보는 udp 한 줄이다', () => {
-  const got = section(publishAnswer(BROWSER_OFFER, CFG, { session: { id: '1', version: 1 } }), 0)
-  const cands = got.filter((l) => l.startsWith('a=candidate:'))
-  assert.deepEqual(cands, ['a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0'])
-})
-
-test('연§9-3 RFC 6544 — tcp_port 가 실리면 tcptype passive 가 한 줄 더 선다', () => {
-  const cfg = { ...CFG, ice: { ...CFG.ice, tcp_port: 7000 } }
-  const got = section(publishAnswer(BROWSER_OFFER, cfg, { session: { id: '1', version: 1 } }), 0)
-  const cands = got.filter((l) => l.startsWith('a=candidate:'))
-  assert.deepEqual(cands, [
-    'a=candidate:1 1 udp 2113937151 203.0.113.10 7000 typ host generation 0',
-    'a=candidate:2 1 tcp 1518280447 203.0.113.10 7000 typ host tcptype passive generation 0',
-  ])
-  const udpPrio = Number(cands[0]!.split(' ')[3])
-  const tcpPrio = Number(cands[1]!.split(' ')[3])
-  assert.ok(tcpPrio < udpPrio, '★RFC 6544 §4.2 — TCP 는 UDP 아래다')
-  const closes = got.indexOf('a=end-of-candidates')
-  assert.ok(closes > got.indexOf(cands[1]!), '★닫는 줄이 두 후보 뒤에 온다')
+test('연:RULE-LINK-SDP-1PC 통합 offer — 발행 절 · 구독 절 · 데이터 채널이 자리 그대로 한 벌에', () => {
+  const ans = Sdp.parse(Sdp.answer(pub, Sdp.parse(PUB_OFFER), () => ROOM_OPUS_FMTP))
+  const a = ans.media[0]!
+  const sections: Sdp.OneSection[] = [
+    { t: 'send', s: { mid: a.mid, kind: 'audio', dir: 'recvonly', codecs: a.codecs, ext: a.ext, rids: [] } },
+    { t: 'app', mid: '2' },
+    { t: 'recv', row: { ...ROWS[0]!, mid: '32' } },
+  ]
+  const got = lines(Sdp.onePcOffer(pub, { id: '4611731400430051336', version: 3 }, sections, Sdp.numberTags(PUB_OFFER).extmap))
+  assert.equal(got[1], 'o=- 4611731400430051336 3 IN IP4 127.0.0.1')
+  assert.equal(got[4], 'a=group:BUNDLE 0 2 32')
+  assert.ok(got.includes('a=recvonly') && got.includes('a=sendonly'))
+  assert.ok(got.every((l) => !l.startsWith('a=ice-ufrag:subUf1')), '1pc 는 subscribe 자격을 쓰지 않는다')
 })
