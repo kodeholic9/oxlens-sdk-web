@@ -1,300 +1,617 @@
 // author: kodeholic (powered by Claude)
-// 연§7-0~§7-3 · §8-1·§8-2 — 연결 상태기. 시그널링을 소유하고 백오프 사다리를 돈다.
-// ★WS 만 끊긴 것과 세션이 죽은 것은 다르다 — 미디어는 여기서 닫지 않는다.
-import { Clock, systemClock } from '../platform/clock.js'
-import { CLOSE_NORMAL, CloseInfo, Socket } from '../platform/socket.js'
-import { RequestFailed, Signaling, SignalingOptions } from '../internal/signaling.js'
-import { Op, reconnectable } from '../internal/wire.js'
+// spec: v1.2 @d626fda · SDK:IMPL-SES-API · SDK:IMPL-SES-EVENTS · SDK:IMPL-SES-CLOCK · SDK:IMPL-LINK-PROJECTION 출입구 하나 · SDK:IMPL-MOD-TABLE domain/session · model: claude-opus-5-5
+import * as SES from './gen/session_client.js'
+import * as SB from './gen/session_binding.js'
+import * as AFF from './gen/aff_client.js'
+import * as AB from './gen/aff_binding.js'
+import type { ResumeRes, AffiliationRes, LeaveBody, MlineTable, RoomSnapshot, Publication } from '../internal/wire/ws.js'
+import { Code } from '../internal/wire/ws.js'
+import { Signaling, type Inbound, type Reply } from '../internal/signaling.js'
+import { Emitter } from '../platform/emitter.js'
+import { LogBook, type Logger } from '../platform/log.js'
+import { Timer, now, wall } from '../platform/clock.js'
+import { Fault, fromFailure, closedFault, stateFault } from '../platform/fault.js'
+import { httpJson, httpUrl } from '../platform/net.js'
+import { decide } from '../platform/capability.js'
+import { pageTarget } from '../platform/env.js'
+import { settle, opusFmtpLine, type ClientOptions, type Settings } from './defaults.js'
+import { RoomCore, type JoinOptions } from './rooms.js'
+import { LinkCore, type LinkInfo } from './links.js'
+import { MediaRegistry } from './media-registry.js'
+import type { LocalCore } from './media-registry.js'
+import type { RemoteCore } from './remote.js'
 
-/** 연§8-2 — 대기만 44초. 지터는 3번째부터 0~1000ms 를 더한다. */
-export const BACKOFF_MS: readonly number[] = [0, 300, 1200, 2700, 4800, 7000, 7000, 7000, 7000, 7000]
-export const JITTER_FROM = 2
-export const JITTER_MAX_MS = 1_000
-/** 연§8-1 T-bind. */
-export const T_BIND_MS = 10_000
-/** 연§6-1 `client_ver` — 이 SDK 판의 프로토콜 세대. */
-export const CLIENT_VER = 1
+export type SessionState = 'disconnected' | 'connecting' | 'active' | 'resuming'
+export type Health = 'ok' | 'degraded' | 'recovering' | 'offline'
+export type Quality = 'excellent' | 'good' | 'poor' | 'lost'
 
-export type ConnectionState = 'disconnected' | 'connecting' | 'active' | 'resuming'
-
-export interface BindResult {
-  readonly user_id: string
-  readonly role: string
-  readonly session_id: string
-  readonly heartbeat_interval: number
-  readonly resume_window_ms: number
-  readonly pc_mode: '1pc' | '2pc'
+export interface SessionInfo {
+  readonly state: SessionState
+  readonly recovering: boolean
+  readonly reason: { readonly code: number; readonly name: string } | null
+  readonly userId: string | null
+  readonly pcMode: '1pc' | '2pc' | null
+  readonly health: Health
+  readonly quality: Quality
 }
 
-/** 연§7-3-2 4 — 살아 있는 것만 신고한다. 미디어 생존을 아는 쪽이 낸다. */
-export interface LiveReport {
-  rooms(): readonly string[]
-  publish(): readonly { readonly track_id: string; readonly kind: string }[]
+/** 전이 기록 — 기록 없이 바뀌는 상태가 없다(SDK:IMPL-LINK-PROJECTION 출입구 하나) */
+export interface Transition {
+  readonly ts: number
+  readonly layer: string
+  readonly key: string
+  readonly from: string
+  readonly to: string
+  readonly cause: string
+  readonly label: string
+  readonly rung?: number
+  readonly attempt?: number
 }
 
-/** 연§6-1 — 이어받은 방마다의 따라잡기 스냅샷. 끊겨 있는 동안 사라진 통지를 대신한다. */
-export interface ResumeOutcome {
-  readonly resumed: readonly string[]
-  readonly failed: readonly string[]
-  readonly publish_failed: readonly string[]
-  readonly snapshot: Readonly<Record<string, unknown>>
+export interface CoreEvents extends Record<string, unknown[]> {
+  session: [SessionInfo]
+  tokenRequired: [{ cause: 'expired' }]
+  closed: [{ code: number; name: string; retryable: boolean }]
+  rebuilt: []
+  link: [LinkInfo]
+  speakingRoom: [string | null]
+  speakingRoomFailed: [Fault]
+  track: [RoomCore, RemoteCore]
+  audioPlayback: [boolean]
+  probe: [unknown]
+  stats: [unknown]
+  transition: [Transition]
 }
 
-export type SessionEvent =
-  | { readonly kind: 'active'; readonly bind: BindResult; readonly resumed: boolean }
-  | { readonly kind: 'caught_up'; readonly outcome: ResumeOutcome }
-  | { readonly kind: 'resuming'; readonly info: CloseInfo }
-  | { readonly kind: 'token_required' }
-  | { readonly kind: 'rebuild'; readonly why: 'no_session' | 'window_expired' | 'resume_failed' }
-  | { readonly kind: 'closed'; readonly info: CloseInfo; readonly retryable: boolean }
-
-export interface SessionOptions {
-  readonly url: string
-  readonly token: string
-  readonly pcMode?: '1pc' | '2pc'
-  readonly clientVer?: number
-  readonly connect: (url: string) => Promise<Socket>
-  readonly live: LiveReport
-  readonly clock?: Clock
-  readonly signaling?: SignalingOptions
-  /** 지터를 결정적으로 만드는 자리 — 1층이 사다리를 잰다. */
-  readonly jitter?: () => number
+/** session_id 같은 불투명 문자열을 상태기의 작은 수로 — 같은지만 본다 */
+export class Interner {
+  private readonly to = new Map<string, number>()
+  private readonly from = new Map<number, string>()
+  id(s: string): number {
+    let n = this.to.get(s)
+    if (n === undefined) { n = this.to.size + 1; this.to.set(s, n); this.from.set(n, s) }
+    return n
+  }
+  str(n: number): string | undefined { return this.from.get(n) }
 }
 
-export class Session {
-  private readonly clock: Clock
-  private readonly jitter: () => number
-  private sig: Signaling | null = null
-  private bind: BindResult | null = null
-  private attempt = 0
-  private droppedAt: number | null = null
-  /** 연§10-3 `4004` — 서버가 세션을 폐기했다. 다시 붙되 `session_id` 를 싣지 않는다(연§7-0-3 3). */
-  private revoked = false
-  private stopped = false
-  private events: SessionEvent[] = []
-  private wake: (() => void) | null = null
-  private tokenWaiter: (() => void) | null = null
+interface Waiter { resolve: () => void; reject: (f: Fault) => void }
 
-  state: ConnectionState = 'disconnected'
+/**
+ * 클라이언트 객체 하나의 접속 — 시그널링 · 세션 상태기 · 시계 · 백오프 · 토큰을 소유한다.
+ * 방 · 연결 · 발행은 이 객체가 직접 소유하고 이음매(위가 정한 받는 곳)대로 직접 부른다.
+ */
+export class Core {
+  readonly cfg: Settings
+  readonly book = new LogBook()
+  readonly log: Logger
+  readonly events = new Emitter<CoreEvents>()
+  readonly sig: Signaling
+  readonly rooms = new Map<string, RoomCore>()
+  readonly links = new Map<string, LinkCore>()
+  readonly media: MediaRegistry
+  readonly sids = new Interner()
+  readonly epochs = new Interner()
+  token: string
+  ses: SES.St = SES.initial()
+  aff: AFF.St = AFF.initial()
+  userId: string | null = null
+  sessionId: string | null = null
+  reason: { code: number; name: string } | null = null
+  quality: Quality = 'excellent'
+  private readonly timers = new Map<SES.TimerName, Timer>()
+  private lateTimer: Timer
+  private droppedAt = 0
+  private connectWaiters: Waiter[] = []
+  private activeWaiters: Waiter[] = []
+  private affWaiter: Waiter | null = null
+  private affMove: { from: string | null; to: string | null } = { from: null, to: null }
+  private appClosed = false
+  private ignoreGen = -1
+  private resumeBody: ResumeRes | null = null
+  private lastInfo = ''
+  private pumping = false
 
-  constructor(private opts: SessionOptions) {
-    this.clock = opts.clock ?? systemClock
-    this.jitter = opts.jitter ?? (() => Math.floor(Math.random() * JITTER_MAX_MS))
+  constructor(opts: ClientOptions) {
+    this.cfg = settle(opts)
+    this.token = opts.token
+    this.log = this.book.scope('session')
+    this.sig = new Signaling({ base: this.cfg.base, reqTimeoutMs: SES.TIMER_MS.TReq ?? 30000 }, this.book.scope('signaling'))
+    this.media = new MediaRegistry(this)
+    for (const t of ['TBind', 'TReq', 'THb', 'Backoff', 'TStable'] as const) this.timers.set(t, new Timer(this.cfg.wakeDetectMs))
+    this.lateTimer = new Timer(this.cfg.wakeDetectMs)
+    if (this.cfg.disconnectOnPageLeave) {
+      const w = pageTarget()
+      if (w) w.addEventListener('pagehide', () => { if (this.ses.cs !== 'DISCONNECTED') this.close() })
+    }
   }
 
-  get signaling(): Signaling | null { return this.sig }
-  get info(): BindResult | null { return this.bind }
-  /** 재구축이 도는 동안 참을 유지한다 — 끊겼다 붙었다를 앱에 낱낱이 알리지 않는다(SDK§10-5). */
-  get recovering(): boolean { return this.state === 'resuming' }
+  get opusLine(): string { return opusFmtpLine(this.cfg.opusFmtpDefault) }
 
-  /** SDK§3-2 — `tokenRequired` 뒤의 새 토큰. 기다리던 재접속이 이것으로 다시 `BIND` 한다. */
+  // ── 출입구 ────────────────────────────────────────────────────────────
+
+  record(layer: string, key: string, from: string, to: string, label: string, cause: string, extra?: { rung?: number; attempt?: number }): void {
+    const t: Transition = { ts: wall(), layer, key, from, to, cause, label, ...(extra ?? {}) }
+    this.events.emit('transition', t)
+    this.book.write(cause === 'impossible' ? 'warn' : 'debug', layer.toLowerCase(), `${key} ${from}→${to} ${label}`, cause === 'impossible' ? t : undefined)
+  }
+
+  /** 받지 않는 사건 — 조용히 무시하지 않는다(SDK:IMPL-LINK-PROJECTION 받지 않는 사건) */
+  impossible(layer: string, key: string, from: string, entry: string): void {
+    this.record(layer, key, from, from, entry, 'impossible')
+  }
+
+  // ── 세션 ──────────────────────────────────────────────────────────────
+
+  connect(): Promise<void> {
+    if (this.ses.cs === 'ACTIVE') return Promise.resolve()
+    this.appClosed = false
+    const p = new Promise<void>((resolve, reject) => this.connectWaiters.push({ resolve, reject }))
+    if (this.ses.cs === 'DISCONNECTED') {
+      const pcAsk = decide(this.cfg.pcMode)
+      const prev = this.ses
+      this.ses = { ...this.ses, pcAsk, token: this.token ? (this.ses.token === 'NONE' ? 'NONE' : this.ses.token) : 'NONE' }
+      if (prev.pcAsk !== pcAsk) this.record('SES', 'session', prev.cs, prev.cs, 'SDK.pc_ask', 'capability')
+      this.startPump()
+      this.sesStep('connect', SES.connect(this.ses), 'app')
+    }
+    return p
+  }
+
   setToken(token: string): void {
-    this.opts = { ...this.opts, token }
-    this.tokenWaiter?.()
+    this.token = token
+    const st = SES.newToken(this.ses)
+    if (st) {
+      this.sesStep('newToken', st, 'app')
+      if (this.ses.cs === 'DISCONNECTED' && !this.appClosed) {
+        this.startPump()
+        this.sesStep('connect', SES.connect(this.ses), 'token')
+      }
+    }
   }
 
-  /** 연§7-1-1 — 앱이 접속을 요청했다. */
-  async connect(): Promise<BindResult> {
-    this.stopped = false
-    this.events = []
-    this.attempt = 0
-    this.droppedAt = null
-    const bind = await this.dial(false)
-    void this.watchClose()
-    return bind
+  close(): Promise<void> {
+    this.appClosed = true
+    for (const l of this.links.values()) l.closeForApp()
+    const st = SES.disconnect(this.ses)
+    if (st) this.sesStep('disconnect', st, 'app')
+    this.media.closeForApp()
+    for (const w of this.connectWaiters.splice(0)) w.reject(closedFault('CLOSED'))
+    for (const w of this.activeWaiters.splice(0)) w.reject(closedFault('CLOSED'))
+    return Promise.resolve()
   }
 
-  /** SDK§10-6 — 클라가 먼저 끊는 정상 종료. */
-  close(): void {
-    this.stopped = true
-    this.sig?.close(CLOSE_NORMAL, '')
-    this.state = 'disconnected'
-    this.push({ kind: 'closed', info: { code: CLOSE_NORMAL, reason: '' }, retryable: false })
+  /** 연결 전 요청은 기다린다(SDK:RULE-API-ASYNC 연결 전 요청) */
+  untilActive(): Promise<void> {
+    if (this.ses.cs === 'ACTIVE') return Promise.resolve()
+    if (this.ses.cs === 'DISCONNECTED' && this.connectWaiters.length === 0) return Promise.reject(closedFault('CLOSED'))
+    return new Promise((resolve, reject) => this.activeWaiters.push({ resolve, reject }))
   }
 
-  async *listen(): AsyncIterableIterator<SessionEvent> {
+  private startPump(): void {
+    if (this.pumping) return
+    this.pumping = true
+    void this.pump()
+  }
+
+  private async pump(): Promise<void> {
     for (;;) {
-      while (this.events.length > 0) yield this.events.shift()!
-      if (this.stopped && this.sig === null) return
-      await new Promise<void>((r) => { this.wake = r })
-      this.wake = null
+      const e = await this.sig.inbox.next()
+      if (!e) break
+      try { this.inbound(e) } catch (err) { this.log.error('수신 처리 실패', { err: String(err), stack: err instanceof Error ? err.stack : undefined }) }
     }
+    this.pumping = false
   }
 
-  /** 연§7-2-1·§7-2-2 — 소켓을 열고 BIND 부터 보낸다. 서버는 먼저 말하지 않는다. */
-  private async dial(resuming: boolean): Promise<BindResult> {
-    this.state = resuming ? 'resuming' : 'connecting'
-    const socket = await this.opts.connect(this.opts.url)
-    const sig = new Signaling(socket, { clock: this.clock, ...this.opts.signaling })
-    this.sig = sig
-
-    const previous = this.bind?.session_id
-    const body: Record<string, unknown> = {
-      token: this.opts.token,
-      client_ver: this.opts.clientVer ?? CLIENT_VER,
-      pc_mode: this.opts.pcMode ?? '2pc',
-    }
-    // 연§6-1 — session_id 가 유효하면 그것이 이긴다. 토큰은 보지 않는다.
-    // ★4004 로 끊겼으면 싣지 않는다 — 서버가 세션을 즉시 폐기했으므로 이어받을 것이 없고,
-    // 토큰을 다시 검사시키는 것이 그 절단의 목적이다(연§7-0-3 3).
-    if (resuming && !this.revoked && previous !== undefined && !this.windowExpired()) body.session_id = previous
-
-    const bind = await this.withDeadline(sig.request(Op.Bind, body), T_BIND_MS, socket)
-    const result = bind as unknown as BindResult
-    this.bind = result
-    sig.startHeartbeat(result.heartbeat_interval)
-    this.state = 'active'
-    this.attempt = 0
-    this.droppedAt = null
-    this.revoked = false
-
-    // 연§6-1 — 응답의 session_id 가 내가 보낸 것과 같아야 이어받은 것이다.
-    const resumed = resuming && previous !== undefined && result.session_id === previous
-    if (resuming && !resumed) this.push({ kind: 'rebuild', why: 'no_session' })
-    else if (resumed) await this.resume()
-    this.push({ kind: 'active', bind: result, resumed })
-    return result
-  }
-
-  /** 연§6-1 RESUME — 시그널만 끊겼다. 살아 있는 것만 신고한다. */
-  private async resume(): Promise<void> {
-    const rooms = this.opts.live.rooms()
-    const publish = this.opts.live.publish()
-    if (rooms.length === 0 && publish.length === 0) {
-      this.push({ kind: 'rebuild', why: 'resume_failed' })
+  private inbound(e: Inbound): void {
+    if (e.t === 'open') {
+      if (e.gen !== this.sig.generation) return
+      const st = SES.sockOpen(this.ses)
+      if (st) this.sesStep('sockOpen', st, 'ws.open')
+      else this.impossible('SES', 'session', this.ses.cs, 'sockOpen')
       return
     }
-    try {
-      const res = await this.sig!.request(Op.Resume, { rooms, publish })
-      // ★응답을 반영하지 않으면 재접속이 복구가 아니라 "보냈다는 사실" 로 끝난다.
-      this.push({
-        kind: 'caught_up',
-        outcome: {
-          resumed: (res.resumed ?? []) as string[],
-          failed: (res.failed ?? []) as string[],
-          publish_failed: (res.publish_failed ?? []) as string[],
-          snapshot: (res.snapshot ?? {}) as Record<string, unknown>,
-        },
-      })
-    } catch (e) {
-      if (e instanceof RequestFailed) this.push({ kind: 'rebuild', why: 'resume_failed' })
-      else throw e
+    if (e.t === 'close') {
+      if (e.gen === this.ignoreGen) return
+      const leave: LeaveBody | null = e.leave
+      const c = leave ? leave.code : 0
+      this.reason = leave ? { code: leave.code, name: leave.name } : { code: 0, name: 'TRANSPORT' }
+      const carry = [...this.rooms.values()].some((r) => r.st.rs !== 'NONE') || this.media.anyPublished()
+      this.sesStep('drop', SES.drop(this.ses, c, carry), 'ws.close')
+      return
     }
+    this.notify(e.op, e.body)
   }
 
-  /** 연§7-0-3 — 끊겼다. 미디어는 닫지 않는다(★`4004` 는 예외 — 서버가 Peer 를 이미 회수했다). */
-  private async watchClose(): Promise<void> {
-    for (;;) {
-      const info = await this.sig!.closed
-      if (this.stopped) { this.sig = null; this.wake?.(); return }
-      this.droppedAt ??= this.clock.now()
-      // 연§10-3 · §7-0-3 3 — 운영자 절단. 차단이 아니라 세션 폐기다: 이어받기를 건너뛰고
-      // session_id 없이 다시 붙는다. 그 BIND 가 토큰을 다시 검사한다 — 자격이 사라졌으면 거기서 2003 이다.
-      // 뒤따르는 dial 이 resumed=false 로 떨어져 rebuild{no_session} 을 낸다 — 전면 재구축이 그 경로다.
-      this.revoked = info.code === 4004
-      if (!reconnectable(info.code)) {
-        this.state = 'disconnected'
-        this.push({ kind: 'closed', info, retryable: false })
-        this.sig = null
+  private notify(op: string, body: unknown): void {
+    const b = (body ?? {}) as Record<string, unknown>
+    switch (op) {
+      case 'PARTICIPANT_EVENT':
+      case 'PARTICIPANT_STATE':
+      case 'TRACK_EVENT':
+      case 'TRACK_STATE': {
+        const r = this.rooms.get(String(b['room_id'] ?? ''))
+        if (r) r.delta(op, b)
         return
       }
-      this.state = 'resuming'
-      // SDK§3-2 `session.reason` — 끊긴 사유는 **끝난 것만이 아니다.** 다시 붙는 사유(`4003`·`4004`·
-      // `4006`·망 절단)도 앱이 알아야 한다 — `4004` 는 이 자리 말고 앱에 닿을 길이 없다.
-      this.push({ kind: 'resuming', info })
-      if (!(await this.retry(info))) return
+      case 'ROOM_EVENT': {
+        const r = this.rooms.get(String(b['room_id'] ?? ''))
+        if (r) r.roomEvent(b)
+        return
+      }
+      case 'MLINE_EVENT': {
+        const t = b['table'] as MlineTable | undefined
+        if (!t) return
+        this.links.get(t.sfu_id)?.mlineEvent(t)
+        return
+      }
+      case 'LINK_EVENT': {
+        this.links.get(String(b['sfu_id'] ?? ''))?.linkEvent(String(b['ufrag'] ?? ''))
+        return
+      }
+      case 'MESSAGE': {
+        const r = this.rooms.get(String(b['room_id'] ?? ''))
+        if (r) r.events.emit('message', { userId: String(b['user_id'] ?? ''), content: String(b['content'] ?? '') })
+        return
+      }
+      case 'TASK': {
+        if (b['phase'] === 'request' && b['type'] === 'probe') void this.media.probeTask(Number(b['req_id'] ?? 0))
+        return
+      }
+      default:
+        this.log.debug(`모르는 통지 ${op} — ACK 만 했다`)
     }
   }
 
-  /**
-   * 연§8-2 — 사다리는 재구축이 끝나 active 가 될 때만 0 으로 돌아간다.
-   * 연§7-3-2-1 · §7-2-3 — 재접속 `BIND` 의 실패는 셋으로 가른다: `2003` 은 새 토큰을 기다린다(SDK§3-2
-   * `tokenRequired`) · `1xxx`·그 밖의 `2xxx` 는 다시 붙어도 같아 끝낸다 · 나머지(`4003`·`5xxx`·T-bind)는 사다리다.
-   */
-  private async retry(last: CloseInfo): Promise<boolean> {
-    while (this.attempt < BACKOFF_MS.length) {
-      const wait = BACKOFF_MS[this.attempt]! + (this.attempt >= JITTER_FROM ? this.jitter() : 0)
-      this.attempt += 1
-      await this.clock.sleep(wait)
-      if (this.stopped) return false
-      // 연§8-2 — 창을 넘겼으면 이어받기 왕복을 태우지 않는다.
-      if (this.windowExpired()) this.push({ kind: 'rebuild', why: 'window_expired' })
-      for (;;) {
-        try {
-          await this.dial(true)
-          return true
-        } catch (e) {
-          const verdict = bindVerdict(e)
-          if (verdict === 'again') { this.sig?.close(4000, 'PROTOCOL_ERROR'); break }
-          this.sig?.close(CLOSE_NORMAL, '')
-          if (verdict === 'fatal') return this.finish({ code: 0, reason: 'BIND_FAILED' }, false)
-          if (await this.awaitToken()) continue
-          if (this.stopped) return false
-          return this.finish(last, true)
-        }
+  /** 세션 상태기 한 걸음 — 집행은 plan() 의 목록대로 직접 한다 */
+  sesStep(entry: string, step: SES.Step | null, cause: string): void {
+    if (!step) { this.impossible('SES', 'session', this.ses.cs, entry); return }
+    const prev = this.ses
+    const plan = SB.plan(step)
+    this.ses = plan.state
+    this.record('SES', 'session', prev.cs, this.ses.cs, plan.label, cause, { attempt: this.ses.tries })
+    this.sockFollow(prev)
+    this.sesTimers(plan.timers)
+    for (const tx of plan.send) this.sesSend(tx)
+    for (const sm of plan.seams) this.sesSeam(sm.fx)
+    for (const f of step.fx) this.sesEffect(f, plan.label)
+    this.lateClock(prev, plan.label)
+    if (this.ses.cs === 'ACTIVE' && prev.cs !== 'ACTIVE') {
+      for (const w of this.activeWaiters.splice(0)) w.resolve()
+      for (const l of this.links.values()) l.sessionBack()
+    }
+    if (this.ses.cs === 'DISCONNECTED' && prev.cs !== 'DISCONNECTED') {
+      for (const w of this.activeWaiters.splice(0)) w.reject(closedFault('CLOSED'))
+    }
+    this.surface()
+  }
+
+  private sockFollow(prev: SES.St): void {
+    if (this.ses.sock === 'OPENING' && prev.sock !== 'OPENING') this.sig.connect()
+    if (this.ses.sock === 'CLOSED' && prev.sock !== 'CLOSED' && this.sig.open) {
+      this.ignoreGen = this.sig.generation
+      this.sig.close()
+    }
+  }
+
+  private sesTimers(start: readonly SES.TimerName[]): void {
+    const armed = SES.armed(this.ses)
+    for (const [name, t] of this.timers) {
+      if (!armed.includes(name)) { t.stop(); continue }
+      if (start.includes(name) || !t.armed) t.start(this.sesTimerMs(name), (f) => this.sesExpire(name, f.woke))
+    }
+  }
+
+  private sesTimerMs(name: SES.TimerName): number {
+    if (name === 'THb') return this.ses.hbMs || SES.TIMER_MS.THb || 10000
+    if (name === 'TStable') return this.cfg.recoveryStableMs
+    if (name === 'Backoff') {
+      const i = Math.min(this.ses.tries, SES.LADDER.waits.length - 1)
+      const base = SES.LADDER.waits[i] ?? 7000
+      const jitter = this.ses.tries >= SES.LADDER.jitterFrom - 1 ? Math.floor(Math.random() * SES.LADDER.jitterMs) : 0
+      return base + jitter
+    }
+    return SES.TIMER_MS[name] ?? 10000
+  }
+
+  private sesExpire(name: SES.TimerName, woke: boolean): void {
+    if (woke && name !== 'THb' && name !== 'Backoff') {
+      this.record('SES', 'session', this.ses.cs, this.ses.cs, `SDK.wake.${name}`, 'wake')
+      this.timers.get(name)?.start(this.sesTimerMs(name), (f) => this.sesExpire(name, f.woke))
+      return
+    }
+    this.sesStep(`expire.${name}`, SES.expire(this.ses, name), woke ? 'wake' : 'timer')
+  }
+
+  /** 끊긴 시각부터의 경과가 재개 창을 넘으면 입구 late(SDK:IMPL-SES-CLOCK) — 숨은 탭에서도 돈다 */
+  private lateClock(prev: SES.St, label: string): void {
+    if (label === 'SES.C.any.drop_carry' && (prev.cs === 'ACTIVE' || prev.wait === 'RESUME')) this.droppedAt = now()
+    if (this.ses.cs !== 'RESUMING' || this.ses.late) { this.lateTimer.stop(); return }
+    if (this.lateTimer.armed) return
+    const win = this.ses.winMs || 60000
+    const left = Math.max(0, win - (now() - this.droppedAt))
+    this.lateTimer.start(left, () => {
+      if (now() - this.droppedAt < win) { this.lateClock(this.ses, ''); return }
+      const st = SES.late(this.ses)
+      if (st) this.sesStep('late', st, 'clock')
+    })
+  }
+
+  private sesSend(tx: SES.Tx): void {
+    if (tx.ws === 'BIND') {
+      const body: Record<string, unknown> = { token: this.token, client_ver: this.cfg.clientVer, pc_mode: tx.pc_mode }
+      if (tx.session_id !== undefined) { const s = this.sids.str(tx.session_id); if (s) body['session_id'] = s }
+      this.sig.request('BIND', body).then((r) => this.bindReply(r), () => undefined)
+    } else if (tx.ws === 'RESUME') {
+      this.sig.request('RESUME', {}).then((r) => this.resumeReply(r), () => undefined)
+    } else if (tx.ws === 'HEARTBEAT') {
+      this.sig.request('HEARTBEAT', undefined).catch(() => undefined)
+    } else if (tx.ws === 'LEAVE') {
+      this.ignoreGen = this.sig.generation
+      this.sig.sendLeave()
+    }
+  }
+
+  private bindReply(r: Reply): void {
+    const b = (r.body ?? {}) as Record<string, unknown>
+    const code = r.ok ? 0 : Number(b['code'] ?? 5003)
+    const sid = r.ok ? String(b['session_id'] ?? '') : ''
+    const m = {
+      code, part: (r.ok ? 'res' : 'fail') as SES.Part,
+      heartbeat_interval: Number(b['heartbeat_interval'] ?? 0),
+      pc_mode: (b['pc_mode'] === '1pc' ? '1pc' : '2pc') as SES.PcMode,
+      resume_window_ms: Number(b['resume_window_ms'] ?? 0),
+      session_id: r.ok ? this.sids.id(sid) : 0,
+    }
+    if (r.ok) { this.userId = String(b['user_id'] ?? ''); this.sessionId = sid }
+    else this.lastBindFault = fromFailure(r.body)
+    const marked = [...this.rooms.values()].some((x) => x.st.rejoin)
+    this.sesStep('bindRes', SES.bindRes(this.ses, m, marked), r.ok ? 'BIND.res' : `BIND.${code}`)
+  }
+
+  private lastBindFault: Fault | null = null
+
+  private resumeReply(r: Reply): void {
+    this.resumeBody = r.ok ? (r.body as ResumeRes) : null
+    const dead = [...this.links.values()].some((l) => !l.st.assoc || l.st.ice !== 'OK')
+    this.sesStep('resumeRes', SES.resumeRes(this.ses, { part: r.ok ? 'res' : 'fail' }, dead), r.ok ? 'RESUME.res' : 'RESUME.2008')
+    this.resumeBody = null
+  }
+
+  private sesSeam(fx: SES.SeamFx): void {
+    switch (fx) {
+      case 'floor.down_all': for (const r of this.rooms.values()) r.floor.down(); break
+      case 'rooms.down_all': for (const r of [...this.rooms.values()]) r.downAll(); break
+      case 'rooms.close_all': for (const r of [...this.rooms.values()]) r.closeAll(); break
+      case 'media.close_all': for (const l of [...this.links.values()]) l.closeAll(); break
+      case 'media.repair': for (const l of this.links.values()) l.repair(); break
+      case 'rooms.rejoin': this.rejoinAll([...this.rooms.values()]); break
+      case 'pub.reregister_all': this.media.reregisterAll(null); break
+      case 'rooms.snapshot': this.resumeSnapshots(); break
+      case 'pub.resume_check': this.media.resumeCheck(this.resumeBody?.publications ?? []); break
+    }
+  }
+
+  /** 재구축 칸의 첫 ROOM_JOIN 은 0 ~ massJitterMs 균등 무작위로 늦춘다(연:RULE-SES-REBUILD-JITTER) */
+  rejoinAll(rooms: RoomCore[]): void {
+    const marked = rooms.filter((r) => r.st.rejoin)
+    if (!marked.length) return
+    const delay = Math.floor(Math.random() * this.cfg.massJitterMs)
+    setTimeout(() => { for (const r of marked) r.rejoin() }, delay)
+  }
+
+  private resumeSnapshots(): void {
+    const body = this.resumeBody
+    const snap: Record<string, RoomSnapshot> = body?.snapshot ?? {}
+    for (const t of body?.mline_tables ?? []) this.links.get(t.sfu_id)?.pendingTable(t)
+    for (const r of [...this.rooms.values()]) r.resumeSnap(snap[r.id] ?? null)
+  }
+
+  resumePublications(): readonly Publication[] { return this.resumeBody?.publications ?? [] }
+
+  private sesEffect(f: SES.Fx, label: string): void {
+    const e = SB.effect(f).event
+    if (f === 'app.connected') {
+      this.reason = null
+      for (const w of this.connectWaiters.splice(0)) w.resolve()
+    } else if (f === 'app.need_token') {
+      const waiting = this.connectWaiters.splice(0)
+      if (waiting.length) {
+        const fault = this.lastBindFault ?? new Fault({ code: Code.TOKEN_EXPIRED.code, name: 'TOKEN_EXPIRED', permanent: false })
+        for (const w of waiting) w.reject(fault)
+      } else this.events.emit('tokenRequired', { cause: 'expired' })
+    } else if (f === 'app.bug') {
+      const fault = this.lastBindFault ?? new Fault({ code: 1002, name: 'INVALID_PAYLOAD' })
+      for (const w of this.connectWaiters.splice(0)) w.reject(fault)
+      this.events.emit('closed', { code: fault.code, name: fault.name, retryable: false })
+    } else if (f === 'app.disconnected') {
+      const final = label === 'SES.C.any.drop_final'
+      const exhausted = label.endsWith('Backoff_exhaust')
+      const fault = this.lastBindFault && (label === 'SES.C.CONNECTING.bind_2002') ? this.lastBindFault : closedFault(exhausted ? 'BACKOFF_EXHAUSTED' : 'CLOSED')
+      for (const w of this.connectWaiters.splice(0)) w.reject(fault)
+      if (!this.appClosed) {
+        const r = this.reason ?? { code: 0, name: 'TRANSPORT' }
+        this.events.emit('closed', { code: r.code, name: r.name, retryable: !final })
+      }
+    } else if (f === 'app.rebuilt') {
+      this.events.emit('rebuilt')
+    }
+    if (e === 'session') this.surface(true)
+  }
+
+  // ── 소속(발언 방) ────────────────────────────────────────────────────
+
+  get speakingRoom(): string | null { return this.aff.pub === 'NONE' ? null : this.aff.pub }
+
+  /** 발언 방 고르기 — pub_select / pub_deselect 만(SDK:IMPL-AFF-SPEAKING-ROOM) */
+  async setSpeakingRoom(roomId: string | null): Promise<void> {
+    await this.untilActive()
+    if (roomId === this.speakingRoom) return
+    while (this.affWaiter) await new Promise<void>((r) => setTimeout(r, 20))
+    if (roomId !== null) {
+      const room = this.rooms.get(roomId)
+      if (!room || room.st.rs !== 'JOINED') throw stateFault('STATE_NOT_JOINED', { room: roomId })
+    }
+    const p = new Promise<void>((resolve, reject) => { this.affWaiter = { resolve, reject } })
+    const cur = this.speakingRoom
+    if (roomId === null) {
+      this.affMove = { from: cur, to: null }
+      this.affStep('deselect', AFF.deselect(this.aff), 'app')
+    } else {
+      const same = cur === null || this.rooms.get(cur)?.sfuId === this.rooms.get(roomId)?.sfuId
+      this.affMove = { from: cur, to: roomId }
+      this.affStep('select', AFF.select(this.aff, roomId, same), 'app')
+    }
+    if (!this.affWaiter) return
+    return p
+  }
+
+  affStep(entry: string, step: AFF.Step | null, cause: string): void {
+    if (!step) {
+      this.impossible('AFF', 'client', this.aff.wait, entry)
+      const w = this.affWaiter; this.affWaiter = null; w?.resolve()
+      return
+    }
+    const prev = this.aff
+    const plan = AB.plan(step)
+    this.aff = plan.state
+    this.record('AFF', 'client', `${prev.wait}:${prev.pub}`, `${this.aff.wait}:${this.aff.pub}`, plan.label, cause)
+    for (const tx of plan.send) this.affSend(tx)
+    for (const sm of plan.seams) {
+      if (sm.fx === 'floor.pub_away') {
+        const from = prev.pub !== 'NONE' ? prev.pub : this.affMove.from
+        if (from) this.rooms.get(from)?.floor.pubAway()
+      } else if (sm.fx === 'floor.pub_select') {
+        if (this.aff.pub !== 'NONE') this.rooms.get(this.aff.pub)?.floor.pubSelect()
       }
     }
-    return this.finish(last, true)
+    for (const f of step.fx) {
+      if (f === 'app.affiliation') {
+        this.events.emit('speakingRoom', this.speakingRoom)
+        if (this.aff.wait === 'NONE') { const w = this.affWaiter; this.affWaiter = null; w?.resolve() }
+      } else if (f === 'app.aff_failed') {
+        const fault = this.affFault ?? new Fault({ code: 5003, name: 'INTERNAL_ERROR' })
+        this.affFault = null
+        this.events.emit('speakingRoomFailed', fault)
+        const w = this.affWaiter; this.affWaiter = null; w?.reject(fault)
+      }
+    }
+    if (this.aff.wait === 'NONE' && this.affWaiter && step.fx.length === 0) { const w = this.affWaiter; this.affWaiter = null; w.resolve() }
   }
 
-  private finish(info: CloseInfo, retryable: boolean): false {
-    this.state = 'disconnected'
-    this.push({ kind: 'closed', info, retryable })
-    this.sig = null
+  private affFault: Fault | null = null
+
+  private affSend(tx: AFF.Tx): void {
+    const body: Record<string, unknown> = {}
+    if (tx.pub_select !== undefined) body['pub_select'] = tx.pub_select
+    if (tx.pub_deselect !== undefined) body['pub_deselect'] = tx.pub_deselect
+    const asked = tx.pub_select ?? tx.pub_deselect ?? ''
+    const server = this.rooms.get(asked)?.sfuId ?? null
+    this.sig.request('AFFILIATION', body).then((r) => this.affReply(r, server), () => {
+      this.affFault = closedFault('TRANSPORT')
+      this.affStep('res', AFF.res(this.aff, false, 'NONE', false, false), 'AFFILIATION.closed')
+    })
+  }
+
+  private affReply(r: Reply, server: string | null): void {
+    if (!r.ok) {
+      this.affFault = fromFailure(r.body)
+      this.affStep('res', AFF.res(this.aff, false, 'NONE', false, false), `AFFILIATION.${this.affFault.code}`)
+      return
+    }
+    const b = r.body as AffiliationRes
+    if (b.pub_room !== null && !b.sub_rooms.includes(b.pub_room)) {
+      this.log.error('pub_room ⊄ sub_rooms 응답 — 반영하지 않는다(서버 결함)', { pub_room: b.pub_room, sub_rooms: b.sub_rooms })
+      this.affFault = new Fault({ code: 5003, name: 'AFFILIATION_INCONSISTENT', category: 'server' })
+      this.affStep('res', AFF.res(this.aff, false, 'NONE', false, false), 'AFFILIATION.bad')
+      return
+    }
+    const onPub = this.aff.pub !== 'NONE' && this.rooms.get(this.aff.pub)?.sfuId === server
+    const onWant = this.aff.want !== 'NONE' && this.rooms.get(this.aff.want)?.sfuId === server
+    this.affStep('res', AFF.res(this.aff, true, b.pub_room ?? 'NONE', onPub, onWant), 'AFFILIATION.res')
+  }
+
+  // ── 방 ────────────────────────────────────────────────────────────────
+
+  async join(roomId: string, opts: JoinOptions): Promise<RoomCore> {
+    await this.untilActive()
+    const live = this.rooms.get(roomId)
+    if (live && live.st.rs !== 'NONE') return live.joined()
+    const room = new RoomCore(this, roomId, opts)
+    this.rooms.set(roomId, room)
+    return room.start()
+  }
+
+  dropRoom(room: RoomCore): void {
+    if (this.rooms.get(room.id) === room) this.rooms.delete(room.id)
+  }
+
+  linkFor(sfuId: string | null): LinkCore | undefined {
+    return sfuId === null ? undefined : this.links.get(sfuId)
+  }
+
+  roomsOn(sfuId: string | null): RoomCore[] {
+    return [...this.rooms.values()].filter((r) => r.sfuId !== null && r.sfuId === sfuId)
+  }
+
+  /** HTTP — 세션 헤더 갈래(연:RULE-TRN-HTTP-AUTH-TWO) · 401 이면 tokenRequired */
+  async http(method: string, path: string, body?: unknown, bearer = false): Promise<unknown> {
+    const headers: Record<string, string> = {}
+    if (bearer || !this.sessionId) headers['Authorization'] = `Bearer ${this.token}`
+    else headers['X-OxLens-Session'] = this.sessionId
+    const r = await httpJson(method, httpUrl(this.cfg.base, path), headers, body)
+    if (r.status === 401) this.events.emit('tokenRequired', { cause: 'expired' })
+    if (r.status >= 400) throw fromFailure(r.body)
+    return r.body
+  }
+
+  // ── 표면 ──────────────────────────────────────────────────────────────
+
+  get sessionState(): SessionState {
+    return this.ses.cs.toLowerCase() as SessionState
+  }
+
+  get recovering(): boolean {
+    if (this.ses.cs === 'RESUMING') return true
+    for (const l of this.links.values()) if (l.everUp && l.state !== 'up') return true
     return false
   }
 
-  /**
-   * SDK§3-2 — 앱이 `setToken` 을 부를 때까지 기다린다. 미디어는 닫지 않는다.
-   * ★`resume_window_ms` 를 넘기면 그만 기다린다 — 부르는 쪽이 `closed{retryable:true}` 로 끝낸다.
-   */
-  private async awaitToken(): Promise<boolean> {
-    this.push({ kind: 'token_required' })
-    const remaining = this.windowRemaining()
-    if (remaining <= 0) return false
-    const ctl = new AbortController()
-    const arrived = new Promise<boolean>((r) => { this.tokenWaiter = () => r(true) })
-    const expired = this.clock.sleep(remaining, ctl.signal).then(() => false)
-    const ok = await Promise.race([arrived, expired])
-    ctl.abort()
-    this.tokenWaiter = null
-    return ok && !this.stopped
-  }
-
-  private windowRemaining(): number {
-    if (this.droppedAt === null || this.bind === null) return 0
-    return this.bind.resume_window_ms - (this.clock.now() - this.droppedAt)
-  }
-
-  private windowExpired(): boolean {
-    if (this.droppedAt === null || this.bind === null) return false
-    return this.clock.now() - this.droppedAt > this.bind.resume_window_ms
-  }
-
-  /** 연§8-1 T-bind — 응답이 없으면 소켓을 닫고 백오프로 간다. */
-  private async withDeadline<T>(job: Promise<T>, ms: number, socket: Socket): Promise<T> {
-    const ctl = new AbortController()
-    const timer = this.clock.sleep(ms, ctl.signal).then(() => {
-      if (!ctl.signal.aborted) socket.close(4003, 'HEARTBEAT_TIMEOUT')
-      return Promise.reject(new Error(`BIND 응답이 ${ms}ms 안에 안 왔다`))
-    })
-    try {
-      return await Promise.race([job, timer])
-    } finally {
-      ctl.abort()
+  get health(): Health {
+    if (this.ses.cs !== 'ACTIVE' && this.ses.cs !== 'DISCONNECTED') return 'offline'
+    let h: Health = 'ok'
+    for (const l of this.links.values()) {
+      if (l.blocked) return 'offline'
+      const s = l.state
+      if (s === 'rebuilding') h = 'recovering'
+      else if ((s === 'wobbly' || s === 'restarting') && h === 'ok') h = 'degraded'
     }
+    return h
   }
 
-  private push(e: SessionEvent): void {
-    this.events.push(e)
-    this.wake?.()
+  info(): SessionInfo {
+    return { state: this.sessionState, recovering: this.recovering, reason: this.reason, userId: this.userId, pcMode: this.ses.cs === 'ACTIVE' || this.sessionId ? this.ses.pcm : null, health: this.health, quality: this.quality }
   }
-}
 
-function bindVerdict(e: unknown): 'token' | 'fatal' | 'again' {
-  if (!(e instanceof RequestFailed)) return 'again'
-  const code = e.failure.code
-  if (code === 2003) return 'token'
-  if (code < 3000) return 'fatal'
-  return 'again'
+  /** 상태 · recovering · reason · health · quality 가 바뀔 때마다 session 이벤트 */
+  surface(force = false): void {
+    const i = this.info()
+    const key = JSON.stringify(i)
+    if (!force && key === this.lastInfo) return
+    this.lastInfo = key
+    this.events.emit('session', i)
+  }
+
+  emitLink(info: LinkInfo): void {
+    this.events.emit('link', info)
+    this.surface()
+  }
+
+  localsOn(sfuId: string | null): LocalCore[] { return this.media.on(sfuId) }
+
+  dispose(): void {
+    this.sig.dispose()
+    for (const t of this.timers.values()) t.stop()
+    this.lateTimer.stop()
+  }
 }

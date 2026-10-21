@@ -1,376 +1,307 @@
 // author: kodeholic (powered by Claude)
-// floor 원천 · 3GPP TS 24.380 §6.2.4 — 방마다의 발언권 클라 상태기.
-//
-// 판정은 여기, 집행은 밖이다 — 보낼 것과 알릴 것을 값으로 돌려주고 DC 송신·게이트는 주인이 한다.
-// 절이 없는 칸의 메시지는 버리고 상태를 유지한다(6.2.4.1). ACK 은 절차가 있는 칸에서만 보낸다.
-import { Message, Tlv, Type, byteSpare, str, text, u8, u8spare, u16 } from '../internal/mbcp.js'
+// spec: v1.2 @d626fda · SDK:IMPL-FLR-BUTTON · SDK:IMPL-FLR-EXPOSE · SDK:IMPL-FLR-TRUST · SDK:RULE-FLR-MIC-POWER · SDK:RULE-FLR-ROOM-SWITCH · SDK:RULE-FLR-RECOVERY · SDK:IMPL-MOD-TABLE domain/floor · model: claude-opus-5-5
+import * as FLR from './gen/floor_client.js'
+import * as PB from './gen/ptt_binding.js'
+import { Timers, Revoke } from '../internal/wire/floor_consts.js'
+import * as Mbcp from '../internal/mbcp.js'
+import { Emitter } from '../platform/emitter.js'
+import { Timer, now, wall } from '../platform/clock.js'
+import { Fault, closedFault } from '../platform/fault.js'
+import type { Core } from './session.js'
+import type { RoomCore } from './rooms.js'
 
 export type Phase = 'off' | 'no_permission' | 'pending_request' | 'has_permission' | 'pending_release' | 'queued'
-export type EndCause =
-  | 'released' | 'revoked' | 'denied' | 't1_reclaimed' | 't132_expired'
-  | 'no_response' | 'moved' | 'left' | 'rebuilt'
+export type LastEnd = 'released' | 'revoked' | 'denied' | 't132_expired' | 'no_response' | 'moved' | 'left' | 'rebuilt' | 'arm_failed'
+export type ArmingStage = 'register' | 'select' | 'transport' | 'recovering'
+export type PressSource = 'user' | 'accessory' | 'app'
 
-export const T101_MS = 500
-export const C101 = 3
-export const T100_MS = 500
-export const C100 = 3
-export const T104_MS = 500
-export const C104 = 3
-export const T132_MS = 2_000
-
-export type Signal =
-  | { readonly kind: 'phase' }
-  | { readonly kind: 'granted' }
-  | { readonly kind: 'denied' }
-  | { readonly kind: 'revoked' }
-  | { readonly kind: 'queued' }
-  | { readonly kind: 'released' }
-  | { readonly kind: 'speaker'; readonly userId: string | null }
-
-export interface Outcome {
-  readonly send: readonly Message[]
-  readonly signals: readonly Signal[]
-  /** true = 마이크를 연다, false = 닫는다, undefined = 그대로. */
-  readonly gate?: boolean
+export interface PttState {
+  readonly phase: Phase
+  readonly remainingSec?: number
+  readonly priority?: number
+  readonly queue?: { readonly position: number }
+  readonly acceptPending: boolean
+  readonly talkingSince?: number
+  readonly lastDeny?: { readonly cause: number; readonly text?: string }
+  readonly lastRevoke?: { readonly cause: number; readonly text?: string }
+  readonly canRequest: boolean
+  readonly source?: PressSource
+  readonly lastEnd?: LastEnd
+  readonly trusted: boolean
+  readonly arming: boolean
+  readonly armingStage?: ArmingStage
+  readonly lastError?: Fault
+  readonly mic: 'hot' | 'hot_standby' | 'cold'
 }
 
-type Sub = 'wait' | 'query' | 'granted'
-
-class Step {
-  readonly send: Message[] = []
-  readonly signals: Signal[] = []
-  gate: boolean | undefined
-  out(): Outcome {
-    return { send: this.send, signals: this.signals, ...(this.gate === undefined ? {} : { gate: this.gate }) }
-  }
+export interface FloorEvents extends Record<string, unknown[]> {
+  state: [PttState]
+  granted: [PttState]
+  denied: [PttState]
+  revoked: [PttState]
+  queued: [PttState]
+  released: [PttState]
+  speaker: [{ userId: string | null; trackIds: string[] }]
 }
 
-export class FloorRoom {
-  phase: Phase = 'off'
+const PHASE: Record<FLR.CState, Phase> = { NOPERM: 'no_permission', PREQ: 'pending_request', PERM: 'has_permission', PREL: 'pending_release', QUEUED: 'queued' }
+
+/** 방마다 발언권 하나 — 절차 · 보낼 것 · 타이머 · 효과는 위가 지은 클라 상태기 그대로, SDK 는 입구 · 효과 표만 */
+export class FloorCore {
+  st: FLR.Cl = FLR.initial()
+  readonly events = new Emitter<FloorEvents>()
   priority = 0
-  remainingSec: number | undefined
-  grantedPriority: number | undefined
-  queue: { position: number; priority: number } | undefined
-  lastDeny: { cause: number; text?: string } | undefined
-  lastRevoke: { cause: number; text?: string } | undefined
-  lastEnd: EndCause | undefined
-  trusted = true
-  speaker: string | null = null
-  talkingSince: number | undefined
+  input: 'hold' | 'toggle' = 'hold'
+  private readonly timers = new Map<FLR.TimerName, Timer>()
+  private held = false
+  private arming = false
+  private armingStage: ArmingStage | undefined
+  private cancel = false
+  private source: PressSource | undefined
+  private lastEnd: LastEnd | undefined
+  private lastDeny: { cause: number; text?: string } | undefined
+  private lastRevoke: { cause: number; text?: string } | undefined
+  private lastError: Fault | undefined
+  private trusted = true
+  private t9Until = 0
+  private talkingSince: number | undefined
+  private remainingSec: number | undefined
+  private grantedPrio: number | undefined
+  private queuePos: number | undefined
+  private lastKey = ''
+  private disposed = false
 
-  private sub: Sub = 'wait'
-  private want = false
-  private c101 = 0
-  private c100 = 0
-  private c104 = 0
-  private t101Due = 0
-  private t100Due = 0
-  private t104Due = 0
-  private t132Due = 0
-
-  constructor(readonly roomId: string, readonly me: string, public input: 'hold' | 'toggle' = 'hold') {}
-
-  get acceptPending(): boolean {
-    return this.phase === 'queued' && this.sub === 'granted'
+  constructor(private readonly core: Core, private readonly room: RoomCore) {
+    for (const t of ['T101', 'T100', 'T104', 'T132'] as const) this.timers.set(t, new Timer(core.cfg.wakeDetectMs))
   }
+
+  get phase(): Phase {
+    if (this.st.cs === 'NOPERM' && !this.core.media.hasHalfMic(this.room.sfuId)) return 'off'
+    return PHASE[this.st.cs]
+  }
+
+  get acceptPending(): boolean { return this.st.cs === 'QUEUED' && this.st.sub === 'GRANTED' }
 
   get canRequest(): boolean {
-    return this.trusted && (this.phase === 'off' || this.phase === 'no_permission')
+    const p = this.phase
+    return this.room.st.rs === 'JOINED' && this.trusted && this.room.permission.floorRequest && (p === 'off' || p === 'no_permission') && now() >= this.t9Until && !this.room.rebuilding && !this.arming
   }
 
-  /** 반이중 발행 트랙이 섰다 — 그 전의 요청은 서버가 DENY(5) 로 답한다. */
-  armed(): Outcome {
-    if (this.phase !== 'off') return new Step().out()
-    this.phase = 'no_permission'
-    const s = new Step()
-    s.signals.push({ kind: 'phase' })
-    return s.out()
+  get mic(): 'hot' | 'hot_standby' | 'cold' {
+    if (this.st.cs === 'PERM' || this.st.cs === 'PREL') return 'hot'
+    return this.core.media.halfMicCold(this.room.sfuId) ? 'cold' : 'hot_standby'
   }
 
-  /** 6.2.4.3.5 — has no permission 에서만 요청이 나간다. toggle 의 승계 허가 창에서는 의지 표시(6.2.4.9.12)다. */
-  press(now: number): Outcome {
-    const s = new Step()
-    if (this.acceptPending) {
-      this.want = true
-      this.toPermission(s, now)
-      return s.out()
+  snapshot(): PttState {
+    const s: { -readonly [K in keyof PttState]: PttState[K] } = { phase: this.phase, acceptPending: this.acceptPending, canRequest: this.canRequest, trusted: this.trusted, arming: this.arming, mic: this.mic }
+    if (this.remainingSec !== undefined && (this.st.cs === 'PERM' || this.acceptPending)) s.remainingSec = this.remainingSec
+    if (this.grantedPrio !== undefined && this.st.cs === 'PERM') s.priority = this.grantedPrio
+    if (this.st.cs === 'QUEUED' && this.queuePos !== undefined) s.queue = { position: this.queuePos }
+    if (this.talkingSince !== undefined && this.st.cs === 'PERM') s.talkingSince = this.talkingSince
+    if (this.lastDeny) s.lastDeny = this.lastDeny
+    if (this.lastRevoke) s.lastRevoke = this.lastRevoke
+    if (this.source) s.source = this.source
+    if (this.lastEnd) s.lastEnd = this.lastEnd
+    if (this.arming && this.armingStage) s.armingStage = this.armingStage
+    if (this.lastError) s.lastError = this.lastError
+    return s
+  }
+
+  /** 바뀔 때마다 state */
+  surface(extra?: 'granted' | 'denied' | 'revoked' | 'queued' | 'released'): void {
+    const s = this.snapshot()
+    const key = JSON.stringify({ ...s, lastError: s.lastError?.name })
+    if (key !== this.lastKey || extra) {
+      this.lastKey = key
+      this.events.emit('state', s)
+      if (extra) this.events.emit(extra, s)
     }
-    if (this.phase !== 'no_permission' && this.phase !== 'off') return s.out()
-    this.phase = 'pending_request'
-    this.want = true
-    this.c101 = 1
-    this.t101Due = now + T101_MS
-    s.send.push(this.request())
-    s.signals.push({ kind: 'phase' })
-    return s.out()
   }
 
-  /** 6.2.4.4.8 · 6.2.4.5.3 · 6.2.4.9.6 — 뗌 · 허가 전에 뗌 · 대기 철회는 모두 pending Release 로 간다. */
-  release(now: number): Outcome {
-    const s = new Step()
-    if (this.phase !== 'pending_request' && this.phase !== 'has_permission' && this.phase !== 'queued') return s.out()
-    if (this.phase === 'has_permission') s.gate = false
-    this.toPendingRelease(s, now)
-    return s.out()
+  // ── 버튼 계약(SDK:IMPL-FLR-BUTTON) ────────────────────────────────────
+
+  /** 발언 의지 — 접수에 resolve(arming 에 들어갔거나 입구에 닿았다) · 허가는 granted */
+  async press(o: { source?: PressSource } = {}): Promise<void> {
+    if (this.disposed || this.core.ses.cs === 'DISCONNECTED') throw closedFault('CLOSED')
+    this.held = true
+    this.source = o.source ?? 'user'
+    if (this.acceptPending && this.input === 'toggle') { this.flrStep('intent', FLR.intent(this.st), 'press'); return }
+    if (this.arming) return
+    if (this.st.cs !== 'NOPERM') { this.flrStep('press', FLR.press(this.st, this.priority), 'press'); return }
+    this.arming = true
+    this.cancel = false
+    this.lastError = undefined
+    this.surface()
+    void this.arm()
   }
 
-  /** 6.2.4.9.9 — 앱이 순번을 묻는다. queued 이고 승계 허가 전일 때만이다. */
-  queuePosition(now: number): Outcome {
-    const s = new Step()
-    if (this.phase !== 'queued' || this.sub !== 'wait') return s.out()
-    this.sub = 'query'
-    this.c104 = 1
-    this.t104Due = now + T104_MS
-    s.send.push(this.bare(Type.QueuePosRequest))
-    return s.out()
-  }
-
-  receive(msg: Message, now: number): Outcome {
-    const room = text(msg, Tlv.Room)
-    const s = new Step()
-    if (room !== undefined && room !== this.roomId) return s.out()
-    switch (this.phase) {
-      case 'off':
-      case 'no_permission': this.inNoPermission(msg, s); break
-      case 'pending_request': this.inPendingRequest(msg, s, now); break
-      case 'has_permission': this.inPermission(msg, s, now); break
-      case 'pending_release': this.inPendingRelease(msg, s); break
-      case 'queued': this.inQueued(msg, s, now); break
-    }
-    return s.out()
-  }
-
-  tick(now: number): Outcome {
-    const s = new Step()
-    if (this.phase === 'pending_request' && now >= this.t101Due) {
-      if (this.c101 < C101) {
-        this.c101 += 1
-        this.t101Due = now + T101_MS
-        s.send.push(this.request())
-      } else {
-        this.settle('no_response', s)
+  /** arming — 반이중 발행 → 발언 방 → DC 열림 · 연결 복구 대기 → 입구 press(시한 없음 · 단계 차례는 위가 정한다) */
+  private async arm(): Promise<void> {
+    try {
+      this.stage('register')
+      await this.core.media.ensureHalfMic(this.room)
+      if (this.stopIfCancelled()) return
+      this.stage('select')
+      if (this.core.speakingRoom !== this.room.id) await this.core.setSpeakingRoom(this.room.id)
+      if (this.stopIfCancelled()) return
+      for (;;) {
+        const link = this.room.link
+        if (this.disposed || this.room.closed) throw closedFault('CLOSED')
+        if (!link || link.state !== 'up') this.stage(link && link.everUp ? 'recovering' : 'transport')
+        else if (!link.peer?.dcOpen) this.stage('transport')
+        else break
+        await new Promise((r) => setTimeout(r, 50))
+        if (this.stopIfCancelled()) return
       }
-    } else if (this.phase === 'pending_release' && now >= this.t100Due) {
-      if (this.c100 < C100) {
-        this.c100 += 1
-        this.t100Due = now + T100_MS
-        s.send.push(this.bare(Type.Release))
-      } else {
-        this.settle('released', s)
-      }
-    } else if (this.phase === 'queued' && this.sub === 'query' && now >= this.t104Due) {
-      if (this.c104 < C104) {
-        this.c104 += 1
-        this.t104Due = now + T104_MS
-        s.send.push(this.bare(Type.QueuePosRequest))
-      } else {
-        this.lastEnd = 'no_response'
-        this.toPendingRelease(s, now)
-      }
-    } else if (this.acceptPending && now >= this.t132Due) {
-      s.send.push(this.bare(Type.Release))
-      this.want = false
-      this.settle('t132_expired', s)
-    }
-    return s.out()
-  }
-
-  /** DC 만 끊겼다 — 상태는 그대로이고 이 표시를 믿을 수 없을 뿐이다(DEV-DC-DOWN). */
-  setTrusted(on: boolean): Outcome {
-    const s = new Step()
-    if (this.trusted === on) return s.out()
-    this.trusted = on
-    s.signals.push({ kind: 'phase' })
-    return s.out()
-  }
-
-  /** 발행 방 이탈 · 퇴장 · 재구축 — 응답 뒤 has no permission 으로 내리고 타이머를 멈춘다(DEV-PUB-AWAY). */
-  reset(cause: EndCause): Outcome {
-    const s = new Step()
-    if (this.phase === 'off') return s.out()
-    if (this.phase === 'has_permission') s.gate = false
-    this.want = false
-    this.settle(cause, s)
-    this.speaker = null
-    s.signals.push({ kind: 'speaker', userId: null })
-    return s.out()
-  }
-
-  private inNoPermission(msg: Message, s: Step): void {
-    if (msg.type === Type.Taken) this.showSpeaker(text(msg, Tlv.Speaker) ?? null, s)
-    else if (msg.type === Type.Idle) this.showSpeaker(null, s)
-  }
-
-  private inPendingRequest(msg: Message, s: Step, now: number): void {
-    switch (msg.type) {
-      case Type.Granted:
-        this.ack(msg, s)
-        this.takeGrant(msg)
-        this.toPermission(s, now)
-        s.signals.push({ kind: 'granted' })
-        return
-      case Type.Deny:
-        this.ack(msg, s)
-        this.denied(msg, s)
-        return
-      case Type.QueueInfo:
-        this.phase = 'queued'
-        this.sub = 'wait'
-        this.takeQueue(msg)
-        s.signals.push({ kind: 'queued' }, { kind: 'phase' })
-        return
-      case Type.Taken:
-        this.showSpeaker(text(msg, Tlv.Speaker) ?? null, s)
-        return
+      if (this.stopIfCancelled()) return
+      await this.core.media.warmHalf(this.room)
+      this.arming = false
+      this.armingStage = undefined
+      if (!this.held && this.input === 'hold') { this.lastEnd = 'released'; this.surface('released'); return }
+      this.flrStep('press', FLR.press(this.st, this.priority), 'press')
+    } catch (e) {
+      this.arming = false
+      this.armingStage = undefined
+      this.lastEnd = 'arm_failed'
+      this.lastError = e instanceof Fault ? e : new Fault({ code: 0, name: 'ARM_FAILED', category: 'bug', cause: e })
+      this.surface()
     }
   }
 
-  private inPermission(msg: Message, s: Step, now: number): void {
-    switch (msg.type) {
-      case Type.Revoke:
-        this.lastRevoke = this.cause(msg)
-        s.gate = false
-        s.signals.push({ kind: 'revoked' })
-        this.lastEnd = 'revoked'
-        this.toPendingRelease(s, now)
-        return
-      case Type.Granted:
-        this.ack(msg, s)
-        this.takeGrant(msg)
-        s.signals.push({ kind: 'phase' })
-        return
-    }
+  private stage(s: ArmingStage): void {
+    if (this.armingStage === s) return
+    this.armingStage = s
+    this.surface()
   }
 
-  private inPendingRelease(msg: Message, s: Step): void {
-    switch (msg.type) {
-      case Type.Idle:
-        this.showSpeaker(null, s)
-        this.settle(this.lastEnd === 'revoked' ? 'revoked' : 'released', s)
-        return
-      case Type.Taken:
-        this.showSpeaker(text(msg, Tlv.Speaker) ?? null, s)
-        this.settle(this.lastEnd === 'revoked' ? 'revoked' : 'released', s)
-        return
-      case Type.Revoke:
-        this.lastRevoke = this.cause(msg)
-        s.signals.push({ kind: 'revoked' })
-        return
-      case Type.Granted:
-        this.ack(msg, s)
-        return
-    }
+  private stopIfCancelled(): boolean {
+    if (!this.cancel) return false
+    this.arming = false
+    this.armingStage = undefined
+    this.cancel = false
+    this.lastEnd = 'released'
+    this.surface('released')
+    return true
   }
 
-  private inQueued(msg: Message, s: Step, now: number): void {
-    switch (msg.type) {
-      case Type.Taken:
-        this.showSpeaker(text(msg, Tlv.Speaker) ?? null, s)
-        return
-      case Type.Granted:
-        this.ack(msg, s)
-        this.takeGrant(msg)
-        if (this.sub !== 'granted') {
-          this.sub = 'granted'
-          this.t132Due = now + T132_MS
-          s.signals.push({ kind: 'granted' }, { kind: 'phase' })
-          if (this.input === 'hold' && this.want) this.toPermission(s, now)
-        } else {
-          this.t132Due = now + T132_MS
+  /** 발언 끝 · 대기 철회 · 허가 전에 뗌 — 입구에 닿으면 resolve(확인은 state) */
+  async release(): Promise<void> {
+    this.held = false
+    if (this.arming) { this.cancel = true; return }
+    const step = FLR.release(this.st)
+    if (step) { this.lastEnd = 'released'; this.flrStep('release', step, 'release') }
+  }
+
+  queuePosition(): void {
+    const step = FLR.queuePosition(this.st)
+    if (step) this.flrStep('queuePosition', step, 'resync')
+  }
+
+  // ── 위 이음매가 부르는 입구 ──────────────────────────────────────────
+
+  registerHalf(): void { this.flrStep('registerHalf', FLR.registerHalf(this.st), 'pub') }
+  pubSelect(): void { this.flrStep('pubSelect', FLR.pubSelect(this.st), 'aff') }
+  pubAway(): void { this.endIfHolding('moved'); this.flrStep('pubAway', FLR.pubAway(this.st), 'aff') }
+  leave(): void { this.endIfHolding('left'); this.flrStep('leave', FLR.leave(this.st), 'room') }
+  down(): void { this.endIfHolding('rebuilt'); this.flrStep('down', FLR.down(this.st), 'rebuild') }
+  dcDown(): void { this.flrStep('dcDown', FLR.dcDown(this.st), 'link') }
+  dcUp(): void { this.flrStep('dcUp', FLR.dcUp(this.st), 'link') }
+  rtpTx(): void { this.flrStep('rtpTx', FLR.rtpTx(this.st), 'gate') }
+  rtpRx(): void { this.flrStep('rtpRx', FLR.rtpRx(this.st), 'media') }
+  receive(rx: Mbcp.FloorRx): void { this.lastRx = rx; this.flrStep('receive', FLR.receive(this.st, rx), `rx.${rx.t}`) }
+
+  private endIfHolding(e: LastEnd): void {
+    if (this.st.cs !== 'NOPERM') this.lastEnd = e
+  }
+
+  linkChanged(): void { this.surface() }
+
+  speakerTracks(): void {
+    if (this.st.shown !== null || this.lastSpeaker !== undefined) this.emitSpeaker()
+  }
+
+  private lastSpeaker: string | null | undefined
+
+  private emitSpeaker(): void {
+    const ids = [...this.room.remotes.values()].filter((r) => r.type === 'slot' && r.row !== null).map((r) => r.id)
+    const key = `${this.st.shown}|${ids.join(',')}`
+    if (key === this.speakerKey) return
+    this.speakerKey = key
+    this.lastSpeaker = this.st.shown
+    this.events.emit('speaker', { userId: this.st.shown, trackIds: ids })
+  }
+
+  private speakerKey = ''
+
+  // ── 출입구 ────────────────────────────────────────────────────────────
+
+  flrStep(entry: string, step: FLR.Step | null, cause: string): void {
+    if (this.disposed) return
+    if (!step) { this.core.impossible('FLR', this.room.id, this.st.cs, entry); return }
+    const prev = this.st
+    const plan = PB.plan(step)
+    this.st = plan.state
+    this.core.record('FLR', this.room.id, prev.cs, this.st.cs, plan.label, cause)
+    const link = this.room.link
+    for (const tx of plan.send) {
+      const bytes = tx.t === 'REQUEST' ? Mbcp.request(this.room.id, tx.priority ?? 0) : tx.t === 'RELEASE' ? Mbcp.release(this.room.id) : Mbcp.queuePosRequest(this.room.id)
+      if (!link?.peer?.sendDc(bytes)) this.core.log.debug(`DC 로 ${tx.t} 를 못 보냈다 — 위 타이머가 다시 보낸다`, { room: this.room.id })
+    }
+    for (const a of plan.ack) link?.peer?.sendDc(Mbcp.ack(this.room.id, a.of, a.seq))
+    this.timersFollow(plan.timers)
+    let extra: 'granted' | 'denied' | 'revoked' | 'queued' | 'released' | undefined
+    for (const f of step.fx) {
+      const e = PB.effect(f)
+      if (f === 'mic.open') { this.talkingSince = wall(); this.core.media.floorOpen(this.room) }
+      else if (f === 'mic.close') { this.talkingSince = undefined; this.core.media.floorClose(this.room) }
+      else if (f === 'media.render') { for (const r of this.room.remotes.values()) if (r.type === 'slot') r.applyPlayback() }
+      else if (f === 'app.granted' || f === 'app.granted_queued') {
+        this.remainingSec = this.st.grant
+        this.grantedPrio = this.st.prio
+        this.lastEnd = undefined
+        extra = 'granted'
+        if (f === 'app.granted_queued' && this.input === 'hold' && this.held) queueMicrotask(() => this.flrStep('intent', FLR.intent(this.st), 'hold'))
+      } else if (f === 'app.denied') {
+        const rx = this.lastRx
+        if (rx && rx.t === 'DENY') this.lastDeny = rx.reason !== undefined ? { cause: rx.cause, text: rx.reason } : { cause: rx.cause }
+        this.lastEnd = 'denied'
+        extra = 'denied'
+      } else if (f === 'app.queued') {
+        const rx = this.lastRx
+        if (rx && rx.t === 'QINFO') this.queuePos = rx.info.position
+        extra = 'queued'
+      } else if (f === 'app.revoked') {
+        const rx = this.lastRx
+        if (rx && rx.t === 'REVOKE') {
+          this.lastRevoke = rx.reason !== undefined ? { cause: rx.cause, text: rx.reason } : { cause: rx.cause }
+          if (rx.cause === Revoke.TOO_LONG) this.t9Until = now() + Timers.T9_MS
         }
-        return
-      case Type.Deny:
-        this.ack(msg, s)
-        this.denied(msg, s)
-        return
-      case Type.Idle:
-        this.showSpeaker(null, s)
-        this.settle('released', s)
-        return
-      case Type.QueueInfo:
-        this.takeQueue(msg)
-        if (this.sub === 'query') this.sub = 'wait'
-        s.signals.push({ kind: 'queued' })
-        return
+        this.lastEnd = 'revoked'
+        extra = 'revoked'
+      } else if (f === 'app.speaker' || f === 'app.speaker_none') this.emitSpeaker()
+      else if (f === 'app.request_timeout' || f === 'app.queue_timeout') this.lastEnd = 'no_response'
+      else if (f === 'app.grant_expired') this.lastEnd = 't132_expired'
+      else if (f === 'app.floor_unreliable') this.trusted = false
+      else if (f === 'app.floor_reliable') this.trusted = true
+      void e
+    }
+    if (this.st.cs === 'NOPERM' && prev.cs !== 'NOPERM' && this.lastEnd === 'released' && !extra) extra = 'released'
+    if (this.st.cs !== 'PERM') { if (this.st.cs !== 'QUEUED') this.remainingSec = undefined }
+    this.surface(extra)
+  }
+
+  private lastRx: Mbcp.FloorRx | null = null
+
+  private timersFollow(start: readonly FLR.TimerName[]): void {
+    const armed = FLR.armed(this.st)
+    for (const [name, t] of this.timers) {
+      if (!armed.includes(name)) { t.stop(); continue }
+      if (start.includes(name) || !t.armed) t.start(FLR.TIMER_MS[name], () => this.flrStep(`expire.${name}`, FLR.expire(this.st, name), 'timer'))
     }
   }
 
-  private toPermission(s: Step, now: number): void {
-    this.phase = 'has_permission'
-    this.sub = 'wait'
-    this.queue = undefined
-    this.talkingSince = now
-    s.gate = true
-    s.signals.push({ kind: 'phase' })
-  }
-
-  private toPendingRelease(s: Step, now: number): void {
-    this.phase = 'pending_release'
-    this.sub = 'wait'
-    this.want = false
-    this.queue = undefined
-    this.talkingSince = undefined
-    this.c100 = 1
-    this.t100Due = now + T100_MS
-    s.send.push(this.bare(Type.Release))
-    s.signals.push({ kind: 'phase' })
-  }
-
-  private settle(cause: EndCause, s: Step): void {
-    const wasPermission = this.phase === 'has_permission'
-    this.phase = 'no_permission'
-    this.sub = 'wait'
-    this.queue = undefined
-    this.talkingSince = undefined
-    this.remainingSec = undefined
-    this.lastEnd = cause
-    if (wasPermission) s.gate = false
-    if (cause === 'released' || cause === 't132_expired') s.signals.push({ kind: 'released' })
-    s.signals.push({ kind: 'phase' })
-  }
-
-  private denied(msg: Message, s: Step): void {
-    this.lastDeny = this.cause(msg)
-    this.want = false
-    s.signals.push({ kind: 'denied' })
-    this.settle('denied', s)
-  }
-
-  private showSpeaker(who: string | null, s: Step): void {
-    if (this.speaker === who) return
-    this.speaker = who
-    s.signals.push({ kind: 'speaker', userId: who })
-  }
-
-  private takeGrant(msg: Message): void {
-    const d = u16(msg, Tlv.Duration)
-    const p = u8spare(msg, Tlv.Priority)
-    if (d !== undefined) this.remainingSec = d
-    if (p !== undefined) this.grantedPriority = p
-  }
-
-  private takeQueue(msg: Message): void {
-    const q = msg.fields.find((f) => f.id === Tlv.QueueInfo)?.value
-    if (q !== undefined && q.length >= 2) this.queue = { position: q[0]!, priority: q[1]! }
-  }
-
-  private cause(msg: Message): { cause: number; text?: string } {
-    const t = text(msg, Tlv.CauseText)
-    return { cause: u8(msg, Tlv.Cause) ?? 255, ...(t === undefined ? {} : { text: t }) }
-  }
-
-  private ack(msg: Message, s: Step): void {
-    if (!msg.ack) return
-    s.send.push({ type: Type.Ack, ack: false, fields: [byteSpare(Tlv.AckType, msg.type), str(Tlv.Room, this.roomId)] })
-  }
-
-  /** 원문 6.2.4.3.5 — 우선순위는 보통(0)과 다를 때만 싣는다. 없으면 서버가 기본값 0 으로 읽는다(8.2.3.2) */
-  private request(): Message {
-    const prio = this.priority === 0 ? [] : [byteSpare(Tlv.Priority, this.priority)]
-    return { type: Type.Request, ack: false, fields: [...prio, str(Tlv.Room, this.roomId)] }
-  }
-
-  private bare(type: number): Message {
-    return { type, ack: false, fields: [str(Tlv.Room, this.roomId)] }
+  dispose(): void {
+    this.disposed = true
+    for (const t of this.timers.values()) t.stop()
   }
 }
