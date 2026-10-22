@@ -1,8 +1,8 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 · 연§2-6 · §5-1 · SDK§3 · §4 · §5 · model: claude-opus-5-5
+// spec: v1.2 · 연:RULE-DOC-APP-EXPOSE · 연:RULE-TRN-HTTP-AUTH-TWO · SDK:SES · SDK:ROOM · SDK:FLR · model: claude-opus-5-5
 
 // 로컬망 수동 시험 화면 — qa.js(3층과 같은 어댑터) 위에 얹는다. 화면은 상태를 폴링해 그리고,
-// 조작은 qa.* 를 부른다. 토큰·방 생성은 앱 백엔드 몫이라(연§5-1·§5-4) 이 페이지가 데모 키로 대신한다.
+// 조작은 qa.* 를 부른다. 토큰·방 생성은 앱 백엔드 몫이라(연:RULE-TRN-HTTP-AUTH-TWO·연:ROOM.http.CREATE_ROOM) 이 페이지가 데모 키로 대신한다.
 
 const BASE = `${location.origin}/media`
 const DEMO = { api_key: 'ox_k_demo', api_secret: 'ox_s_demo' }
@@ -146,7 +146,7 @@ function kv(el, pairs) {
   el.innerHTML = pairs.map(([k, v]) => `<span>${k}</span><b>${v ?? '—'}</b>`).join('')
 }
 
-// 연§11-3 — 거절 사유와 회수 사유는 같은 TLV 2 를 쓰지만 표가 다르다(같은 숫자가 다른 뜻).
+// 연:RULE-FLR-TLV — 거절 사유와 회수 사유는 같은 TLV 2 를 쓰지만 표가 다르다(같은 숫자가 다른 뜻).
 const DENY_CAUSE = { 1: '다른 사람이 말하는 중', 2: '서버 내부 오류', 3: '참가자가 나뿐', 4: '회수 직후 재요청 차단(T9)', 5: '청취 전용', 6: '자원 없음', 7: '대기줄 만석', 101: '발언 방(pub_room) 아님', 102: '발언 요청 자격 없음', 255: '그 밖' }
 const REVOKE_CAUSE = { 1: '남은 사람이 나뿐', 2: '발화 상한 초과(T2)', 3: '권한 회수', 4: '선점당함', 6: '자원 없음', 7: '다른 사람이 회수', 255: '그 밖' }
 const causeText = (c, table) => (c ? `${c.cause} ${table[c.cause] ?? ''}${c.text ? ` (${c.text})` : ''}` : null)

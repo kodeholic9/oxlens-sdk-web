@@ -1,6 +1,6 @@
 // author: kodeholic (powered by Claude)
-// ★연§9-10-1 — `READY{transport}` 로 신고하는 것은 **받기 절이 쓰는 표**다(`sdes:mid` 제외).
-// 시험 항목서 `C-cond-idx-13`.
+// ★연:RULE-LINK-SDP-1PC-FILL — `READY{transport}` 로 신고하는 것은 **받기 절이 쓰는 표**다(`sdes:mid` 제외).
+// 시험 항목서 `C-cond-RULE-DOC-COND-INDEX-13`.
 //
 // mid 가 신고표에 섞이면 서버가 egress 에 ★발행자의 mid 값을 구독자가 읽는 번호로 옮겨 적는다.
 // 받는 쪽은 그 이름을 자기 보내기 m-line 으로 읽고, 그 SSRC 의 주인을 그리로 옮긴다 — 신고한
@@ -8,7 +8,7 @@
 //
 // ★브라우저에게 로컬 offer 를 시키는 것은 **탐침**이다 — 그것이 받기 절의 demuxer 기준을 다시
 // 등록시켜, 결속이 성한지를 밖에서 볼 수 있는 유일한 자리다. 규격이 허용하는 경로가 아니다
-// (협상은 언제나 서버 offer — 연§9-10 규칙 1).
+// (협상은 언제나 서버 offer — 연:RULE-LINK-SDP-1PC 규칙 1).
 import { test } from '@playwright/test'
 import { Scope, ensureRoom, expect } from '../fixtures/scope.js'
 import { TrackStat } from '../fixtures/delta.js'

@@ -3,7 +3,7 @@
 // 랜덤은 충돌은 막지만 오염을 숨긴다. 고정이면 방 목록만 봐도 정리 실패가 그 자리에서 드러난다.
 
 export const HUB = process.env.OXE2E_HUB ?? '127.0.0.1:19745'
-/** 클라 접속점 — 연§5-0 `{base}`. */
+/** 클라 접속점 — 연:RULE-TRN-BASE-GIVEN `{base}`. */
 export const BASE = `http://${HUB}/media`
 /**
  * ★**운영 표면은 `{base}` 밖이다**(C 평면) — `/admin/*`·`/healthz/*` 가 여기 붙는다.
@@ -44,7 +44,7 @@ export function placementOf(roomId: string, sfus: string[]): string {
 /**
  * ★**배치 후보 집합** — 버스가 말한다(운영 §3-8).
  *
- * ★★**키는 `node_id` 다**(정§15-3) — `sfu_id`(=`epoch`)가 아니다. `/admin/sfus` 는
+ * ★★**키는 `node_id` 다**(정:RULE-BUS-PLACEMENT) — `sfu_id`(=`epoch`)가 아니다. `/admin/sfus` 는
  * ★**그 hub 가 띄운 유닛**이라 제 node 밖을 못 보고, 그 목록의 `sfu_id` 는
  * ★**기동마다 새 값**이라 배치 키로 쓸 수 없다.
  */

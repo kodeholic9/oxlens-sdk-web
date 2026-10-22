@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// 연§11 — 발언권은 DC 축이고 슬롯은 미디어 축이다. ★둘을 같이 봐야 "무전이 된다" 가 성립한다.
+// 연:FLR — 발언권은 DC 축이고 슬롯은 미디어 축이다. ★둘을 같이 봐야 "무전이 된다" 가 성립한다.
 // DC 만 보면 허가는 나는데 소리가 안 가는 형상을 못 본다(미디어 계수기로도 안 잡힌다).
 import { test } from '@playwright/test'
 import { Participant, Scope, ensureRoom, expect } from '../fixtures/scope.js'

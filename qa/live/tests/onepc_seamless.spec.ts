@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// ★연§9-10 규칙 2(무중단 불변)의 관측형 — 시험 항목서 `C-sym-9-10-1`.
+// ★연:RULE-LINK-SDP-1PC 규칙 2(무중단 불변)의 관측형 — 시험 항목서 `C-sym-RULE-LINK-SDP-1PC-1`.
 // `1pc` 은 SDP 가 한 벌이라 어느 사건이든 전체를 다시 낸다. 그래서 ★이번 사건과 무관한
 // 트랙이 그 창에서 멎는지를 본다. 두 스냅샷 차분으로는 창 안의 끊김을 못 보므로 촘촘히 훑는다.
 import { test } from '@playwright/test'
@@ -146,7 +146,7 @@ test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다'
   const floor = grew(q0!, q1!, 'concealed')
   const measured: [string, number, number][] = []
 
-  // ★화면공유는 연§9-10-3 2② 가 미리 세운 **둘째 video 자리**를 되쓴다 — m-line 이 늘지 않는다.
+  // ★화면공유는 연:RULE-LINK-SDP-1PC-PROC 2② 가 미리 세운 **둘째 video 자리**를 되쓴다 — m-line 이 늘지 않는다.
   // 늘면 규칙 2(무중단 불변)가 그 창에서 깨지고, 여기 은닉 폭으로 그것이 보인다.
   for (const [what, fire] of [
     ['보내기 증설', () => a.call('enableCamera')],
@@ -167,7 +167,7 @@ test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다'
       .toBeLessThanOrEqual(480)
   }
 
-  // ★연§9-10-3 2② — 카메라와 화면공유가 **미리 세운 자리**를 되썼는지. 늘었으면 위 은닉 폭이
+  // ★연:RULE-LINK-SDP-1PC-PROC 2② — 카메라와 화면공유가 **미리 세운 자리**를 되썼는지. 늘었으면 위 은닉 폭이
   // 우연히 작았을 뿐이고, 규칙 2 는 다음 형상에서 깨진다.
   const seats = await a.call<{ mid: string; kind: string; direction: string }[]>('mlines')
   const sending = seats.filter((t) => t.direction === 'sendonly' || t.direction === 'sendrecv')

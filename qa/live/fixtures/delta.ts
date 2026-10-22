@@ -17,7 +17,7 @@ export interface TrackStat {
   readonly framesDecoded: number | null
   readonly videoWidth?: number
   readonly currentTime?: number
-  /** 연§9-10 규칙 2 — 끊김은 계수가 멎는 것으로도, 디코더가 얼어붙는 것으로도 드러난다. */
+  /** 연:RULE-LINK-SDP-1PC 규칙 2 — 끊김은 계수가 멎는 것으로도, 디코더가 얼어붙는 것으로도 드러난다. */
   readonly freezeCount?: number | null
   readonly pauseCount?: number | null
   /**
@@ -64,7 +64,7 @@ export interface Sample {
 }
 
 /**
- * 연§9-10 규칙 2 — 재협상 창을 촘촘히 훑는다. 두 스냅샷의 차분으로는 ★창 안의 끊김을 못 본다.
+ * 연:RULE-LINK-SDP-1PC 규칙 2 — 재협상 창을 촘촘히 훑는다. 두 스냅샷의 차분으로는 ★창 안의 끊김을 못 본다.
  * `during` 은 표본 몇 개가 지난 뒤 한 번 친다 — 사건과 관측이 같은 시간축에 있어야 한다.
  */
 export async function watch(

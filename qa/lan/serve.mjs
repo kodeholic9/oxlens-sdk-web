@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 · 연§5-0 · §5-1 · 정§16-1-1 · §18-1 · model: claude-opus-5-5
+// spec: v1.2 · 연:RULE-TRN-BASE-GIVEN · 연:RULE-TRN-HTTP-AUTH-TWO · 정:RULE-OPS-TOKEN · 정:RULE-CFG-THREE-PLACES · model: claude-opus-5-5
 
 import { execFileSync } from 'node:child_process'
 import dgram from 'node:dgram'

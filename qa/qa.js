@@ -38,7 +38,7 @@ function note(kind, detail) {
   if (state.events.length > 500) state.events.shift()
 }
 
-// 연§5-1 — /auth/token 은 앱 백엔드 몫이다. 페이지가 부르지 않는다.
+// 연:RULE-TRN-HTTP-AUTH-TWO — /auth/token 은 앱 백엔드 몫이다. 페이지가 부르지 않는다.
 // 시험에서는 하니스(node)가 그 자리를 맡아 토큰을 넣어 준다.
 
 const qa = {
@@ -48,7 +48,7 @@ const qa = {
     qaTcp(Boolean(iceTcp))
     state.base = base
     state.token = token
-    // 연§9-10-2 — `pc_mode` 는 붙기 전에 정해진다. 시험이 모드를 지정하는 자리가 여기다.
+    // 연:RULE-LINK-SDP-1PC-MODE — `pc_mode` 는 붙기 전에 정해진다. 시험이 모드를 지정하는 자리가 여기다.
     // ★`iceTcp` 는 QA 스위치(__qaSetTcpCandidate) — 서버가 알린 tcp_port 를 후보로 낼지.
     const client = createClient({ base, token, ...(pcMode ? { pcMode } : {}) })
     state.client = client
@@ -89,7 +89,7 @@ const qa = {
 
   async leave(roomId) { await state.client.rooms.get(roomId)?.leave() },
 
-  /** 연§6-5 — 응답의 msg_id 로 내 것을 안다. 에코는 오지 않는다. */
+  /** 연:AUX.op.MESSAGE — 응답의 msg_id 로 내 것을 안다. 에코는 오지 않는다. */
   async sendMessage(roomId, content) {
     return state.client.rooms.get(roomId).sendMessage(content)
   },
@@ -119,7 +119,7 @@ const qa = {
     return st ? { phase: st.phase, trusted: st.trusted, canRequest: st.canRequest, remainingSec: st.remainingSec ?? null } : null
   },
 
-  // 수동 시험(qa/lan) — 발언권 상태 전량과 설정 손잡이. SDK§5-2·§5-3 표면을 그대로 낸다.
+  // 수동 시험(qa/lan) — 발언권 상태 전량과 설정 손잡이. SDK:IMPL-FLR-BUTTON·SDK:IMPL-FLR-EXPOSE 표면을 그대로 낸다.
   pttFull(roomId) {
     const p = state.client?.rooms.get(roomId)?.ptt
     return p ? { ...p.state, input: p.input, wantPriority: p.priority } : null
@@ -142,13 +142,13 @@ const qa = {
 
   mark(label) { note('mark', { label }) },
 
-  /** 연§5-3 — SDK 표면으로 부른다. 페이지 origin 이 hub 와 다르면 CORS 가 없으면 막힌다. */
+  /** 연:ROOM.http.LIST_ROOMS — SDK 표면으로 부른다. 페이지 origin 이 hub 와 다르면 CORS 가 없으면 막힌다. */
   async listRooms() {
     const rooms = await state.client.listRooms()
     return rooms.map((r) => ({ roomId: r.roomId, userCount: r.userCount }))
   },
 
-  /** 연§5-5 ① — 정원을 먹지 않고 명단에 오르지 않는다. */
+  /** 연:ROOM.http.GET_ROOM ① — 정원을 먹지 않고 명단에 오르지 않는다. */
   async preview(roomId) {
     const p = await state.client.preview(roomId)
     return {
@@ -277,10 +277,10 @@ const qa = {
       let packets = null
       let bytes = null
       let framesDecoded = null
-      // 연§9-10 규칙 2 — 끊김은 계수가 멎는 것으로도, 디코더가 얼어붙는 것으로도 드러난다.
+      // 연:RULE-LINK-SDP-1PC 규칙 2 — 끊김은 계수가 멎는 것으로도, 디코더가 얼어붙는 것으로도 드러난다.
       let freezeCount = null
       let pauseCount = null
-      // 연§9-10 규칙 2 의 ★폭을 재는 눈금. 패킷 계수는 표본 창보다 짧은 끊김을 못 본다
+      // 연:RULE-LINK-SDP-1PC 규칙 2 의 ★폭을 재는 눈금. 패킷 계수는 표본 창보다 짧은 끊김을 못 본다
       //   (opus 20ms ptime 이면 250ms 창에 12.5 패킷이라 40ms 가 비어도 계수는 는다).
       //   오디오 은닉은 48kHz 샘플 단위라 480 샘플이 곧 10ms 다.
       let concealed = null
@@ -316,7 +316,7 @@ const qa = {
   },
 
   /**
-   * 연§9-10 규칙 1 을 어긴다 — 산 연결에서 ★브라우저가 자기 offer 를 내게 한다.
+   * 연:RULE-LINK-SDP-1PC 규칙 1 을 어긴다 — 산 연결에서 ★브라우저가 자기 offer 를 내게 한다.
    * 성공하면 되돌려 세션을 원래대로 둔다(대조군이 그 뒤로도 돌아야 한다).
    */
   /** ★진단용 — 산 연결의 SDP 두 벌. 판정하지 않는다(재료만 낸다). */
@@ -340,8 +340,8 @@ const qa = {
   },
 
   /**
-   * 연§9-10 규칙 2(무중단 불변)의 관측 재료 — 산 연결의 m-line 자리를 그대로 낸다.
-   * ★판정 재료만이다. "늘었나" 를 spec 이 정한다(연§9-10-3 2② 의 씨앗 셋이 성립하는지).
+   * 연:RULE-LINK-SDP-1PC 규칙 2(무중단 불변)의 관측 재료 — 산 연결의 m-line 자리를 그대로 낸다.
+   * ★판정 재료만이다. "늘었나" 를 spec 이 정한다(연:RULE-LINK-SDP-1PC-PROC 2② 의 씨앗 셋이 성립하는지).
    */
   mlines() {
     const pc = livePc()
@@ -365,7 +365,7 @@ const qa = {
 
   events(kind) { return kind ? state.events.filter((e) => e.kind === kind) : state.events },
 
-  // SDK§6-2 — 수신 오디오는 SDK 가 낸다. ★그 계약을 3층이 볼 자리다.
+  // SDK:IMPL-TRK-RECEIVE — 수신 오디오는 SDK 가 낸다. ★그 계약을 3층이 볼 자리다.
   //   패킷 차분(trackStats)은 "온다" 까지고, 실제로 소리가 나는지는 재생 요소가 말한다.
   //   판정 재료만 낸다 — 참·거짓은 spec 이 정한다.
   audioOut() {

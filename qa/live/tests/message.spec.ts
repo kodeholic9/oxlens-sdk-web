@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// 연§6-5 · 정§13 — 문자는 방 broadcast 이고 ★신원은 서버가 세션에서 넣는다.
+// 연:AUX.op.MESSAGE · 정:AUX — 문자는 방 broadcast 이고 ★신원은 서버가 세션에서 넣는다.
 // 보낸 사람에게는 에코가 없다 — 자기 것은 응답으로 안다.
 import { test } from '@playwright/test'
 import { Scope, ensureRoom, expect } from '../fixtures/scope.js'

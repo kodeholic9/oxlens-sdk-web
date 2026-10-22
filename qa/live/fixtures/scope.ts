@@ -72,7 +72,7 @@ export async function roomHeadcount(roomId: string): Promise<number | null> {
   return body.participants?.length ?? body.user_count ?? null
 }
 
-/** 연§5-1 — 토큰 발급은 앱 백엔드 몫이다. 하니스가 그 자리를 맡는다. */
+/** 연:RULE-TRN-HTTP-AUTH-TWO — 토큰 발급은 앱 백엔드 몫이다. 하니스가 그 자리를 맡는다. */
 export async function userToken(userId: string, opts: { participantType?: number; hidden?: boolean } = {}): Promise<string> {
   const res = await fetch(`${BASE}/auth/token`, {
     method: 'POST',
@@ -88,7 +88,7 @@ export async function userToken(userId: string, opts: { participantType?: number
   return (await res.json() as { token: string }).token
 }
 
-/** 연§5-4 — 방 생성은 HTTP 다. 앱 백엔드도 부르는 자리라 하니스가 낸다. */
+/** 연:ROOM.http.CREATE_ROOM — 방 생성은 HTTP 다. 앱 백엔드도 부르는 자리라 하니스가 낸다. */
 export async function ensureRoom(roomId: string): Promise<void> {
   const res = await fetch(`${BASE}/rooms`, {
     method: 'POST',

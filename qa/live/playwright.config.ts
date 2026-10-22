@@ -9,7 +9,7 @@ const CHROMIUM_MEDIA = [
   '--use-fake-ui-for-media-stream',
   '--use-fake-device-for-media-stream',
   '--autoplay-policy=no-user-gesture-required',
-  // ★화면공유(getDisplayMedia)도 물어보지 않고 고르게 한다 — 연§9-10-3 2② 의 셋째 자리 축.
+  // ★화면공유(getDisplayMedia)도 물어보지 않고 고르게 한다 — 연:RULE-LINK-SDP-1PC-PROC 2② 의 셋째 자리 축.
   '--auto-select-desktop-capture-source=Entire screen',
   '--allow-http-screen-capture',
 ]
@@ -32,7 +32,7 @@ export default defineConfig({
   projects: [
     { name: 'chromium', testIgnore: /fault\//, use: { browserName: 'chromium', launchOptions: { args: CHROMIUM_MEDIA } } },
     { name: 'chromium-fault', testMatch: /fault\//, use: { browserName: 'chromium', launchOptions: { args: CHROMIUM_MEDIA } } },
-    // ★능력표(SDK§12-3) 실측용. 정규 게이트에 섞지 않는다 — 표가 채워지기 전이라
+    // ★능력표(SDK:RULE-PLAT-PC-MODE) 실측용. 정규 게이트에 섞지 않는다 — 표가 채워지기 전이라
     //   빨강이 "회귀" 가 아니라 "그 브라우저에서 아직 안 선다" 를 뜻한다.
     { name: 'firefox-probe', testIgnore: /fault\//, use: { browserName: 'firefox', launchOptions: { firefoxUserPrefs: FIREFOX_MEDIA } } },
   ],

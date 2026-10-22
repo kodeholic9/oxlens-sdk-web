@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// 정§14-3 · 연§5-5 ② — 서버가 전달 정체를 감지해 알리고, SDK 가 그 방을 통짜로 다시 받는다.
+// 정:IMPL-ROOM-STALL · 연:ROOM.http.GET_ROOM ② — 서버가 전달 정체를 감지해 알리고, SDK 가 그 방을 통짜로 다시 받는다.
 // ★이 왕복은 서버·DC·HTTP 세 축을 한 번에 지난다 — 어느 한 층만으로는 못 태운다.
 import { test } from '@playwright/test'
 import { Scope, ensureRoom, expect } from '../fixtures/scope.js'

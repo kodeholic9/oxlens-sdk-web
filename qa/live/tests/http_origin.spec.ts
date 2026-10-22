@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// 연§5-1·§5-3·§5-5 — 브라우저 클라가 부르는 HTTP 세 자리. 페이지 origin 이 hub 와 다르면
+// 연:RULE-TRN-HTTP-AUTH-TWO·연:ROOM.http.LIST_ROOMS·연:ROOM.http.GET_ROOM — 브라우저 클라가 부르는 HTTP 세 자리. 페이지 origin 이 hub 와 다르면
 // ★CORS 가 없으면 막힌다 — 파이썬 봇도 1층도 원리적으로 못 보는 축이다.
 import { test } from '@playwright/test'
 import { BASE } from '../fixtures/env.js'
