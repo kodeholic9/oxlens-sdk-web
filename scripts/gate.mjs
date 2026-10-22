@@ -2,7 +2,7 @@
 // 한 명령 게이트. 통과·실패·미실행을 다른 표시로 쓰고, 미실행에는 사유를 붙인다
 // — "못 쟀다"가 초록으로 새지 않게 한다.
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -43,4 +43,27 @@ else {
 console.log('')
 for (const r of rows) console.log(`  ${r.mark.padEnd(5)} ${r.name.padEnd(12)} ${r.note}`)
 console.log(rows.some((r) => r.mark === 'SKIP') ? '\n  ★SKIP 은 통과가 아니다 — 사유를 읽는다.' : '')
+// ★3층 회차 기록 — 보관소(.archive/)에 남긴다. 서버 · SDK 의 push 전 확인(.githooks/pre-push)이 이 기록을 본다:
+//   「그 빌드로 3층을 돌려 통과했나」. 기록이 없으면 push 가 막힌다 — 2층 초록만으로 미디어 변경이 나가지 않게.
+if (live) await keepLiveRecord(ok)
 process.exit(ok ? 0 : 1)
+
+async function keepLiveRecord(passed) {
+  const hub = process.env.OXE2E_HUB ?? '127.0.0.1:19745'
+  let server = null
+  try {
+    const res = await fetch(`http://${hub}/healthz/ready`)
+    server = (await res.json()).build ?? null
+  } catch {
+    server = null
+  }
+  const sha = spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim()
+  const dirty = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' }).stdout.trim() !== ''
+  const rec = { at: new Date().toISOString(), passed, sdk_sha: sha, sdk_dirty: dirty, server_build: server, hub, rows }
+  const dir = join(root, '.archive', 'gate-live')
+  mkdirSync(dir, { recursive: true })
+  const body = JSON.stringify(rec, null, 1) + '\n'
+  writeFileSync(join(dir, `${rec.at.replace(/[:.]/g, '-')}.json`), body, { flag: 'wx' })
+  writeFileSync(join(dir, 'latest.json'), body)
+  console.log(`  ⓘ 3층 회차 기록: .archive/gate-live/latest.json (server ${server ?? '모름'} · sdk ${sha}${dirty ? '-dirty' : ''})`)
+}
