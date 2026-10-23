@@ -13,7 +13,7 @@ interface Room { id: string; tracks: Track[] }
 const tracksOf = (p: Participant, room: string): Promise<Track[]> =>
   p.call<Room[]>('rooms').then((rs) => rs.find((r) => r.id === room)?.tracks ?? [])
 
-test('FAULT-01 상대가 발행 안 하면 상대 트랙이 없다 — CONF 의 단언이 발행에 매여 있다', async ({ browser }) => {
+test('FAULT-01 상대가 발행 안 하면 상대 트랙이 없다 — CONF 의 단언이 발행에 매여 있다', { annotation: { type: 'spec', description: 'none' } },  async ({ browser }) => {
   const ROOM = S.room('nopublish')
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
@@ -33,7 +33,7 @@ test('FAULT-01 상대가 발행 안 하면 상대 트랙이 없다 — CONF 의 
     .toBeGreaterThan(0)
 })
 
-test('FAULT-02 다른 방이면 안 보인다 — "같은 방에서 본다" 가 방을 실제로 가른다', async ({ browser }) => {
+test('FAULT-02 다른 방이면 안 보인다 — "같은 방에서 본다" 가 방을 실제로 가른다', { annotation: { type: 'spec', description: 'none' } },  async ({ browser }) => {
   const A = S.room('splitA')
   const B = S.room('splitB')
   const ctx = await browser.newContext()
@@ -53,7 +53,7 @@ test('FAULT-02 다른 방이면 안 보인다 — "같은 방에서 본다" 가 
   expect(mine.filter((t) => t.slot && t.kind === 'audio'), '남는 것은 이 방 무전 슬롯뿐이다').toHaveLength(1)
 })
 
-test('FAULT-03 floor 없이는 소리가 안 나간다 — PTT 게이트가 실제로 닫혀 있다', async ({ browser }) => {
+test('FAULT-03 floor 없이는 소리가 안 나간다 — PTT 게이트가 실제로 닫혀 있다', { annotation: { type: 'spec', description: 'none' } },  async ({ browser }) => {
   const ROOM = S.room('gate')
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)

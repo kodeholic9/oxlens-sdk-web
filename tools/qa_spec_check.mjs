@@ -2,7 +2,7 @@
 // 3층 시험마다 규격 좌표를 든다(회고 51 · 53 · 20261023) — `test('ID …', { annotation: { type: 'spec', description: '…' } }, …)`.
 //   좌표 = 시험 항목서 단위 ID · 라벨 인용(연: · 정: · SDK:) · none(환경 자가점검 · 브라우저 관측 — 우리 계약 아님).
 //   ★없으면 실패 — 빨강을 시험 이름이 아니라 깨진 약속으로 읽게. 단위 ID 가 항목서에 실재하는지는 규격 게이트(check_test_spec)가 잰다.
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -10,7 +10,11 @@ const DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'qa', 'live',
 const ITEM = /^(none|[CSKPOH]-(proc|timer|code|close|op|cond|sym|state|api|accept|key|sdk|ux|path|rule)-[A-Za-z0-9_.-]+|(CP|SV|SD|PL|OP|HK)-[A-Z][A-Z0-9-]+|(연|정|SDK|정책):[A-Za-z*][A-Za-z0-9_.*-]*)$/
 const bad = []
 let n = 0
-for (const f of readdirSync(DIR).filter((x) => x.endsWith('.spec.ts'))) {
+/** 하위 폴더까지(갈래B `tests/fault/` 를 빠뜨렸던 것 · 20261023) */
+function specs(dir, pre = '') {
+  return readdirSync(dir).flatMap((x) => statSync(join(dir, x)).isDirectory() ? specs(join(dir, x), `${pre}${x}/`) : x.endsWith('.spec.ts') ? [`${pre}${x}`] : [])
+}
+for (const f of specs(DIR)) {
   for (const [i, ln] of readFileSync(join(DIR, f), 'utf8').split('\n').entries()) {
     const m = /^test\('([A-Z0-9-]+) /.exec(ln)
     if (!m) continue
