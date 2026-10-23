@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/link/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 1812dea47fd2095f · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 67967e270560c2c4 · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -7,6 +7,7 @@ export type LinkSt = 'OK' | 'WAIT' | 'CHECK' | 'RESTART' | 'APPLY' | 'REOPEN' | 
 export type Ice = 'OK' | 'DISC' | 'FAILED'
 export type RebuildCause = 'NONE' | 'RESTART_3XXX' | 'ASSOC' | 'DC_EXHAUST' | 'EPOCH' | 'PUB_LOST'
 export type MTrack = 'A' | 'B' | 'Sa' | 'Sb'
+export type RoomSt = 'NONE' | 'JOINING' | 'JOINED' | 'LEAVING'
 export type Part = 'req' | 'res' | 'fail' | 'body'
 export type Reopen = 'ok' | 'fail' | 'exhausted'
 export type Fx = 'app.link_blocked' | 'app.link_ok' | 'app.link_rebuilding' | 'app.link_reviving' | 'app.link_shaky' | 'conn.close' | 'dc.reopen' | 'sdp.restart'
@@ -88,7 +89,10 @@ export const REACTS = {
 } as const
 /** 읽는 것 — 판단이 다른 영역 상태를 읽는 인자(부르는 쪽이 넣는다 · 무엇을 읽는지는 위가 정한다) */
 export const READS = {
-
+  'iceDisc.leaving': ['ROOM.rs'],
+  'waitOver.leaving': ['ROOM.rs'],
+  'assocLost.leaving': ['ROOM.rs'],
+  'dcClosed.leaving': ['ROOM.rs'],
 } as const
 
 /** 원장 — 타이머(ms) · 횟수 */
@@ -107,8 +111,11 @@ export function armed(s: St): TimerName[] {
   return on
 }
 
-/** ICE 가 disconnected 가 됐다(브라우저) (바깥: 브라우저 ICE 가 disconnected) */
-export function iceDisc(s: St): Step {
+/** ICE 가 disconnected 가 됐다(브라우저) (바깥: 브라우저 ICE 가 disconnected) · 읽는 것: leaving = ROOM.rs */
+export function iceDisc(s: St, leaving: boolean): Step {
+  if (leaving && s.ls !== 'REBUILD') {
+    return done(s, s, 'LINK.C.any.ice_disc_leaving', [], [], [], [])
+  }
   if (s.ls === 'OK') {
     return done(s, { ...s, ls: 'WAIT', sync: false, ice: 'DISC' }, 'LINK.C.OK.ice_disc', [], ['app.link_shaky'], [], [])
   }
@@ -121,8 +128,11 @@ export function iceBack(s: St): Step | null {
   return done(s, { ...s, ls: 'OK', sync: true, ice: 'OK' }, 'LINK.C.WAIT.ice_back', [{ ws: 'READY', part: 'req' }], ['app.link_ok'], [], [])
 }
 
-/** disconnected 기다림이 끝나도 안 풀렸다 · 또는 failed 가 됐다 (바깥: disconnected 기다림이 끝났다 · failed) */
-export function waitOver(s: St, failed: boolean): Step {
+/** disconnected 기다림이 끝나도 안 풀렸다 · 또는 failed 가 됐다 (바깥: disconnected 기다림이 끝났다 · failed) · 읽는 것: leaving = ROOM.rs */
+export function waitOver(s: St, failed: boolean, leaving: boolean): Step {
+  if (leaving && s.ls !== 'REBUILD') {
+    return done(s, s, 'LINK.C.any.wait_over_leaving', [], [], [], [])
+  }
   if (s.ls === 'WAIT') {
     return done(s, { ...s, ls: 'CHECK', sync: false, ice: failed ? 'FAILED' : s.ice }, 'LINK.C.WAIT.wait_over', [{ ws: 'HEARTBEAT', part: 'req' }], [], [], [])
   }
@@ -183,16 +193,22 @@ export function applied(s: St): Step | null {
   return done(s, { ...s, ls: 'OK', ice: 'OK', gen: s.pgen, pgen: 0, sync: true, everUp: true }, 'LINK.C.APPLY.applied', [{ ws: 'READY', part: 'req' }], ['app.link_ok'], [], [])
 }
 
-/** SCTP 연관이 사라졌다 · DTLS 가 닫혔다 (바깥: SCTP 연관 소멸 · DTLS 닫힘) */
-export function assocLost(s: St): Step {
+/** SCTP 연관이 사라졌다 · DTLS 가 닫혔다 (바깥: SCTP 연관 소멸 · DTLS 닫힘) · 읽는 것: leaving = ROOM.rs */
+export function assocLost(s: St, leaving: boolean): Step {
+  if (leaving && s.ls !== 'REBUILD') {
+    return done(s, s, 'LINK.C.any.assoc_lost_leaving', [], [], [], [])
+  }
   if (s.ls === 'REBUILD') {
     return done(s, { ...s, assoc: false, dc: false }, 'LINK.C.REBUILD.assoc_lost_absorbed', [], [], [], [])
   }
   return done(s, { ...s, ls: 'REBUILD', cause: 'ASSOC', assoc: false, dc: false, sync: false, pgen: 0, req: 0 }, 'LINK.C.any.assoc_lost', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
 }
 
-/** DC 채널만 닫혔다(연관은 산다) (바깥: DC 채널만 닫혔다) */
-export function dcClosed(s: St): Step {
+/** DC 채널만 닫혔다(연관은 산다) (바깥: DC 채널만 닫혔다) · 읽는 것: leaving = ROOM.rs */
+export function dcClosed(s: St, leaving: boolean): Step {
+  if (leaving && s.ls !== 'REBUILD') {
+    return done(s, s, 'LINK.C.any.dc_closed_leaving', [], [], [], [])
+  }
   if (s.ls === 'OK') {
     return done(s, { ...s, ls: 'REOPEN', dc: false, sync: false }, 'LINK.C.OK.dc_closed', [], ['dc.reopen'], [{ fx: 'floor.dc_down', to: 'FLR', at: 'sameServer' }], [])
   }

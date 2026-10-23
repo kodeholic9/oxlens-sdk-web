@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/trk/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 1812dea47fd2095f · 영역 TRK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 67967e270560c2c4 · 영역 TRK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 

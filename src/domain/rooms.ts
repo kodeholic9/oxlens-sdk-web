@@ -65,6 +65,8 @@ export class RoomCore {
   private joinWaiter: { resolve: (r: RoomCore) => void; reject: (f: Fault) => void } | null = null
   private leaveWaiter: (() => void) | null = null
   private lastJoin: RoomJoinRes | null = null
+  /** 이 입장이 select:true 로 나갔다 — 입장이 곁들여 발언 방을 정한다(SDK:IMPL-AFF-SPEAKING-ROOM 입구 joinSelect) */
+  joinSel = false
   private lastFault: Fault | null = null
   private reqEpoch = 0
   private syncEpoch = 0
@@ -150,7 +152,7 @@ export class RoomCore {
   /** 1pc 면 입장마다 새 연결로 번호표를 만든다(연:RULE-ROOM-JOIN-START 3) */
   private async sendJoin(): Promise<void> {
     const ep = this.reqEpoch
-    const body: Record<string, unknown> = { room_id: this.id, role: this.role, select: this.mode === 'talk' }
+    const body: Record<string, unknown> = { room_id: this.id, role: this.role, select: false }
     let fresh: LinkCore | null = null
     if (this.core.ses.pcm === '1pc') {
       fresh = LinkCore.candidate(this.core)
@@ -165,6 +167,15 @@ export class RoomCore {
         return
       }
     }
+    // select:true 는 발언 방이 없고 전환이 안 떠 있을 때만(연:RULE-ROOM-JOIN-START 2) · 4009 되풀이는 앞 입장이 건 기다림을 그대로 잇는다
+    const aff = this.core.aff
+    if (aff.wait === 'JOIN' && aff.want === this.id) this.joinSel = true
+    else {
+      const js = this.mode === 'talk' ? AFF.joinSelect(aff, this.id) : null
+      this.joinSel = js !== null
+      if (js) this.core.affStep('joinSelect', js, 'app')
+    }
+    body['select'] = this.joinSel
     let r: Reply
     try { r = await this.core.sig.request('ROOM_JOIN', body) } catch {
       fresh?.peer?.close()
@@ -205,7 +216,6 @@ export class RoomCore {
     } else fresh?.peer?.close()
     const m = { code: 0, part: 'res' as const, server_config: { pc_mode: sc.pc_mode, sfu_id: this.core.epochs.id(sc.sfu_id) }, version: { epoch: this.core.epochs.id(b.version.epoch), seq: b.version.seq } }
     this.roomStep('joinRes', ROOM.joinRes(this.st, m, pcm), 'ROOM_JOIN.res')
-    if (this.st.rs === 'JOINED') this.core.affImplicit(b.affiliation, this.sfuId, 'ROOM_JOIN.res')
     this.lastJoin = null
   }
 
@@ -244,6 +254,15 @@ export class RoomCore {
         break
       }
       case 'aff.leave': core.affStep('left', AFF.left(core.aff, this.id), label); break
+      case 'aff.implicit': {
+        // 위 이음매 — 입장 응답의 affiliation(SDK:IMPL-AFF-SPEAKING-ROOM 입구 implicit) · p 는 그 방이 응답의 sub_rooms 에 있을 때만 · onPub = 지금 발언 방이 이 응답을 낸 서버의 방
+        const a = this.lastJoin?.affiliation
+        const p = a && a.pub_room !== null && a.sub_rooms.includes(a.pub_room) ? a.pub_room : 'NONE'
+        const onPub = core.aff.pub !== 'NONE' && core.rooms.get(core.aff.pub)?.sfuId === this.sfuId
+        core.affStep('implicit', AFF.implicit(core.aff, this.id, this.joinSel, p, onPub), label)
+        break
+      }
+      case 'aff.join_failed': core.affStep('joinFailed', AFF.joinFailed(core.aff, this.id), label); break
       case 'floor.leave': this.floor.leave(); break
       case 'sub.drop': this.subStep('dropRoom', SUB.dropRoom(this.sub), label); break
       case 'pub.room_gone': for (const l of core.media.inRoom(this.id)) l.roomGone(); break

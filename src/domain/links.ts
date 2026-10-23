@@ -127,17 +127,14 @@ export class LinkCore {
 
   // ── 층별 사실 → 위 입구(SDK:IMPL-LINK-PROJECTION 입구 표) ────────────
 
-  /** 그 서버 방이 전부 나가는 중이다 — 서버가 마지막 방 퇴장에 Peer 를 거둔다(연:RULE-ROOM-LEAVE-RES 2) */
+  /** 위 입구의 읽기 칸 `leaving`(연 LINK 사실 입구 reads ROOM.rs) — 그 서버 방이 전부 나가는 중이다(하나 이상 LEAVING · 나머지는 NONE).
+   *  서버가 마지막 방 퇴장에 Peer 를 거두며 닫는 사실을 재구축 방아쇠로 받지 않게 위 상태기가 가른다(연:RULE-ROOM-LEAVE-RES 2). */
   private leavingAll(): boolean {
     const rooms = this.core.roomsOn(this.server)
-    return rooms.length > 0 && rooms.every((r) => r.st.rs === 'LEAVING' || r.st.rs === 'NONE')
+    return rooms.some((r) => r.st.rs === 'LEAVING') && rooms.every((r) => r.st.rs === 'LEAVING' || r.st.rs === 'NONE')
   }
 
   private fact(f: import('../internal/transport.js').LinkFact): void {
-    if (f.t !== 'dcData' && f.t !== 'track' && this.leavingAll() && this.st.ls !== 'REBUILD') {
-      this.core.record('LINK', this.server, this.st.ls, this.st.ls, `SDK.teardown_expected.${f.t}`, 'leaving')
-      return
-    }
     if (f.t === 'ice') {
       const s = f.state
       if (s === 'connected' || s === 'completed') {
@@ -147,17 +144,17 @@ export class LinkCore {
         else if (this.st.ls === 'REBUILD') this.tryRebuilt()
         this.firstUp()
       } else if (s === 'disconnected') {
-        this.step('iceDisc', LINK.iceDisc(this.st), 'ice')
-        if (this.st.ls === 'WAIT') this.wobbly.start(this.core.cfg.wobblyGraceMs, () => this.step('waitOver', LINK.waitOver(this.st, false), 'grace'))
+        this.step('iceDisc', LINK.iceDisc(this.st, this.leavingAll()), 'ice')
+        if (this.st.ls === 'WAIT') this.wobbly.start(this.core.cfg.wobblyGraceMs, () => this.step('waitOver', LINK.waitOver(this.st, false, this.leavingAll()), 'grace'))
       } else if (s === 'failed') {
         this.wobbly.stop()
         if (this.st.ls === 'REBUILD') this.step('rebuilt', LINK.rebuilt(this.st, this.peerGen(), false), 'ice')
-        else this.step('waitOver', LINK.waitOver(this.st, true), 'ice')
+        else this.step('waitOver', LINK.waitOver(this.st, true, this.leavingAll()), 'ice')
       }
     } else if (f.t === 'dtls') {
-      if (f.state === 'closed' || f.state === 'failed') this.step('assocLost', LINK.assocLost(this.st), 'dtls')
+      if (f.state === 'closed' || f.state === 'failed') this.step('assocLost', LINK.assocLost(this.st, this.leavingAll()), 'dtls')
     } else if (f.t === 'sctp') {
-      if (f.state === 'closed') this.step('assocLost', LINK.assocLost(this.st), 'sctp')
+      if (f.state === 'closed') this.step('assocLost', LINK.assocLost(this.st, this.leavingAll()), 'sctp')
     } else if (f.t === 'dc') {
       if (f.open) {
         this.reopenTimer.stop()
@@ -167,8 +164,8 @@ export class LinkCore {
       } else {
         const sctp = this.peer?.sctpState
         if (this.st.ls === 'REOPEN') this.reopenOutcome(false)
-        else if (sctp === 'connected') this.step('dcClosed', LINK.dcClosed(this.st), 'dc')
-        else this.step('assocLost', LINK.assocLost(this.st), 'dc')
+        else if (sctp === 'connected') this.step('dcClosed', LINK.dcClosed(this.st, this.leavingAll()), 'dc')
+        else this.step('assocLost', LINK.assocLost(this.st, this.leavingAll()), 'dc')
       }
     } else if (f.t === 'dcData') {
       const rx = Mbcp.parse(f.data)

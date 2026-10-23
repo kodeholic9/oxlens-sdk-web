@@ -1,9 +1,9 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/aff/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 1812dea47fd2095f · 영역 AFF 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 67967e270560c2c4 · 영역 AFF 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
-export type AffWait = 'NONE' | 'SELECT' | 'DESELECT'
+export type AffWait = 'NONE' | 'SELECT' | 'DESELECT' | 'JOIN'
 export type Fx = 'app.aff_failed' | 'app.affiliation'
 export type SeamFx = 'floor.pub_away' | 'floor.pub_select'
 export type TimerName = never
@@ -34,7 +34,9 @@ export const SEAMS = {
 } as const
 /** 이음매가 부르는 입구 — 다른 영역(또는 이 영역)의 효과가 부른다 · 부르는 곳은 위가 정했다(아래가 넣는 사건이 아니다) */
 export const REACTS = {
+  implicit: ['ROOM:aff.implicit'],
   left: ['ROOM:aff.leave'],
+  joinFailed: ['ROOM:aff.join_failed'],
 } as const
 /** 읽는 것 — 판단이 다른 영역 상태를 읽는 인자(부르는 쪽이 넣는다 · 무엇을 읽는지는 위가 정한다) */
 export const READS = {
@@ -97,13 +99,50 @@ export function res(s: St, ok: boolean, p: string, onPub: boolean, onWant: boole
   return done(s, { ...s, wait: 'NONE', want: 'NONE' }, 'AFF.C.any.res_same', [], [], [], [])
 }
 
+/** select:true 입장을 보낸다 — 입장이 곁들여 발행 방을 바꾸므로 ★소속 전환이 떠 있는 것과 같다(RULE-ROOM-JOIN-START 2 · 그 응답이 올 때까지 다른 전환을 막는다) (앱: 앱이 이 방에서 말하려고 들어간다(select:true 입장)) — 받는 상태 밖이면 null(사건이 없던 것) */
+export function joinSelect(s: St, r: string): Step | null {
+  if (!(s.wait === 'NONE' && s.pub === 'NONE')) return null
+  return done(s, { ...s, wait: 'JOIN', want: r }, 'AFF.C.NOPUB.join_select', [], [], [], [])
+}
+
+/** 입장 응답의 affiliation — 입장이 곁들여 바꾼 발행 방(RULE-AFF-CAUSE-USER · cause 없음) · r = 그 입장의 방 · sel = 그 입장 요청이 select:true 였다(응답은 pid 로 제 요청과 짝지어진다 — RULE-TRN-ONE-REPLY) · p = 그 응답이 말한 발행 방(그 서버의 방 하나 또는 없음 — 부분 목록) · onPub = 지금 발행 방이 그 응답을 낸 서버의 방 */
+export function implicit(s: St, r: string, sel: boolean, p: string, onPub: boolean): Step {
+  if (sel && s.wait === 'JOIN' && s.want === r && p === r) {
+    return done(s, { ...s, pub: p, wait: 'NONE', want: 'NONE' }, 'AFF.C.any.implicit_joined', [], ['app.affiliation'], [{ fx: 'floor.pub_select', to: 'FLR', at: 'room' }], [])
+  }
+  if (sel && s.wait === 'JOIN' && s.want === r) {
+    return done(s, { ...s, wait: 'NONE', want: 'NONE' }, 'AFF.C.any.implicit_join_unselected', [], ['app.aff_failed'], [], [])
+  }
+  if (s.wait !== 'NONE') {
+    return done(s, s, 'AFF.C.any.implicit_busy', [], [], [], [])
+  }
+  if (p !== 'NONE' && s.pub !== p) {
+    return done(s, { ...s, pub: p }, 'AFF.C.any.implicit_pub', [], ['app.affiliation'], [{ fx: 'floor.pub_away', to: 'FLR', at: 'room' }, { fx: 'floor.pub_select', to: 'FLR', at: 'room' }], [])
+  }
+  if (p === 'NONE' && onPub && s.pub !== 'NONE') {
+    return done(s, { ...s, pub: 'NONE' }, 'AFF.C.any.implicit_away', [], ['app.affiliation'], [{ fx: 'floor.pub_away', to: 'FLR', at: 'room' }], [])
+  }
+  return done(s, s, 'AFF.C.any.implicit_same', [], [], [], [])
+}
+
 /** 듣던 방 r 을 떠났다 — 그 방이 발행 방이면 발행도 함께 풀린다(RULE-AFF-PROC 끝 항) */
 export function left(s: St, r: string): Step {
   if (s.pub === r) {
     return done(s, { ...s, pub: 'NONE' }, 'AFF.C.any.left', [], [], [], [])
   }
+  if (s.wait === 'JOIN' && s.want === r) {
+    return done(s, { ...s, wait: 'NONE', want: 'NONE' }, 'AFF.C.any.left_join', [], ['app.aff_failed'], [], [])
+  }
   if (s.want === r) {
     return done(s, { ...s, want: 'NONE' }, 'AFF.C.any.left_want', [], [], [], [])
   }
   return done(s, s, 'AFF.C.any.left_other', [], [], [], [])
+}
+
+/** 방 r 입장이 실패했다(응답이 실패 · 응답의 pc_mode 불일치로 되돌림) — select:true 입장이 건 기다림이면 푼다(소속 요청의 실패 응답이 AFF.C.any.fail 로 푸는 것과 같은 꼴) */
+export function joinFailed(s: St, r: string): Step {
+  if (s.wait === 'JOIN' && s.want === r) {
+    return done(s, { ...s, wait: 'NONE', want: 'NONE' }, 'AFF.C.any.join_failed', [], ['app.aff_failed'], [], [])
+  }
+  return done(s, s, 'AFF.C.any.join_failed_other', [], [], [], [])
 }

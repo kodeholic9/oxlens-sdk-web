@@ -122,10 +122,15 @@ export function settle(o: ClientOptions): Settings {
   }
 }
 
-/** opus answer fmtp — 방 코덱의 고정 opus 값(연:RULE-LINK-SDP-PUB-MLINE 예외 — 구독 줄 선언과 같아야 한다).
- * 정책:sdk.opusFmtpDefault 의 usedtx · stereo 는 이 값과 어긋나 연동규격서가 이긴다(SDK:RULE-DOC-SDK-CONTRACT) — 싣지 않는다 */
+/** opus answer fmtp 의 바탕 — 방 코덱의 고정 opus 값(연:RULE-LINK-SDP-PUB-MLINE 예외 · 구독 줄 선언과 같다). */
 export const ROOM_OPUS_FMTP = 'minptime=10;useinbandfec=1'
 
-export function opusFmtpLine(_f: OpusFmtp): string {
-  return ROOM_OPUS_FMTP
+/** 클라가 조립하는 answer 의 opus fmtp — 바탕 위에 받는 쪽 선호(정책:sdk.opusFmtpDefault)를 더한다(연:RULE-LINK-SDP-PUB-MLINE · SDK 정의서 오디오 인코딩).
+ *  ★DTX(usedtx=1)는 이 설정이 정한다(20261023 — 고정값에 막혀 무시되던 것). 받는 쪽 선호는 PT 튜플 밖이라 서버는 보지 않는다. */
+export function opusFmtpLine(f: OpusFmtp): string {
+  const parts = [`minptime=10`, `useinbandfec=${f.useinbandfec === 0 ? 0 : 1}`]
+  if (f.usedtx === 1) parts.push('usedtx=1')
+  if (f.stereo === 1) parts.push('stereo=1')
+  if (f.maxaveragebitrate !== undefined) parts.push(`maxaveragebitrate=${f.maxaveragebitrate}`)
+  return parts.join(';')
 }
