@@ -11,7 +11,7 @@ test.afterEach(async () => { await S.teardown() })
 
 interface Ev { detail: { userId: string; content: string } }
 
-test('MSG-01 남에게 가고 나에게는 안 돌아온다', async ({ browser }) => {
+test('MSG-01 남에게 가고 나에게는 안 돌아온다', { annotation: { type: 'spec', description: '정:IMPL-AUX-MESSAGE' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const a = await S.open(ctx, { userId: S.user('U01') })
@@ -29,7 +29,7 @@ test('MSG-01 남에게 가고 나에게는 안 돌아온다', async ({ browser }
   expect(await a.call<Ev[]>('events', 'message'), '★보낸 사람에게는 에코가 없다').toHaveLength(0)
 })
 
-test('MSG-02 안 들어간 방에는 못 보낸다', async ({ browser }) => {
+test('MSG-02 안 들어간 방에는 못 보낸다', { annotation: { type: 'spec', description: 'CP-CODE-NOT-IN-ROOM' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const other = S.room('other')
   await ensureRoom(other)

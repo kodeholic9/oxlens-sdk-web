@@ -28,7 +28,7 @@ const pairsOf = (p: Part): Promise<IcePair[]> => p.call<IcePair[]>('icePairs')
 const tcpOf = async (p: Part): Promise<IcePair[]> =>
   (await pairsOf(p)).filter((x) => x.remoteProtocol === 'tcp')
 
-test('ICETCP-01 스위치가 꺼져 있으면 TCP 후보가 SDP 에 아예 없다', async ({ browser }) => {
+test('ICETCP-01 스위치가 꺼져 있으면 TCP 후보가 SDP 에 아예 없다', { annotation: { type: 'spec', description: 'C-cond-RULE-DOC-COND-INDEX-11' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const a = await S.open(ctx, { userId: S.user('U01') })
@@ -41,7 +41,7 @@ test('ICETCP-01 스위치가 꺼져 있으면 TCP 후보가 SDP 에 아예 없�
     `★상용 웹은 UDP 한 줄이 계약이다: ${JSON.stringify(lines)}`).toBe(true)
 })
 
-test('ICETCP-02 스위치를 켜면 서버 TCP 후보가 SDP 에 실린다', async ({ browser }) => {
+test('ICETCP-02 스위치를 켜면 서버 TCP 후보가 SDP 에 실린다', { annotation: { type: 'spec', description: 'C-cond-RULE-DOC-COND-INDEX-11' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const a = await S.open(ctx, { userId: S.user('U02'), iceTcp: true })
@@ -61,7 +61,7 @@ test('ICETCP-02 스위치를 켜면 서버 TCP 후보가 SDP 에 실린다', asy
  * 이것이 설계 `20260913e` 의 전제를 깬다. *"둘 다 열어두고 서버가 고른다"* 는
  * ★**브라우저에서 성립하지 않는다** — 서버가 판정해도 보낼 길이 없다.
  */
-test('ICETCP-03 ★UDP 가 함께 있으면 브라우저는 TCP 를 시도조차 않는다', async ({ browser }) => {
+test('ICETCP-03 ★UDP 가 함께 있으면 브라우저는 TCP 를 시도조차 않는다', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const a = await S.open(ctx, { userId: S.user('U03'), iceTcp: true })
@@ -85,7 +85,7 @@ test('ICETCP-03 ★UDP 가 함께 있으면 브라우저는 TCP 를 시도조차
  * ★**가르는 실험** — TCP 후보만 두면 붙는가. 붙으면 문제는 **능력이 아니라 경쟁**이다.
  * `dropUdpCandidate` 는 QA 전용 손잡이다(`build.ts __qaSetUdpCandidate`).
  */
-test('ICETCP-04 ★TCP 만 두면 브라우저가 붙고 미디어가 흐른다', async ({ browser }) => {
+test('ICETCP-04 ★TCP 만 두면 브라우저가 붙고 미디어가 흐른다', { annotation: { type: 'spec', description: 'C-cond-RULE-DOC-COND-INDEX-11' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const a = await S.open(ctx, { userId: S.user('U04'), iceTcp: true, dropUdpCandidate: true })

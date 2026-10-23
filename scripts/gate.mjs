@@ -26,6 +26,7 @@ const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx'
 let ok = true
 ok = step('typecheck', npx, ['tsc', '--noEmit', '-p', 'tsconfig.json']) && ok
 ok = step('arch', process.execPath, ['tools/arch_check.mjs']) && ok
+ok = step('3층 좌표', process.execPath, ['tools/qa_spec_check.mjs']) && ok
 ok = step('build', npx, ['tsc', '-p', 'tsconfig.build.json']) && ok
 ok = step('1층 단위', process.execPath, ['test/run.mjs']) && ok
 // ★3층 앞에 빌드를 강제한다 — SDK 를 고치고 빌드를 잊으면 옛 코드를 시험하고 초록을 받는다.

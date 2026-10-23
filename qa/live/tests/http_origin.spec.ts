@@ -9,7 +9,7 @@ const S = new Scope('http_origin')
 
 test.afterEach(async () => { await S.teardown() })
 
-test('HTTP-01 다른 origin 의 페이지가 SDK 로 방 목록을 읽는다', async ({ browser }) => {
+test('HTTP-01 다른 origin 의 페이지가 SDK 로 방 목록을 읽는다', { annotation: { type: 'spec', description: 'C-sym-R-TRN-CORS-SYMPTOMS-1' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const room = S.room('list')
   await ensureRoom(room)
@@ -22,7 +22,7 @@ test('HTTP-01 다른 origin 의 페이지가 SDK 로 방 목록을 읽는다', a
   expect(rooms.some((r) => r.roomId === room), '★막히면 fetch 가 던져 여기 오지도 못한다').toBe(true)
 })
 
-test('HTTP-02 미리보기는 방에 안 들어가고 본다', async ({ browser }) => {
+test('HTTP-02 미리보기는 방에 안 들어가고 본다', { annotation: { type: 'spec', description: 'SD-API-CLIENT-PREVIEW' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const room = S.room('peek')
   await ensureRoom(room)

@@ -13,7 +13,7 @@ test.afterEach(async () => { await S.teardown() })
  * `server_config.sfu_id`(프로세스 신원)는 다른 공간이라 문자열로 견줄 수 없다.
  * 포팅이 "같은 노드/다른 노드"라고 말한 것을 서버가 그대로 지키는지가 판정이다.
  */
-test('ENV-05 선언한 위상이 실제 배치와 같다 — 운에 기대지 않는다', async () => {
+test('ENV-05 선언한 위상이 실제 배치와 같다 — 운에 기대지 않는다', { annotation: { type: 'spec', description: 'none' } }, async () => {
   // ★★**위상을 안 선언하면 운이다**(가이드 §3-2). node 수가 바뀌는 순간 같은 이름이
   //   다른 곳으로 가고, ★**전제가 조용히 깨진 채 시험은 초록**이 된다.
   const ids = await sfuIds()
@@ -29,7 +29,7 @@ test('ENV-05 선언한 위상이 실제 배치와 같다 — 운에 기대지 �
   expect(placementOf(d1, ids), '다른 node 를 선언했으면 달라야 한다').not.toBe(placementOf(d2, ids))
 })
 
-test('ENV-01 배치 포팅이 서버 판정과 같다', async ({ browser }) => {
+test('ENV-01 배치 포팅이 서버 판정과 같다', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ids = await sfuIds()
   expect(ids.length, 'hub registry 를 못 읽으면 cross-sfu 시험이 거짓말을 한다').toBeGreaterThan(0)
   test.skip(ids.length < 2, '노드가 하나면 사상을 잴 변량이 없다')
@@ -63,13 +63,13 @@ test('ENV-01 배치 포팅이 서버 판정과 같다', async ({ browser }) => {
   }
 })
 
-test('ENV-02 이름은 식별 가능한 고정 이름이다', () => {
+test('ENV-02 이름은 식별 가능한 고정 이름이다', { annotation: { type: 'spec', description: 'none' } }, () => {
   expect(roomFor('conf_audio')).toBe('qa_conf_audio')
   expect(roomFor('x', 'a')).toBe('qa_x_a')
   expect(userFor('conf_audio', 'U01')).toBe('conf_audio_U01')
 })
 
-test('ENV-03 나가면 서버 명단에서 빠진다 — 정리 실패가 그 자리에서 드러난다', async ({ browser }) => {
+test('ENV-03 나가면 서버 명단에서 빠진다 — 정리 실패가 그 자리에서 드러난다', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const room = roomFor('env', 'cleanup')
   await ensureRoom(room)

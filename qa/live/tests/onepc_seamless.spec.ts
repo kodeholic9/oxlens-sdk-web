@@ -38,7 +38,7 @@ async function flowing(p: { call<T>(fn: string, ...a: unknown[]): Promise<T> }):
   return (await p.call<TrackStat[]>('trackStats')).find(peerAudio)!
 }
 
-test('ONEPC-01 보내기 증설 중에도 듣던 소리가 안 끊긴다', async ({ browser }) => {
+test('ONEPC-01 보내기 증설 중에도 듣던 소리가 안 끊긴다', { annotation: { type: 'spec', description: 'C-sym-RULE-LINK-SDP-1PC-1' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const a = await S.open(ctx, { userId: S.user('U01'), pcMode: '1pc' })
@@ -62,7 +62,7 @@ test('ONEPC-01 보내기 증설 중에도 듣던 소리가 안 끊긴다', async
   expect(after.id, '무관한 트랙의 신원이 바뀌면 배관이 새로 선 것이다').toBe(before.id)
 })
 
-test('ONEPC-02 받기 증설 중에도 듣던 소리가 안 끊긴다', async ({ browser }) => {
+test('ONEPC-02 받기 증설 중에도 듣던 소리가 안 끊긴다', { annotation: { type: 'spec', description: 'C-sym-RULE-LINK-SDP-1PC-1' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const [ROOM, ROOM2] = await pair('second')
   await ensureRoom(ROOM)
@@ -85,7 +85,7 @@ test('ONEPC-02 받기 증설 중에도 듣던 소리가 안 끊긴다', async ({
   expect(after.freezeCount ?? 0, '디코더가 얼어붙지 않는다').toBe(before.freezeCount ?? 0)
 })
 
-test('ONEPC-00 사건이 없으면 그냥 흐른다 — 기준선', async ({ browser }) => {
+test('ONEPC-00 사건이 없으면 그냥 흐른다 — 기준선', { annotation: { type: 'spec', description: 'C-sym-RULE-LINK-SDP-1PC-1' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM0 = S.room('base')
   await ensureRoom(ROOM0)
@@ -118,7 +118,7 @@ const grew = (a: TrackStat, b: TrackStat, k: keyof TrackStat): number =>
  * ★이 눈금이 살아 있다는 증거 — 발행자 장치를 죽이면 2초 창에서 은닉이 1,900ms 로 오른다
  * (`resync.spec.ts` 의 `killSource` 와 같은 손잡이). 평시 바닥은 0~6ms 다.
  */
-test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다', async ({ browser }) => {
+test('ONEPC-04 재협상 창에 들리는 끊김이 없다 — 폭으로 잰다', { annotation: { type: 'spec', description: 'C-sym-RULE-LINK-SDP-1PC-1 · C-cond-RULE-DOC-COND-INDEX-17' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const [ROOM4, ROOM4B] = await pair('width')
   await ensureRoom(ROOM4)

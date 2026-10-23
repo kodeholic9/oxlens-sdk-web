@@ -10,7 +10,7 @@ const ROOM = S.room()
 
 test.afterEach(async () => { await S.teardown() })
 
-test('CONF-AUDIO-01 상대 오디오가 실제로 흐른다', async ({ browser }) => {
+test('CONF-AUDIO-01 상대 오디오가 실제로 흐른다', { annotation: { type: 'spec', description: 'S-sym-IMPL-FWD-SOURCE-SWITCH-2' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const a = await S.open(ctx, { userId: S.user('U01') })
@@ -32,7 +32,7 @@ test('CONF-AUDIO-01 상대 오디오가 실제로 흐른다', async ({ browser }
   expect(flow!.bytes).toBeGreaterThan(0)
 })
 
-test('CONF-AUDIO-02 발행이 없으면 흐르지도 않는다', async ({ browser }) => {
+test('CONF-AUDIO-02 발행이 없으면 흐르지도 않는다', { annotation: { type: 'spec', description: '정:IMPL-SUB-PIPELINE' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM2 = S.room('silent')
   await ensureRoom(ROOM2)

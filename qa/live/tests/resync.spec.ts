@@ -10,7 +10,7 @@ test.afterEach(async () => { await S.teardown() })
 
 interface Ev { kind: string; detail: unknown }
 
-test('RESYNC-01 흐르고 있으면 알리지 않는다', async ({ browser }) => {
+test('RESYNC-01 흐르고 있으면 알리지 않는다', { annotation: { type: 'spec', description: '정:IMPL-ROOM-STALL' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM = S.room()
   await ensureRoom(ROOM)
@@ -29,7 +29,7 @@ test('RESYNC-01 흐르고 있으면 알리지 않는다', async ({ browser }) =>
   ).toBe(0)
 })
 
-test('RESYNC-02 흐름이 멎으면 서버가 알리고 SDK 가 다시 받는다', async ({ browser }) => {
+test('RESYNC-02 흐름이 멎으면 서버가 알리고 SDK 가 다시 받는다', { annotation: { type: 'spec', description: 'C-sym-R-ROOM-ROOM-EVENT-SYMPTOMS-2 · CP-OP-ROOM-EVENT' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM = S.room('stall')
   await ensureRoom(ROOM)

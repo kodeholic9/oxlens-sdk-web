@@ -16,7 +16,7 @@ async function videoOf(p: Participant): Promise<Stat | undefined> {
   return stats.find((s) => s.kind === 'video' && !s.id.startsWith('ptt-'))
 }
 
-test('CONF-VIDEO-01 상대 영상이 디코딩되어 픽셀이 된다', async ({ browser }) => {
+test('CONF-VIDEO-01 상대 영상이 디코딩되어 픽셀이 된다', { annotation: { type: 'spec', description: 'C-proc-PUB.C.STAGED.nego_ok' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const a = await S.open(ctx, { userId: S.user('U01') })

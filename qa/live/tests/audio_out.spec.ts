@@ -18,7 +18,7 @@ async function audioTracks(page: { call<T>(fn: string, ...a: unknown[]): Promise
 
 test.afterEach(async () => { await S.teardown() })
 
-test('AUDIO-OUT-01 수신 오디오는 SDK 가 낸다 — 앱이 붙이지 않아도 소리가 난다', async ({ browser }) => {
+test('AUDIO-OUT-01 수신 오디오는 SDK 가 낸다 — 앱이 붙이지 않아도 소리가 난다', { annotation: { type: 'spec', description: 'K-sym-IMPL-TRK-RECEIVE-2' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM = S.room()
   await ensureRoom(ROOM)
@@ -44,7 +44,7 @@ test('AUDIO-OUT-01 수신 오디오는 SDK 가 낸다 — 앱이 붙이지 않�
   expect(out.allowed, '막히지 않았으면 허용이다').toBe(true)
 })
 
-test('AUDIO-OUT-02 영상만 오는 방에는 오디오 요소를 만들지 않는다', async ({ browser }) => {
+test('AUDIO-OUT-02 영상만 오는 방에는 오디오 요소를 만들지 않는다', { annotation: { type: 'spec', description: 'SDK:IMPL-TRK-RECEIVE' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM = S.room('videoonly')
   await ensureRoom(ROOM)
@@ -64,7 +64,7 @@ test('AUDIO-OUT-02 영상만 오는 방에는 오디오 요소를 만들지 않�
   expect(out.count, '★영상에 오디오 요소를 만들면 그것이 곧 유령이다').toBe(await audioTracks(listener))
 })
 
-test('AUDIO-OUT-03 방 볼륨·뮤트가 재생에 실제로 걸린다', async ({ browser }) => {
+test('AUDIO-OUT-03 방 볼륨·뮤트가 재생에 실제로 걸린다', { annotation: { type: 'spec', description: 'SDK:IMPL-TRK-RECEIVE' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM = S.room('mix')
   await ensureRoom(ROOM)
@@ -91,7 +91,7 @@ test('AUDIO-OUT-03 방 볼륨·뮤트가 재생에 실제로 걸린다', async (
   ).toBe(true)
 })
 
-test('AUDIO-OUT-04 트랙이 사라지면 요소도 놓는다', async ({ browser }) => {
+test('AUDIO-OUT-04 트랙이 사라지면 요소도 놓는다', { annotation: { type: 'spec', description: 'SDK:IMPL-TRK-RECEIVE' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM = S.room('drop')
   await ensureRoom(ROOM)

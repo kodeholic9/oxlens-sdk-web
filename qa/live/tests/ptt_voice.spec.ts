@@ -16,7 +16,7 @@ const slot = (t: TrackStat): boolean => t.id.startsWith('ptt-')
 const speakerSeen = (p: Participant): Promise<string | null> =>
   p.call<{ detail: { userId: string | null } }[]>('events', 'speaker').then((e) => e.at(-1)?.detail.userId ?? null)
 
-test('PTT-01 허가 동안만 슬롯이 흐른다', async ({ browser }) => {
+test('PTT-01 허가 동안만 슬롯이 흐른다', { annotation: { type: 'spec', description: 'S-sym-RULE-FWD-STEPS-1' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const speaker = await S.open(ctx, { userId: S.user('U01') })
@@ -44,7 +44,7 @@ test('PTT-01 허가 동안만 슬롯이 흐른다', async ({ browser }) => {
     .toBe(0)
 })
 
-test('PTT-02 청취자가 화자를 안다 — DC 축', async ({ browser }) => {
+test('PTT-02 청취자가 화자를 안다 — DC 축', { annotation: { type: 'spec', description: 'CP-MSG-FLOOR-TAKEN' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM2 = S.room('notice')
   await ensureRoom(ROOM2)
@@ -65,7 +65,7 @@ test('PTT-02 청취자가 화자를 안다 — DC 축', async ({ browser }) => {
   await expect.poll(() => speakerSeen(listener)).toBe(null)
 })
 
-test('PTT-03 무전 슬롯은 방으로 온다 — user_id 가 없다', async ({ browser }) => {
+test('PTT-03 무전 슬롯은 방으로 온다 — user_id 가 없다', { annotation: { type: 'spec', description: 'C-cond-RULE-DOC-COND-INDEX-21' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const ROOM3 = S.room('slot')
   await ensureRoom(ROOM3)

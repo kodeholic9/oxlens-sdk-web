@@ -21,7 +21,7 @@ interface Probe { refused: boolean; message: string; mids: string[] }
 
 test.afterEach(async () => { await S.teardown() })
 
-test('ONEPC-03 받기 오디오가 둘이어도 demuxer 결속이 성하다', async ({ browser }) => {
+test('ONEPC-03 받기 오디오가 둘이어도 demuxer 결속이 성하다', { annotation: { type: 'spec', description: 'C-cond-RULE-DOC-COND-INDEX-13' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   await ensureRoom(ROOM)
   const a = await S.open(ctx, { userId: S.user('EA'), pcMode: '1pc' })
