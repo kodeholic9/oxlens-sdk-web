@@ -2,7 +2,8 @@
 // 3층 시험 환경 규약 — 식별 가능한 고정 이름을 쓴다.
 // 랜덤은 충돌은 막지만 오염을 숨긴다. 고정이면 방 목록만 봐도 정리 실패가 그 자리에서 드러난다.
 
-export const HUB = process.env.OXE2E_HUB ?? '127.0.0.1:19745'
+// 기본 = 개발 형상 entry node 의 hub(oxlens-sfu dev/gen_nodes.py HUB_BASE)
+export const HUB = process.env.OXE2E_HUB ?? '127.0.0.1:1974'
 /** 클라 접속점 — 연:RULE-TRN-BASE-GIVEN `{base}`. */
 export const BASE = `http://${HUB}/media`
 /**

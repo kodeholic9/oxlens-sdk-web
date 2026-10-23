@@ -59,7 +59,7 @@ if (live) await keepLiveRecord(ok)
 process.exit(ok ? 0 : 1)
 
 async function keepLiveRecord(passed) {
-  const hub = process.env.OXE2E_HUB ?? '127.0.0.1:19745'
+  const hub = process.env.OXE2E_HUB ?? '127.0.0.1:1974'
   let server = null
   try {
     const res = await fetch(`http://${hub}/healthz/ready`)
