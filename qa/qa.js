@@ -42,7 +42,7 @@ function note(kind, detail) {
 // 시험에서는 하니스(node)가 그 자리를 맡아 토큰을 넣어 준다.
 
 const qa = {
-  async connect({ base, token, pcMode, iceTcp, dropUdpCandidate }) {
+  async connect({ base, token, pcMode, iceTcp, dropUdpCandidate, publishDefaults, adaptiveStream }) {
     // ★QA 전용 실험 손잡이 — 브라우저가 ICE-TCP 를 할 수 있는지 가른다.
     qaUdp(!dropUdpCandidate)
     qaTcp(Boolean(iceTcp))
@@ -50,7 +50,7 @@ const qa = {
     state.token = token
     // 연:RULE-LINK-SDP-1PC-MODE — `pc_mode` 는 붙기 전에 정해진다. 시험이 모드를 지정하는 자리가 여기다.
     // ★`iceTcp` 는 QA 스위치(__qaSetTcpCandidate) — 서버가 알린 tcp_port 를 후보로 낼지.
-    const client = createClient({ base, token, ...(pcMode ? { pcMode } : {}) })
+    const client = createClient({ base, token, ...(pcMode ? { pcMode } : {}), ...(publishDefaults ? { publishDefaults } : {}), ...(adaptiveStream === false ? { adaptiveStream: false } : {}) })
     state.client = client
     client.on('track', (room, t) => {
       state.tracks.set(t.id, { track: t, roomId: room.id })
@@ -99,9 +99,36 @@ const qa = {
     return { id: t.trackId, state: t.state, duplex: t.duplex, server: t.server }
   },
 
-  async enableCamera() {
-    const t = await state.client.media.enableCamera()
-    return { id: t.trackId, state: t.state, server: t.server }
+  async enableCamera(opts) {
+    const t = await state.client.media.enableCamera(opts ?? {})
+    return { id: t.trackId, state: t.state, server: t.server, simulcast: t.simulcast }
+  },
+
+  /** 받는 트랙의 층 고르기(연:SUB.op.SUBSCRIBE_LAYER — `spatial` 0 이 최저). */
+  async setLayer(trackId, v) { await state.tracks.get(trackId).track.setLayer(v) },
+
+  /**
+   * ★발행자 층별 송신 통계 — `outbound-rtp` 한 줄이 인코딩(rid) 하나다(W3C webrtc-stats `RTCOutboundRtpStreamStats`).
+   * `keyFramesEncoded` 가 「그 층이 키프레임을 몇 번 냈나」이고 `pliCount` 가 「그 층으로 PLI 를 몇 번 받았나」다.
+   */
+  async encodings() {
+    const out = []
+    for (const t of state.client.media.tracks) {
+      if (t.kind !== 'video') continue
+      const rows = [...(await t.getStats()).values()]
+      const fmtp = new Map(rows.filter((r) => r.type === 'codec').map((r) => [r.id, r.sdpFmtpLine ?? '']))
+      for (const row of rows) {
+        if (row.type !== 'outbound-rtp') continue
+        out.push({
+          fmtp: fmtp.get(row.codecId) ?? null,
+          id: t.trackId, rid: row.rid ?? null, ssrc: row.ssrc,
+          framesEncoded: row.framesEncoded ?? null, keyFramesEncoded: row.keyFramesEncoded ?? null,
+          pliCount: row.pliCount ?? null, nackCount: row.nackCount ?? null, frameWidth: row.frameWidth ?? null,
+          active: row.active ?? null, limit: row.qualityLimitationReason ?? null, bytesSent: row.bytesSent ?? null,
+        })
+      }
+    }
+    return out
   },
 
   async enableScreen() {
@@ -248,6 +275,7 @@ const qa = {
         requestsSent: row.requestsSent ?? 0,
         responsesReceived: row.responsesReceived ?? 0,
         bytesSent: row.bytesSent ?? 0,
+        availableOutgoingBitrate: row.availableOutgoingBitrate ?? null,
         localProtocol: local?.protocol ?? null,
         localType: local?.candidateType ?? null,
         remoteProtocol: remote?.protocol ?? null,
@@ -289,6 +317,10 @@ const qa = {
       let removed = null
       let samplesReceived = null
       let freezeMs = null
+      let keyFramesDecoded = null
+      let pliCount = null
+      let nackCount = null
+      let frameWidth = null
       for (const row of (await track.getStats()).values()) {
         if (row.type !== 'inbound-rtp') continue
         packets = row.packetsReceived ?? null
@@ -302,13 +334,17 @@ const qa = {
         removed = row.removedSamplesForAcceleration ?? null
         samplesReceived = row.totalSamplesReceived ?? null
         freezeMs = row.totalFreezesDuration ?? null
+        keyFramesDecoded = row.keyFramesDecoded ?? null
+        pliCount = row.pliCount ?? null
+        nackCount = row.nackCount ?? null
+        frameWidth = row.frameWidth ?? null
       }
       out.push({
         id, roomId, kind: track.kind, active: track.active,
         muted: track.mediaStreamTrack.muted,
         readyState: track.mediaStreamTrack.readyState,
         packets, bytes, framesDecoded, freezeCount, pauseCount,
-        concealed, silentConcealed, inserted, removed, samplesReceived, freezeMs,
+        concealed, silentConcealed, inserted, removed, samplesReceived, freezeMs, keyFramesDecoded, pliCount, nackCount, frameWidth,
         ...(el ? { videoWidth: el.videoWidth, videoHeight: el.videoHeight, currentTime: el.currentTime } : {}),
       })
     }

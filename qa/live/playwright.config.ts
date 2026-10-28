@@ -30,11 +30,13 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${PORT}` },
   // ★갈래B 는 정규 게이트와 섞지 않는다 — "의도된 빨강" 과 "회귀 빨강" 이 같은 색이 된다.
   projects: [
-    { name: 'chromium', testIgnore: /fault\//, use: { browserName: 'chromium', launchOptions: { args: CHROMIUM_MEDIA } } },
+    { name: 'chromium', testIgnore: /fault\/|probe\//, use: { browserName: 'chromium', launchOptions: { args: CHROMIUM_MEDIA } } },
     { name: 'chromium-fault', testMatch: /fault\//, use: { browserName: 'chromium', launchOptions: { args: CHROMIUM_MEDIA } } },
     // ★능력표(SDK:RULE-PLAT-PC-MODE) 실측용. 정규 게이트에 섞지 않는다 — 표가 채워지기 전이라
     //   빨강이 "회귀" 가 아니라 "그 브라우저에서 아직 안 선다" 를 뜻한다.
-    { name: 'firefox-probe', testIgnore: /fault\//, use: { browserName: 'firefox', launchOptions: { firefoxUserPrefs: FIREFOX_MEDIA } } },
+    { name: 'firefox-probe', testIgnore: /fault\/|probe\//, use: { browserName: 'firefox', launchOptions: { firefoxUserPrefs: FIREFOX_MEDIA } } },
+    // ★실측(probe/) — 브라우저 엔진의 동작을 잰다(판정이 아니라 수치 · 정규 게이트 밖 · 202610/20261028c R2).
+    { name: 'chromium-probe', testMatch: /probe\//, use: { browserName: 'chromium', launchOptions: { args: CHROMIUM_MEDIA } } },
   ],
   webServer: {
     command: `npx --yes http-server ../.. -p ${PORT} -c-1 --silent`,
