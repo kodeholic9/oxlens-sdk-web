@@ -7,7 +7,8 @@ import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'qa', 'live', 'tests')
-const ITEM = /^(none|[CSKPOH]-(proc|timer|code|close|op|cond|sym|state|api|accept|key|sdk|ux|path|rule)-[A-Za-z0-9_.-]+|(CP|SV|SD|PL|OP|HK)-[A-Z][A-Z0-9-]+|(연|정|SDK|정책):[A-Za-z*][A-Za-z0-9_.*-]*)$/
+//   ★단위 ID 뒤에 그 시험이 본 술어 번호(①…⑩)를 붙인다 — 시험 항목서 규율 7(결재 20261031 · `CP-CODE-ROOM-FULL①`).
+const ITEM = /^(none|([CSKPOH]-(proc|timer|code|close|op|cond|sym|state|api|accept|key|sdk|ux|path|rule)-[A-Za-z0-9_.-]+|(CP|SV|SD|PL|OP|HK)-[A-Z][A-Z0-9-]+)[①②③④⑤⑥⑦⑧⑨⑩]*|(연|정|SDK|정책):[A-Za-z*][A-Za-z0-9_.*-]*)$/
 const bad = []
 let n = 0
 /** 하위 폴더까지(갈래B `tests/fault/` 를 빠뜨렸던 것 · 20261023) */

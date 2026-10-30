@@ -9,7 +9,7 @@ const S = new Scope('http_origin')
 
 test.afterEach(async () => { await S.teardown() })
 
-test('HTTP-01 다른 origin 의 페이지가 SDK 로 방 목록을 읽는다', { annotation: { type: 'spec', description: 'C-sym-R-TRN-CORS-SYMPTOMS-1' } }, async ({ browser }) => {
+test('HTTP-01 다른 origin 의 페이지가 SDK 로 방 목록을 읽는다', { annotation: { type: 'spec', description: 'C-sym-R-TRN-CORS-SYMPTOMS-1①' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
   const room = S.room('list')
   await ensureRoom(room)
