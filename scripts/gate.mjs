@@ -42,7 +42,12 @@ if (!live) {
   skip('3층 정규', '--live 를 안 줬다')
   skip('3층 갈래B', '--live 를 안 줬다')
 } else if (!existsSync(join(liveDir, 'package.json'))) skip('3층 라이브', 'qa/live 가 아직 없다')
-else {
+else if (!(await serverIsHead())) {
+  // ★떠 있는 hub 가 서버 저장소 HEAD 의 빌드가 아니면 3층을 돌리지 않는다 — 옛 hub 에 붙어 받은 초록은 지금 코드의 초록이 아니다(20261101 실측 · 202611/20261101c).
+  ok = false
+  skip('3층 정규', '서버 신원이 HEAD 와 다르다')
+  skip('3층 갈래B', '서버 신원이 HEAD 와 다르다')
+} else {
   mkdirSync(runDir, { recursive: true })
   const pw = (project) => ['playwright', 'test', `--project=${project}`, '--reporter=list,json']
   ok = step('3층 정규', npx, pw('chromium'), liveDir, { PLAYWRIGHT_JSON_OUTPUT_NAME: join(runDir, 'report-chromium.json') }) && ok
@@ -58,19 +63,41 @@ console.log(rows.some((r) => r.mark === 'SKIP') ? '\n  ★SKIP 은 통과가 아
 if (live) await keepLiveRecord(ok)
 process.exit(ok ? 0 : 1)
 
-async function keepLiveRecord(passed) {
+/** 떠 있는 hub 의 빌드 신원(`/healthz/ready` 의 `build` — `{SHA 12}{-dirty}.{초}[+라벨]`). 안 떠 있으면 null. */
+async function serverBuild() {
   const hub = process.env.OXE2E_HUB ?? '127.0.0.1:1974'
-  let server = null
   try {
     const res = await fetch(`http://${hub}/healthz/ready`)
-    server = (await res.json()).build ?? null
+    return (await res.json()).build ?? null
   } catch {
-    server = null
+    return null
   }
+}
+
+/**
+ * 3층 앞 확인 — 떠 있는 hub 의 빌드 SHA 12 자리 = 서버 저장소(`OXE2E_SERVER_REPO` · 기본 `../oxlens-sfu`) HEAD.
+ * dirty 는 막지 않는다(커밋 전 작업 트리의 게이트가 정상 경로다) — 기록에 그대로 남는다. 2층 하네스 `server.ensure()` 가 서버를 갈아 띄우는 것과 같은 자리.
+ */
+async function serverIsHead() {
+  const t = Date.now()
+  const repo = process.env.OXE2E_SERVER_REPO ?? resolve(root, '..', 'oxlens-sfu')
+  const build = await serverBuild()
+  const head = spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: repo, encoding: 'utf8' }).stdout?.trim() ?? ''
+  const sha = (build ?? '').split('.')[0].replace(/-dirty$/, '')
+  const same = Boolean(build) && head !== '' && sha === head
+  rows.push({ name: '서버 신원', mark: same ? 'PASS' : 'FAIL', note: `${Date.now() - t}ms · hub ${build ?? '응답 없음'} · HEAD ${head || '모름'}` })
+  if (!same) console.log(`  ✗ 서버 신원 — 떠 있는 hub 는 ${build ?? '없다'} · 서버 저장소 HEAD 는 ${head || '모름'}(${repo}). 2층 하네스로 서버를 다시 띄운 뒤 돌린다.`)
+  return same
+}
+
+async function keepLiveRecord(passed) {
+  const hub = process.env.OXE2E_HUB ?? '127.0.0.1:1974'
+  const server = await serverBuild()
   const sha = spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim()
   const dirty = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' }).stdout.trim() !== ''
   const rec = { at: new Date().toISOString(), run: `live-${stamp}`, passed, sdk_sha: sha, sdk_dirty: dirty, server_build: server, hub, rows }
   const body = JSON.stringify(rec, null, 1) + '\n'
+  mkdirSync(runDir, { recursive: true })
   writeFileSync(join(runDir, 'record.json'), body, { flag: 'wx' })
   writeFileSync(join(root, '.archive', 'gate-live', 'latest.json'), body)
   rotateLive(join(root, '.archive', 'gate-live'), `live-${stamp}`)
