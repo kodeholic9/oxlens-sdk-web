@@ -103,3 +103,25 @@ test('연:FLR.C.any.pub_away — 발행 방을 떠나도 그 방 화자 표시�
   assert.deepEqual(r.speakers, ['u2'])
   r.room.floor.dispose()
 })
+
+test('연:DEV-FLR-SEQ-DISPLAY — 처음 든 클라는 본 번호가 없다: 감김 반을 넘긴 방(40000)의 첫 알림도 새것이다', () => {
+  const r = rig()
+  r.rx(taken('u2', 40000))
+  r.rx(idle(40003))
+  assert.deepEqual(r.speakers, ['u2', null])
+  r.rx(taken('u3', 40001))
+  assert.deepEqual(r.speakers, ['u2', null], '첫 알림 뒤로는 번호를 견준다')
+  r.room.floor.dispose()
+})
+
+test('연:FLR.C.any.down · 연:DEV-FLR-DOWN-FRESH — 재구축은 앱에 화자 없음을 알리고 본 번호를 비운다(새 서버 번호가 작아도 · 커도 새것)', () => {
+  for (const next of [3, 50000]) {
+    const r = rig()
+    r.rx(taken('u2', 20000))
+    r.room.floor.down()
+    assert.deepEqual(r.speakers, ['u2', null], '재구축 앞의 화자가 앱에 남지 않는다')
+    r.rx(taken('u3', next))
+    assert.deepEqual(r.speakers, ['u2', null, 'u3'], `재구축 뒤 첫 알림(${next})은 새것이다`)
+    r.room.floor.dispose()
+  }
+})

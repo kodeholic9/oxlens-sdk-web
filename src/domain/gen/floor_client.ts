@@ -1,11 +1,11 @@
 // ★생성 파일 — gen/floor_client.mts 가 원천(context/spec/protocol · areas/flr/behavior/client.ts)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 512dd0ff7ddd7797 · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
+// IR sha256 b11163b6a16586a2 · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
 // 집행은 부르는 쪽 몫이다 — out(DC 로 보낼 것) · ack(ACK 으로 답할 것) · fx(마이크 · 화면 · 앱 알림) · start(다시 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
 export type CState = 'NOPERM' | 'PREQ' | 'PERM' | 'PREL' | 'QUEUED'
 export type CSub = 'WAIT' | 'QUERY' | 'GRANTED'
-export type Fx = 'mic.close' | 'mic.open' | 'media.render' | 'app.floor_unreliable' | 'app.floor_reliable' | 'app.speaker' | 'app.speaker_none' | 'app.granted' | 'app.denied' | 'app.queued' | 'app.revoked' | 'app.granted_queued' | 'app.request_timeout' | 'app.queue_timeout' | 'app.grant_expired'
+export type Fx = 'mic.close' | 'mic.open' | 'media.render' | 'app.speaker_none' | 'app.floor_unreliable' | 'app.floor_reliable' | 'app.speaker' | 'app.granted' | 'app.denied' | 'app.queued' | 'app.revoked' | 'app.granted_queued' | 'app.request_timeout' | 'app.queue_timeout' | 'app.grant_expired'
 export type TimerName = 'T101' | 'T100' | 'T104' | 'T132'
 
 /** 클라 상태 — 원천 Cl(areas/flr/model/state.ts) */
@@ -36,10 +36,10 @@ export interface Cl {
   readonly left: boolean
   /** 화자 표시 — 화면에 보이는 화자(내가 말하는 중이면 없음) */
   readonly shown: string | null
-  /** 화자 표시에 마지막으로 쓴 TAKEN · IDLE 의 일련번호(DEV-FLR-SEQ-DISPLAY) */
+  /** 화자 표시에 마지막으로 쓴 TAKEN · IDLE 의 일련번호(DEV-FLR-SEQ-DISPLAY) — 번호 범위 밖 SeqWrap 은 아직 본 번호가 없다는 뜻(어느 번호든 새것) */
   readonly seen: number
 }
-export const initial = (): Cl => ({ cs: 'NOPERM', sub: 'WAIT', want: false, c101: 0, c100: 0, c104: 0, presses: 0, prio: 0, grant: 0, isPub: false, hasHalf: false, left: false, shown: null, seen: 0 })
+export const initial = (): Cl => ({ cs: 'NOPERM', sub: 'WAIT', want: false, c101: 0, c100: 0, c104: 0, presses: 0, prio: 0, grant: 0, isPub: false, hasHalf: false, left: false, shown: null, seen: SEQ_WRAP })
 
 /** 서버 → 클라 메시지(wire 이름 · 방 칸은 입구가 거른다 · ack = 머리의 A 비트 — 서야 ACK 으로 답한다) */
 export type Rx =
@@ -66,7 +66,7 @@ export const SEQ_WRAP = 65536
 
 const cap = (n: keyof typeof COUNTS): number => COUNTS[n]
 /** 일련번호 a 가 b 보다 새것인가(감김 고려 — 원문 8.2.3.10 · DEV-FLR-SEQ-DISPLAY) */
-export const newer = (a: number, b: number): boolean => a !== b && ((a - b + SEQ_WRAP) % SEQ_WRAP) < SEQ_WRAP / 2
+export const newer = (a: number, b: number): boolean => b === SEQ_WRAP || (a !== b && ((a - b + SEQ_WRAP) % SEQ_WRAP) < SEQ_WRAP / 2)
 const done = (prev: Cl, s: Cl, label: string, out: Tx[], ack: Ack[], fx: Fx[], start: TimerName[]): Step => {
   for (const t of armed(s)) if (!armed(prev).includes(t) && !start.includes(t)) start.push(t)
   return { s, label, out, ack, fx, start }
@@ -166,7 +166,7 @@ export function join(s: Cl): Step {
 
 /** 재구축으로 그 방 발언권을 내린다(세션 전체 · 그 서버) */
 export function down(s: Cl): Step {
-  return done(s, { ...s, cs: 'NOPERM', want: false, isPub: false, hasHalf: false, shown: null, seen: 0 }, 'FLR.C.any.down', [], [], ['mic.close'], [])
+  return done(s, { ...s, cs: 'NOPERM', want: false, isPub: false, hasHalf: false, shown: null, seen: SEQ_WRAP }, 'FLR.C.any.down', [], [], ['app.speaker_none', 'mic.close'], [])
 }
 
 /** DC 만 끊김 */
