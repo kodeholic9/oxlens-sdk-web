@@ -203,6 +203,7 @@ export class FloorCore {
   pubSelect(): void { this.flrStep('pubSelect', FLR.pubSelect(this.st), 'aff') }
   pubAway(): void { this.endIfHolding('moved'); this.flrStep('pubAway', FLR.pubAway(this.st), 'aff') }
   leave(): void { this.endIfHolding('left'); this.flrStep('leave', FLR.leave(this.st), 'room') }
+  join(): void { this.flrStep('join', FLR.join(this.st), 'room') }
   down(): void { this.endIfHolding('rebuilt'); this.flrStep('down', FLR.down(this.st), 'rebuild') }
   dcDown(): void { this.flrStep('dcDown', FLR.dcDown(this.st), 'link') }
   dcUp(): void { this.flrStep('dcUp', FLR.dcUp(this.st), 'link') }

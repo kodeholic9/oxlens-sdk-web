@@ -323,17 +323,25 @@ export class LinkCore {
     }
   }
 
-  /** WS 점검 — 같은 치료를 다시 할 때의 간격은 사다리 칸값(정책:sdk.iceRestartBackoffMs) · 끝 칸 되풀이 · 상한 없음 */
+  /** WS 점검 — 같은 치료를 다시 할 때의 간격은 사다리 칸값(정책:sdk.iceRestartBackoffMs) · 끝 칸 되풀이 · 상한 없음.
+   *  간격 뒤 보내는 순간에 세션이 ACTIVE 인지 다시 본다 — 아니면 보내지 않고 세션 층 복구 뒤로 미룬다(연:RULE-SES-BIND-PROC · 연:RULE-TRN-FLOW-CONTROL) */
   private wsCheck(): void {
     if (this.closedForApp) return
     if (this.core.ses.cs !== 'ACTIVE') { this.pendingCheck = true; return }
     const ladder = this.core.cfg.iceRestartBackoffMs
+    const before = { attempt: this.attempt, rung: this.rung, unstood: this.unstood, blocked: this.blocked }
     const wait = this.attempt === 0 ? 0 : ladder[Math.min(this.rung, ladder.length - 1)] ?? 7000
     this.attempt++
     if (this.attempt > 1) this.rung = Math.min(this.rung + 1, ladder.length - 1)
     if (!this.st.everUp) { this.unstood++; if (this.unstood >= this.core.cfg.unreachableAfter) this.blocked = true }
     setTimeout(() => {
-      if (this.st.ls !== 'CHECK') return
+      if (this.st.ls !== 'CHECK' || this.closedForApp) return
+      if (this.core.ses.cs !== 'ACTIVE') {
+        // 보내지 않은 점검은 치료로 세지 않는다 — 세션이 돌아오면 같은 칸에서 다시 건다
+        this.attempt = before.attempt; this.rung = before.rung; this.unstood = before.unstood; this.blocked = before.blocked
+        this.pendingCheck = true
+        return
+      }
       void this.core.sig.probe(this.core.cfg.wsProbeTimeoutMs).then((alive) => {
         if (this.st.ls !== 'CHECK') return
         if (alive) this.step('hbRes', LINK.hbRes(this.st, {}), 'HEARTBEAT')

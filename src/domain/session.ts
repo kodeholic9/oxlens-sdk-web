@@ -377,7 +377,7 @@ export class Core {
   private resumeReply(r: Reply): void {
     this.resumeBody = r.ok ? (r.body as ResumeRes) : null
     const dead = [...this.links.values()].some((l) => !l.st.assoc || l.st.ice !== 'OK')
-    this.sesStep('resumeRes', SES.resumeRes(this.ses, { part: r.ok ? 'res' : 'fail' }, dead), r.ok ? 'RESUME.res' : 'RESUME.2008')
+    this.sesStep('resumeRes', SES.resumeRes(this.ses, { part: r.ok ? 'res' : 'fail' }, dead), r.ok ? 'RESUME.res' : `RESUME.${fromFailure(r.body).code}`)
     this.resumeBody = null
   }
 

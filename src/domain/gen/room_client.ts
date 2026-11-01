@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/room/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 67967e270560c2c4 · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 4d2ab4708709bd3d · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -8,7 +8,7 @@ export type PcMode = '1pc' | '2pc'
 export type Part = 'req' | 'res' | 'fail' | 'body'
 export type RoomEv = 'affiliation' | 'sync_required'
 export type Fx = 'app.bug' | 'app.join_failed' | 'app.joined' | 'app.left' | 'app.members' | 'app.room_gone' | 'http.abandon' | 'ws.abandon'
-export type SeamFx = 'aff.implicit' | 'aff.join_failed' | 'aff.leave' | 'floor.leave' | 'link.epoch_changed' | 'link.room_left' | 'link.table' | 'pub.room_gone' | 'ready.tracks' | 'room.sub_rooms' | 'sdp.rebuild' | 'store.drop' | 'sub.drop' | 'trk.snapshot'
+export type SeamFx = 'aff.implicit' | 'aff.join_failed' | 'aff.leave' | 'floor.join' | 'floor.leave' | 'link.epoch_changed' | 'link.room_left' | 'link.table' | 'pub.room_gone' | 'ready.tracks' | 'room.sub_rooms' | 'sdp.rebuild' | 'store.drop' | 'sub.drop' | 'trk.snapshot'
 export type TimerName = never
 
 /** 클라 상태 — 원천 ROOM K */
@@ -49,6 +49,7 @@ export const SEAMS = {
   'aff.implicit': { to: 'AFF', react: ['CImplicit'] },
   'aff.join_failed': { to: 'AFF', react: ['CJoinFailed'] },
   'aff.leave': { to: 'AFF', react: ['CLeft'] },
+  'floor.join': { to: 'FLR', react: ['CJoin'] },
   'floor.leave': { to: 'FLR', react: ['CLeave'] },
   'link.epoch_changed': { to: 'LINK', react: ['CEpochChanged'] },
   'link.room_left': { to: 'LINK', react: ['CRoomLeft'] },
@@ -108,7 +109,7 @@ export function joinRes(s: St, m: { readonly code: number; readonly part: Part; 
     return done(s, { ...s, rs: 'LEAVING' }, 'ROOM.C.JOINING.join_pc_mismatch', [{ ws: 'ROOM_LEAVE', part: 'req' }], ['app.join_failed'], [{ fx: 'aff.leave', to: 'AFF', at: 'self' }], [])
   }
   if (m.part === 'res') {
-    return done(s, { ...s, rs: 'JOINED', cseq: m.version.seq, cepoch: m.version.epoch, sfu: m.server_config.sfu_id }, 'ROOM.C.JOINING.join_ok', [], ['app.joined'], [{ fx: 'trk.snapshot', to: 'TRK', at: 'self' }, { fx: 'link.table', to: 'LINK', at: 'sameServer' }, { fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'ready.tracks', to: 'SUB', at: 'self' }, { fx: 'room.sub_rooms', to: 'ROOM', at: 'sameServer' }, { fx: 'aff.implicit', to: 'AFF', at: 'self' }], [])
+    return done(s, { ...s, rs: 'JOINED', cseq: m.version.seq, cepoch: m.version.epoch, sfu: m.server_config.sfu_id }, 'ROOM.C.JOINING.join_ok', [], ['app.joined'], [{ fx: 'trk.snapshot', to: 'TRK', at: 'self' }, { fx: 'link.table', to: 'LINK', at: 'sameServer' }, { fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'ready.tracks', to: 'SUB', at: 'self' }, { fx: 'room.sub_rooms', to: 'ROOM', at: 'sameServer' }, { fx: 'aff.implicit', to: 'AFF', at: 'self' }, { fx: 'floor.join', to: 'FLR', at: 'self' }], [])
   }
   if (m.code === 4009) {
     return done(s, { ...s, retry: true }, 'ROOM.C.JOINING.join_4009', [], [], [], [])

@@ -516,7 +516,7 @@ export type RoomEventBody =
 
 /** SES.op.BIND.req — 0x0101 접속한다 */
 export interface BindReq {
-  readonly token: string
+  readonly token?: string
   readonly session_id?: string
   readonly client_ver?: number
   readonly pc_mode?: "1pc" | "2pc"

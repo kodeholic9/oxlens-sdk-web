@@ -97,3 +97,37 @@ test('연:RULE-LINK-SDP-1PC 통합 offer — 발행 절 · 구독 절 · 데이�
   assert.ok(got.includes('a=recvonly') && got.includes('a=sendonly'))
   assert.ok(got.every((l) => !l.startsWith('a=ice-ufrag:subUf1')), '1pc 는 subscribe 자격을 쓰지 않는다')
 })
+
+/** 연:EX-LINK-SDP-PUB-ANSWER 의 offer 에서 video 만 시뮬캐스트 발행(l · h)으로 — 한 축만 바꾼다 */
+function simulcastOffer(dropVideoFmtp = false): string {
+  const out: string[] = []
+  let video = false
+  for (const l of PUB_OFFER.split('\r\n').filter((x) => x)) {
+    if (l.startsWith('m=')) video = l.startsWith('m=video')
+    if (video && dropVideoFmtp && l.startsWith('a=fmtp:102 ')) continue
+    if (video && l === 'a=inactive') { out.push('a=sendonly', 'a=rid:l send', 'a=rid:h send', 'a=simulcast:send l;h'); continue }
+    out.push(l)
+  }
+  return out.join('\r\n') + '\r\n'
+}
+
+const videoOf = (sdp: string): string[] => {
+  const all = lines(sdp)
+  const at = all.findIndex((l) => l.startsWith('m=video'))
+  const end = all.findIndex((l, i) => i > at && l.startsWith('m='))
+  return all.slice(at, end)
+}
+
+test('연:RULE-LINK-SDP-PUB-MLINE 예외 둘 — 시뮬캐스트 video answer 의 코덱 fmtp 에 x-google-per-layer-pli=1 · RTX 줄은 그대로(대장 C-110)', () => {
+  const v = videoOf(Sdp.answer(pub, Sdp.parse(simulcastOffer()), () => ROOM_OPUS_FMTP))
+  assert.ok(v.includes('a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f;x-google-per-layer-pli=1'), v.join('\n'))
+  assert.ok(v.includes('a=fmtp:103 apt=102'))
+  assert.ok(v.includes('a=simulcast:recv l;h'))
+  assert.equal(v.filter((l) => l.includes('x-google-per-layer-pli')).length, 1)
+})
+
+test('연:RULE-LINK-SDP-PUB-MLINE 예외 둘 — 코덱 fmtp 줄이 없으면 그것만으로 만든다 · 시뮬캐스트가 아니면 넣지 않는다', () => {
+  const v = videoOf(Sdp.answer(pub, Sdp.parse(simulcastOffer(true)), () => ROOM_OPUS_FMTP))
+  assert.ok(v.includes('a=fmtp:102 x-google-per-layer-pli=1'), v.join('\n'))
+  assert.ok(!Sdp.answer(pub, Sdp.parse(PUB_OFFER), () => ROOM_OPUS_FMTP).includes('x-google-per-layer-pli'))
+})

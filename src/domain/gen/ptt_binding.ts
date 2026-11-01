@@ -20,6 +20,7 @@ export const ENTRY = {
   pubSelect: F.pubSelect,
   pubAway: F.pubAway,
   leave: F.leave,
+  join: F.join,
   down: F.down,
   dcDown: F.dcDown,
   dcUp: F.dcUp,
@@ -29,7 +30,7 @@ export const ENTRY = {
 
 /** 위 코드가 내놓는 입구 전부(Step 을 돌려주는 함수) — 입구 표가 하나라도 빠지거나 남으면 여기서 깨진다 · false = 넣지 않는다(판정표에 사유) */
 type EntryName = { [K in keyof typeof F]: (typeof F)[K] extends (s: F.Cl, ...a: never[]) => F.Step | null ? K : never }[keyof typeof F]
-export const ENTRY_ALL: Record<EntryName, boolean> = { press: true, release: true, intent: true, queuePosition: true, rtpTx: true, rtpRx: true, registerHalf: true, pubSelect: true, pubAway: true, leave: true, down: true, dcDown: true, dcUp: true, expire: true, receive: true }
+export const ENTRY_ALL: Record<EntryName, boolean> = { press: true, release: true, intent: true, queuePosition: true, rtpTx: true, rtpRx: true, registerHalf: true, pubSelect: true, pubAway: true, leave: true, join: true, down: true, dcDown: true, dcUp: true, expire: true, receive: true }
 
 /** 위 효과 하나 → SDK 가 낼 이벤트 · 할 동작(효과 표) — 위 효과가 늘거나 줄면 여기서 깨진다 */
 export function effect(f: F.Fx): { readonly event?: PttEvent; readonly action?: PttAction; readonly seam?: string } {

@@ -2,7 +2,8 @@
 // ★실측(probe) — 시뮬캐스트 발행자 엔진이 층 PLI 에 어떻게 키프레임을 내나(202610/20261028c R2 — 「실측 먼저 · 협상은 그 뒤」).
 //   판정이 아니라 수치다 — 정규 게이트 밖(chromium-probe). 근거 사실: libwebrtc `video/encoder_rtcp_feedback.cc`
 //   (300ms 안의 요청은 버린다 · `x-google-per-layer-pli` 가 없으면 타이머 하나 · 받아들이면 모든 층이 키프레임).
-//   한 축만 바꾼다 — 발행자 쪽 remote SDP 의 video fmtp 에 `x-google-per-layer-pli=1` 을 넣은 판과 안 넣은 판.
+//   한 축만 바꾼다 — 발행자 쪽 remote SDP 의 video fmtp 에 `x-google-per-layer-pli=1` 이 있는 판과 없는 판.
+//   SDK 는 시뮬캐스트 발행 answer 에 그것을 싣는다(연:RULE-LINK-SDP-PUB-MLINE 예외 둘) — 없는 판은 그것을 걷어 낸다.
 import { test, type BrowserContext } from '@playwright/test'
 import { Participant, Scope, ensureRoom, expect } from '../../fixtures/scope.js'
 
@@ -14,10 +15,15 @@ test.afterEach(async () => { await S.teardown() })
 interface Enc { rid: string | null; keyFramesEncoded: number | null; pliCount: number | null; framesEncoded: number | null; fmtp: string | null }
 interface In { id: string; kind: string; framesDecoded: number | null; keyFramesDecoded: number | null; freezeCount: number | null; pliCount: number | null; frameWidth: number | null }
 
-/** ★발행자 페이지에만 — remote SDP 의 video 코덱마다 fmtp 에 그 손잡이를 단다(브라우저 엔진은 송신 코덱 파라미터를 상대 SDP 에서 읽는다). */
-async function perLayerPli(ctx: BrowserContext): Promise<void> {
-  await ctx.addInitScript(() => {
+/** ★발행자 페이지에만 — remote SDP 의 video 코덱마다 fmtp 에 그 손잡이를 단다 · on 이 아니면 걷어 낸다(브라우저 엔진은 송신 코덱 파라미터를 상대 SDP 에서 읽는다). */
+async function perLayerPli(ctx: BrowserContext, on: boolean): Promise<void> {
+  await ctx.addInitScript((on: boolean) => {
+    const strip = (sdp: string): string => sdp.split('\r\n')
+      .filter((l) => !/^a=fmtp:\d+ x-google-per-layer-pli=1$/.test(l))
+      .map((l) => (l.startsWith('a=fmtp:') ? l.replace(';x-google-per-layer-pli=1', '') : l))
+      .join('\r\n')
     const munge = (sdp: string): string => {
+      if (!on) return strip(sdp)
       const out: string[] = []
       let video = false
       let pts: string[] = []
@@ -41,7 +47,7 @@ async function perLayerPli(ctx: BrowserContext): Promise<void> {
     RTCPeerConnection.prototype.setRemoteDescription = function (this: RTCPeerConnection, d?: RTCSessionDescriptionInit) {
       return orig.call(this, d && d.sdp ? { type: d.type, sdp: munge(d.sdp) } : d)
     } as typeof orig
-  })
+  }, on)
 }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -50,7 +56,7 @@ const byRid = (es: Enc[]) => Object.fromEntries(es.map((e) => [e.rid ?? '-', e])
 async function measure(browser: import('@playwright/test').Browser, perLayer: boolean) {
   const room = S.room(perLayer ? 'on' : 'off')
   const pubCtx = await browser.newContext()
-  if (perLayer) await perLayerPli(pubCtx)
+  await perLayerPli(pubCtx, perLayer)
   const subCtx = await browser.newContext()
   await ensureRoom(room)
   // ★두 층이 다 흘러야 잴 수 있다 — 서버 REMB 상한(정책 media.max_bitrate_bps 기본 800k)이 업링크 전체를 묶어 기본 h(1.65M)는 서지 않는다(20261028 실측 · 별도 규격 결함 후보).

@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/ses/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 67967e270560c2c4 · 영역 SES 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 4d2ab4708709bd3d · 영역 SES 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -177,7 +177,7 @@ export function resumeRes(s: St, m: { readonly part: Part }, dead: boolean): Ste
 
 /** 소켓이 끊겼다 — c 는 LEAVE 사유(0 = LEAVE 없이 끊겼다 · §[SES.C.any]) (바깥: 소켓이 끊겼다) · 읽는 것: carry = ROOM.rs · PUB.ps */
 export function drop(s: St, c: number, carry: boolean): Step {
-  if (c === 1008 || c === 4006 || c === 4007 || c === 2010) {
+  if (c === 1008 || c === 2001 || c === 4006 || c === 4007 || c === 2010) {
     return done(s, { ...s, cs: 'DISCONNECTED', sock: 'CLOSED', wait: 'NONE', hb: false }, 'SES.C.any.drop_final', [], ['app.disconnected'], [{ fx: 'floor.down_all', to: 'FLR', at: 'all' }, { fx: 'rooms.close_all', to: 'ROOM', at: 'all' }, { fx: 'media.close_all', to: 'LINK', at: 'all' }], [])
   }
   if (c === 2009 || c === 5004) {

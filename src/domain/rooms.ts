@@ -263,6 +263,7 @@ export class RoomCore {
         break
       }
       case 'aff.join_failed': core.affStep('joinFailed', AFF.joinFailed(core.aff, this.id), label); break
+      case 'floor.join': this.floor.join(); break
       case 'floor.leave': this.floor.leave(); break
       case 'sub.drop': this.subStep('dropRoom', SUB.dropRoom(this.sub), label); break
       case 'pub.room_gone': for (const l of core.media.inRoom(this.id)) l.roomGone(); break

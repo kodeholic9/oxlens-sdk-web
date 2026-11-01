@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { decodeFrame, encodeFrame } from '../src/internal/signaling.js'
 import { Op } from '../src/internal/wire/ws.js'
 import { createClient, OxLensError } from '../src/index.js'
+import { LinkCore } from '../src/domain/links.js'
 
 class FakeWS {
   static made: FakeWS[] = []
@@ -126,4 +127,72 @@ test('SDK:RULE-API-ASYNC 연결 전 요청 — join 은 active 까지 기다린�
   fresh()
   const c = createClient({ base: 'https://hub.example', token: 'tok', pcMode: '2pc' })
   await assert.rejects(c.join('r1'), (e: unknown) => e instanceof OxLensError && e.category === 'closed')
+})
+
+test('연:SES.C.any.drop_final 2001(NOT_BOUND) — BIND 전 다른 op 로 끊기면 다시 붙지 않는다(대장 C-52 ②)', async () => {
+  fresh()
+  const c = createClient({ base: 'https://hub.example', token: 'tok', pcMode: '2pc' })
+  const closed: { code: number; retryable: boolean }[] = []
+  c.on('closed', (x) => closed.push(x))
+  const p = c.connect()
+  await tick(); FakeWS.made[0]!.open(); await tick()
+  FakeWS.made[0]!.reply(Op.BIND, BIND_OK)
+  await p
+  FakeWS.made[0]!.deliver(encodeFrame('request', Op.LEAVE, 9, { code: 2001, name: 'NOT_BOUND' }))
+  FakeWS.made[0]!.close()
+  await tick(5)
+  assert.equal(c.session.state, 'disconnected')
+  assert.deepEqual(closed.map((x) => [x.code, x.retryable]), [[2001, false]])
+  assert.equal(FakeWS.made.length, 1, '새 소켓을 열지 않는다')
+})
+
+test('연:SES.op.RESUME 실패 — 전이 원인은 받은 코드 그대로(SFU_ERROR 를 SESSION_NOT_FOUND 로 적지 않는다 · 대장 C-61 ②)', async () => {
+  fresh()
+  const c = createClient({ base: 'https://hub.example', token: 'tok', pcMode: '2pc' })
+  const causes: string[] = []
+  c.diagnostics.on('transition', (t) => { if (t.layer === 'SES') causes.push(`${t.label}|${t.cause}`) })
+  const p = c.connect()
+  await tick(); FakeWS.made[0]!.open(); await tick()
+  FakeWS.made[0]!.reply(Op.BIND, BIND_OK)
+  await p
+  c.join('r1').catch(() => undefined)
+  await tick()
+  FakeWS.made[0]!.close()
+  await tick(5)
+  assert.equal(c.session.state, 'resuming', '들어가는 방이 있으면 이어받으러 간다')
+  const ws = FakeWS.made[1]!
+  ws.open(); await tick()
+  assert.equal((ws.last(Op.BIND).body as Record<string, unknown>)['session_id'], 's-1')
+  ws.reply(Op.BIND, BIND_OK)
+  await tick()
+  ws.reply(Op.RESUME, { code: 5002, name: 'SFU_ERROR', permanent: false }, false)
+  await tick()
+  assert.ok(causes.includes('SES.C.RESUMING.resume_2008|RESUME.5002'), causes.join(' · '))
+  assert.ok(!causes.some((x) => x.endsWith('|RESUME.2008')))
+  await c.close()
+})
+
+test('연:RULE-SES-BIND-PROC — WS 점검은 간격 뒤 보내는 순간에 세션 ACTIVE 를 다시 본다 · 안 보낸 점검은 세지 않는다(대장 C-52 ③)', async () => {
+  const probes: number[] = []
+  const core = {
+    epochs: { id: () => 1 },
+    cfg: { wakeDetectMs: 1000, iceRestartBackoffMs: [0, 40], wsProbeTimeoutMs: 10, unreachableAfter: 99 },
+    ses: { cs: 'ACTIVE' },
+    sig: { probe: () => { probes.push(1); return new Promise<boolean>(() => undefined) } },
+    log: { warn: () => undefined, debug: () => undefined },
+  }
+  const Link = LinkCore as unknown as new (core: unknown, sc: null, peer: null) => LinkCore
+  const link = new Link(core, null, null)
+  link.st = { ...link.st, ls: 'CHECK' }
+  const inner = link as unknown as { wsCheck(): void; attempt: number }
+  inner.wsCheck()
+  core.ses.cs = 'RESUMING'
+  await tick(5)
+  assert.equal(probes.length, 0, '세션이 ACTIVE 가 아닌 소켓에 HEARTBEAT 를 내면 NOT_BOUND 로 영구히 끊긴다')
+  assert.equal(inner.attempt, 0)
+  core.ses.cs = 'ACTIVE'
+  link.sessionBack()
+  await tick(5)
+  assert.equal(probes.length, 1, '세션이 돌아오면 같은 칸(0ms)에서 다시 건다')
+  assert.equal(inner.attempt, 1)
 })

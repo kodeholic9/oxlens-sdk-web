@@ -189,6 +189,14 @@ function answerFmtp(c: Codec, opus: string): string | undefined {
   return codecName(c).toLowerCase() === 'opus' ? opus : c.fmtp
 }
 
+const PER_LAYER_PLI = 'x-google-per-layer-pli=1'
+
+/** 시뮬캐스트 video 는 층마다 키프레임을 청하게 한다(연:RULE-LINK-SDP-PUB-MLINE 예외 둘) — fmtp 가 없으면 그것만으로 만든다 */
+function perLayerPli(f: string | undefined): string {
+  if (f === undefined || f === '') return PER_LAYER_PLI
+  return f.split(';').some((p) => p.trim().startsWith('x-google-per-layer-pli=')) ? f : `${f};${PER_LAYER_PLI}`
+}
+
 export interface SendSection {
   readonly mid: string
   readonly kind: 'audio' | 'video'
@@ -205,7 +213,8 @@ function send(w: Wire, s: SendSection, opus: string | null): string[] {
   const out = [`m=${s.kind} ${w.sc.ice.port} UDP/TLS/RTP/SAVPF ${pts.join(' ')}`, ...head(w, s.mid, s.kind), `a=${s.dir}`]
   for (const c of s.codecs) {
     out.push(`a=rtpmap:${c.pt} ${c.rtpmap}`)
-    const f = opus === null ? c.fmtp : answerFmtp(c, opus)
+    const base = opus === null ? c.fmtp : answerFmtp(c, opus)
+    const f = s.kind === 'video' && s.rids.length ? perLayerPli(base) : base
     if (f) out.push(`a=fmtp:${c.pt} ${f}`)
     for (const fb of fbOf(w.sc.codecs, s.kind, codecName(c))) out.push(`a=rtcp-fb:${c.pt} ${fb}`)
     if (c.rtx !== undefined) {

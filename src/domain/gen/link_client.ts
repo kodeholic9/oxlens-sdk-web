@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/link/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 67967e270560c2c4 · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 4d2ab4708709bd3d · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -44,7 +44,7 @@ export interface St {
   readonly cause: RebuildCause
   /** 배정표의 사본 — 그 트랙이 실린 줄의 mid(0 = 줄이 없다) · ★연결마다 하나(방 둘의 트랙이 한 표에) · MLINE_EVENT 와 입장 · RESUME 응답만 고친다(202610/20261017c · 20261018b) */
   readonly mid: Readonly<Record<MTrack, number>>
-  /** 배정표의 줄 수 — 구독 SDP 의 m-line 들(줄은 지우지 않는다 · 줄이 늘 때만 SDP 가 바뀐다) */
+  /** 배정표의 SDP 재료 — 줄이 늘거나 줄 하나의 튜플이 바뀌면 바뀐다(같은지만 본다 · 모형은 줄이 늘 때만 바뀌는 수로 줄인다 — 튜플 바뀜도 SDP 를 바꾼다 §[SUB.type.MlineEntry]) */
   readonly rows: number
   /** 받은 배정표의 차례 번호(arev) — 이보다 큰 표만 받는다 */
   readonly arev: number

@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/floor_client.mts 가 원천(context/spec/protocol · areas/flr/behavior/client.ts)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 67967e270560c2c4 · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
+// IR sha256 4d2ab4708709bd3d · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
 // 집행은 부르는 쪽 몫이다 — out(DC 로 보낼 것) · ack(ACK 으로 답할 것) · fx(마이크 · 화면 · 앱 알림) · start(다시 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -83,7 +83,7 @@ export function armed(s: Cl): TimerName[] {
 }
 
 /** 원천 절차 → 입구 이름 — 다른 영역의 이음매가 부르는 입구를 찾을 때(위 IR seams 의 react 는 절차 이름이다) */
-export const PROC_ENTRY = { CPress: 'press', CRelease: 'release', CIntent: 'intent', CQpos: 'queuePosition', CRtpTx: 'rtpTx', CRtpRx: 'rtpRx', CRegHalf: 'registerHalf', CPubSel: 'pubSelect', CAway: 'pubAway', CLeave: 'leave', CDown: 'down', CDcDown: 'dcDown', CDcUp: 'dcUp' } as const
+export const PROC_ENTRY = { CPress: 'press', CRelease: 'release', CIntent: 'intent', CQpos: 'queuePosition', CRtpTx: 'rtpTx', CRtpRx: 'rtpRx', CRegHalf: 'registerHalf', CPubSel: 'pubSelect', CAway: 'pubAway', CLeave: 'leave', CJoin: 'join', CDown: 'down', CDcDown: 'dcDown', CDcUp: 'dcUp' } as const
 
 /** 누름 */
 export function press(s: Cl, p: number): Step {
@@ -157,6 +157,11 @@ export function pubAway(s: Cl): Step {
 /** WS ROOM_LEAVE — 방을 떠난다 */
 export function leave(s: Cl): Step {
   return done(s, { ...s, cs: 'NOPERM', want: false, isPub: false, shown: null, left: true }, 'FLR.C.any.leave', [], [], ['mic.close'], [])
+}
+
+/** WS ROOM_JOIN — 방에 든다 */
+export function join(s: Cl): Step {
+  return done(s, { ...s, sub: 'WAIT', want: false, prio: 0, grant: 0, isPub: false, shown: null, left: false }, 'FLR.C.any.join', [], [], [], [])
 }
 
 /** 재구축으로 그 방 발언권을 내린다(세션 전체 · 그 서버) */
