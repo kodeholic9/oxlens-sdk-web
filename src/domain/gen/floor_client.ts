@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/floor_client.mts 가 원천(context/spec/protocol · areas/flr/behavior/client.ts)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 4d2ab4708709bd3d · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
+// IR sha256 512dd0ff7ddd7797 · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
 // 집행은 부르는 쪽 몫이다 — out(DC 로 보낼 것) · ack(ACK 으로 답할 것) · fx(마이크 · 화면 · 앱 알림) · start(다시 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -231,7 +231,7 @@ export function receive(s: Cl, m: Rx): Step {
     case 'PREQ':
       switch (m.t) {
         case 'GRANTED': {
-          return done(s, { ...s, cs: 'PERM', grant: m.duration, shown: null, seen: newer(m.seq, s.seen) ? m.seq : s.seen }, 'FLR.C.PREQ.rx_GRANTED', [], [...(m.ack ? [{ of: 'GRANTED' as const, seq: m.seq }] : [])], ['app.granted', 'mic.open'], [])
+          return done(s, { ...s, cs: 'PERM', grant: m.duration, shown: null, seen: newer(m.seq, s.seen) ? m.seq : s.seen }, 'FLR.C.PREQ.rx_GRANTED', [], [...(m.ack ? [{ of: 'GRANTED' as const, seq: m.seq }] : [])], ['app.granted', 'app.speaker_none', 'mic.open'], [])
         }
         case 'DENY': {
           return done(s, { ...s, cs: 'NOPERM', want: false }, 'FLR.C.PREQ.rx_DENY', [], [...(m.ack ? [{ of: 'DENY' as const }] : [])], ['app.denied'], [])
@@ -304,7 +304,7 @@ export function receive(s: Cl, m: Rx): Step {
         }
         case 'GRANTED': {
           if (s.sub !== 'GRANTED') {
-            return done(s, { ...s, sub: 'GRANTED', grant: m.duration, shown: null, seen: newer(m.seq, s.seen) ? m.seq : s.seen }, 'FLR.C.QUEUED.rx_GRANTED', [], [...(m.ack ? [{ of: 'GRANTED' as const, seq: m.seq }] : [])], ['app.granted_queued'], [])
+            return done(s, { ...s, sub: 'GRANTED', grant: m.duration, shown: null, seen: newer(m.seq, s.seen) ? m.seq : s.seen }, 'FLR.C.QUEUED.rx_GRANTED', [], [...(m.ack ? [{ of: 'GRANTED' as const, seq: m.seq }] : [])], ['app.granted_queued', 'app.speaker_none'], [])
           }
           return done(s, { ...s, seen: newer(m.seq, s.seen) ? m.seq : s.seen }, 'FLR.C.QUEUED.rx_GRANTED_again', [], [...(m.ack ? [{ of: 'GRANTED' as const, seq: m.seq }] : [])], [], [])
         }
