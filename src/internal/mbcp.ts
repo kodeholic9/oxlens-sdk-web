@@ -9,7 +9,7 @@ const MAX_PAYLOAD = 65532
 export type FloorRx =
   | { t: 'TAKEN'; ack?: boolean; speaker: string; seq: number }
   | { t: 'IDLE'; ack?: boolean; prev?: string; seq: number }
-  | { t: 'GRANTED'; ack?: boolean; priority: number; duration: number; seq: number }
+  | { t: 'GRANTED'; ack?: boolean; priority: number; duration: number }
   | { t: 'DENY'; ack?: boolean; cause: number; reason?: string }
   | { t: 'QINFO'; ack?: boolean; info: { position: number; priority: number } }
   | { t: 'REVOKE'; ack?: boolean; cause: number; reason?: string }
@@ -53,8 +53,8 @@ export function queuePosRequest(room: string): Uint8Array {
 
 const ACK_OF: Record<'TAKEN' | 'GRANTED' | 'DENY', number> = { TAKEN: C.Type.TAKEN, GRANTED: C.Type.GRANTED, DENY: C.Type.DENY }
 
-export function ack(room: string, of: 'TAKEN' | 'GRANTED' | 'DENY', seq?: number): Uint8Array {
-  return wrap(C.encode(seq === undefined ? C.buildAck({ of: ACK_OF[of], room }) : C.buildAck({ of: ACK_OF[of], room, seq })))
+export function ack(room: string, of: 'TAKEN' | 'GRANTED' | 'DENY'): Uint8Array {
+  return wrap(C.encode(C.buildAck({ of: ACK_OF[of], room })))
 }
 
 /** 바이트 → 사건 — 필수 칸이 빠진 것 · 방 키가 없는 것 · 클라가 받지 않는 종류는 버린다 */
@@ -78,7 +78,7 @@ export function parse(buf: Uint8Array): Received | null {
     case C.Type.GRANTED: {
       const r = C.readGranted(m)
       if (r.missing.length || r.value.room === undefined) return null
-      return { room: r.value.room, rx: { t: 'GRANTED', ack: m.ack, priority: r.value.priority!, duration: r.value.duration!, seq: r.value.seq! } }
+      return { room: r.value.room, rx: { t: 'GRANTED', ack: m.ack, priority: r.value.priority!, duration: r.value.duration! } }
     }
     case C.Type.DENY: {
       const r = C.readDeny(m)

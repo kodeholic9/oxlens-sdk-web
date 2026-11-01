@@ -248,7 +248,7 @@ export class FloorCore {
       const bytes = tx.t === 'REQUEST' ? Mbcp.request(this.room.id, tx.priority ?? 0) : tx.t === 'RELEASE' ? Mbcp.release(this.room.id) : Mbcp.queuePosRequest(this.room.id)
       if (!link?.peer?.sendDc(bytes)) this.core.log.debug(`DC 로 ${tx.t} 를 못 보냈다 — 위 타이머가 다시 보낸다`, { room: this.room.id })
     }
-    for (const a of plan.ack) link?.peer?.sendDc(Mbcp.ack(this.room.id, a.of, a.seq))
+    for (const a of plan.ack) link?.peer?.sendDc(Mbcp.ack(this.room.id, a.of))
     this.timersFollow(plan.timers)
     let extra: 'granted' | 'denied' | 'revoked' | 'queued' | 'released' | undefined
     for (const f of step.fx) {

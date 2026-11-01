@@ -51,8 +51,9 @@ test('연:RULE-FLR-ROOM-KEY — 방 키는 0x1D 단일 · 없으면 버린다', 
   assert.equal(Mbcp.parse(noRoom), null)
 })
 
-test('연:RULE-FLR-MSG-TYPES — ACK 은 받은 종류 · 일련번호를 되돌린다', () => {
-  const m = C.decode(Mbcp.unwrap(Mbcp.ack('r1', 'GRANTED', 9))!)!
+test('연:RULE-FLR-MSG-TYPES · 연:RULE-FLR-SEQ — ACK 은 받은 종류만 되돌린다(일련번호 없음 · 원문 8.2.13)', () => {
+  const m = C.decode(Mbcp.unwrap(Mbcp.ack('r1', 'GRANTED'))!)!
   assert.equal(m.type, C.Type.ACK)
-  assert.deepEqual(C.readAck(m).value, { of: C.Type.GRANTED, seq: 9, room: 'r1' })
+  assert.deepEqual(C.readAck(m).value, { of: C.Type.GRANTED, room: 'r1' })
+  assert.equal(m.fields.some((f) => f.id === C.TlvId.SEQ), false)
 })

@@ -77,12 +77,12 @@ export function readRequest(msg: Message): { value: { room?: string | undefined;
   return { value: { priority, room }, missing }
 }
 
-/** 1 Floor Granted(원문 8.2.5) · S→C · A 세운다 — 필수 priority, duration, seq, room · 선택 없음 */
-export function buildGranted(a: { priority: number; duration: number; seq: number; room: string }): Message {
-  const fields: Field[] = [{ id: TlvId.PRIORITY, value: u8spare(a.priority) }, { id: TlvId.DURATION, value: u16be(a.duration) }, { id: TlvId.SEQ, value: u16be(a.seq) }, { id: TlvId.ROOM, value: utf8(a.room) }]
+/** 1 Floor Granted(원문 8.2.5) · S→C · A 세운다 — 필수 priority, duration, room · 선택 없음 */
+export function buildGranted(a: { priority: number; duration: number; room: string }): Message {
+  const fields: Field[] = [{ id: TlvId.PRIORITY, value: u8spare(a.priority) }, { id: TlvId.DURATION, value: u16be(a.duration) }, { id: TlvId.ROOM, value: utf8(a.room) }]
   return { type: Type.GRANTED, ack: true, fields }
 }
-export function readGranted(msg: Message): { value: { priority?: number | undefined; duration?: number | undefined; seq?: number | undefined; room?: string | undefined }; missing: string[] } {
+export function readGranted(msg: Message): { value: { priority?: number | undefined; duration?: number | undefined; room?: string | undefined }; missing: string[] } {
   const missing: string[] = []
   const get = <T>(id: number, f: (b: Uint8Array) => T | undefined): T | undefined => {
     const x = msg.fields.find((y) => y.id === id)
@@ -90,13 +90,11 @@ export function readGranted(msg: Message): { value: { priority?: number | undefi
   }
   const priority = get(TlvId.PRIORITY, (b) => rd8spare(b))
   const duration = get(TlvId.DURATION, (b) => rd16(b))
-  const seq = get(TlvId.SEQ, (b) => rd16(b))
   const room = get(TlvId.ROOM, (b) => dec.decode(b))
   if (priority === undefined) missing.push('priority')
   if (duration === undefined) missing.push('duration')
-  if (seq === undefined) missing.push('seq')
   if (room === undefined) missing.push('room')
-  return { value: { priority, duration, seq, room }, missing }
+  return { value: { priority, duration, room }, missing }
 }
 
 /** 2 Floor Taken(원문 8.2.9) · S→C · A 세운다 — 필수 speaker, seq, room · 선택 없음 */
@@ -229,23 +227,21 @@ export function readQueueInfo(msg: Message): { value: { info?: { position: numbe
   return { value: { info, room }, missing }
 }
 
-/** 10 Floor Ack(원문 8.2.13) · 양방향 · A 안 세운다 — 필수 of, room · 선택 seq */
-export function buildAck(a: { of: number; room: string; seq?: number }): Message {
+/** 10 Floor Ack(원문 8.2.13) · 양방향 · A 안 세운다 — 필수 of, room · 선택 없음 */
+export function buildAck(a: { of: number; room: string }): Message {
   const fields: Field[] = [{ id: TlvId.ACKTYPE, value: u8spare(a.of) }, { id: TlvId.ROOM, value: utf8(a.room) }]
-  if (a.seq !== undefined) fields.push({ id: TlvId.SEQ, value: u16be(a.seq) })
   return { type: Type.ACK, ack: false, fields }
 }
-export function readAck(msg: Message): { value: { of?: number | undefined; room?: string | undefined; seq?: number | undefined }; missing: string[] } {
+export function readAck(msg: Message): { value: { of?: number | undefined; room?: string | undefined }; missing: string[] } {
   const missing: string[] = []
   const get = <T>(id: number, f: (b: Uint8Array) => T | undefined): T | undefined => {
     const x = msg.fields.find((y) => y.id === id)
     return x ? f(x.value) : undefined
   }
   const of = get(TlvId.ACKTYPE, (b) => rd8spare(b))
-  const seq = get(TlvId.SEQ, (b) => rd16(b))
   const room = get(TlvId.ROOM, (b) => dec.decode(b))
   if (of === undefined) missing.push('of')
   if (room === undefined) missing.push('room')
-  return { value: { of, seq, room }, missing }
+  return { value: { of, room }, missing }
 }
 
