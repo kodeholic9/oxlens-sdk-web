@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/trk/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 3545cea93e0d3660 · 영역 TRK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 e96573301e30f7b8 · 영역 TRK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -33,6 +33,8 @@ export const SEAMS = {
 } as const
 /** 이음매가 부르는 입구 — 다른 영역(또는 이 영역)의 효과가 부른다 · 부르는 곳은 위가 정했다(아래가 넣는 사건이 아니다) */
 export const REACTS = {
+  trackEvent: ['ROOM:trk.delta'],
+  trackState: ['ROOM:trk.delta'],
   snapshot: ['ROOM:trk.snapshot'],
   storeDrop: ['ROOM:store.drop'],
 } as const
@@ -57,8 +59,9 @@ export function armed(s: St): TimerName[] {
   return on
 }
 
-/** TRACK_EVENT 를 받았다 — 트랙 목록(보기용)을 고친다(RULE-TRK-STORE-UPDATE · 키 = track_id) · mine = 내 track_id(version 은 ROOM 이 본다 — 낡은 델타는 ROOM 이 버린다 · RULE-TRK-TRACK-EVENT-PROC) · ★배정표는 건드리지 않는다 (받음: TRACK_EVENT) */
-export function trackEvent(s: St, m: { readonly action: TrackAction; readonly tracks: { readonly active: boolean; readonly muted: boolean; readonly track_id: TrackId } }, mine: boolean): Step {
+/** TRACK_EVENT 를 받았다 — 트랙 목록(보기용)을 고친다(RULE-TRK-STORE-UPDATE · 키 = track_id) · mine = 내 track_id(★ROOM 이 받은 델타만 온다 — version 판정은 ROOM 한 곳 · trk.delta · RULE-TRK-TRACK-EVENT-PROC) · ★배정표는 건드리지 않는다 — 받는 상태 밖이면 null(사건이 없던 것) */
+export function trackEvent(s: St, m: { readonly action: TrackAction; readonly t: 'TRACK_EVENT' | 'TRACK_STATE'; readonly tracks: { readonly active: boolean; readonly muted: boolean; readonly track_id: TrackId } }, mine: boolean): Step | null {
+  if (!(m.t === 'TRACK_EVENT')) return null
   if (mine && m.action === 'remove') {
     return done(s, s, 'TRK.C.any.mine_removed', [], [], [{ fx: 'pub.revoked', to: 'PUB', at: 'sameRoom' }], [])
   }
@@ -71,8 +74,9 @@ export function trackEvent(s: St, m: { readonly action: TrackAction; readonly tr
   return done(s, { ...s, lay: { ...s.lay, [m.tracks.track_id]: m.tracks.active ? 'ACTIVE' : 'RESTING' }, muted: { ...s.muted, [m.tracks.track_id]: m.tracks.muted } }, 'TRK.C.any.track_event', [], ['app.tracks'], [], [])
 }
 
-/** TRACK_STATE 를 받았다 — track_id 가 식별 키(RULE-TRK-TRACK-STATE-PROC) · muted 는 트랙 층이라 보관본의 그 값이 바뀐다(아직 구독하지 않은 트랙도 · RULE-TRK-TRACK-STATE-TO-ALL) (받음: TRACK_STATE) */
-export function trackState(s: St, m: { readonly muted: boolean; readonly track_id: TrackId }): Step {
+/** TRACK_STATE 를 받았다(★ROOM 이 받은 델타만 온다 — trk.delta) — track_id 가 식별 키(RULE-TRK-TRACK-STATE-PROC) · muted 는 트랙 층이라 보관본의 그 값이 바뀐다(아직 구독하지 않은 트랙도 · RULE-TRK-TRACK-STATE-TO-ALL) — 받는 상태 밖이면 null(사건이 없던 것) */
+export function trackState(s: St, m: { readonly muted: boolean; readonly t: 'TRACK_EVENT' | 'TRACK_STATE'; readonly track_id: TrackId }): Step | null {
+  if (!(m.t === 'TRACK_STATE')) return null
   return done(s, { ...s, muted: { ...s.muted, [m.track_id]: m.muted } }, 'TRK.C.any.track_state', [], ['app.track_state'], [], [])
 }
 

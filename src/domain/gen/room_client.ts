@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/room/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 3545cea93e0d3660 · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 e96573301e30f7b8 · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -8,7 +8,7 @@ export type PcMode = '1pc' | '2pc'
 export type Part = 'req' | 'res' | 'fail' | 'body'
 export type RoomEv = 'affiliation' | 'sync_required'
 export type Fx = 'app.bug' | 'app.join_failed' | 'app.joined' | 'app.left' | 'app.members' | 'app.room_gone' | 'http.abandon' | 'ws.abandon'
-export type SeamFx = 'aff.implicit' | 'aff.join_failed' | 'aff.leave' | 'floor.join' | 'floor.leave' | 'link.epoch_changed' | 'link.room_left' | 'link.table' | 'pub.room_gone' | 'ready.tracks' | 'room.sub_rooms' | 'sdp.rebuild' | 'store.drop' | 'sub.drop' | 'trk.snapshot'
+export type SeamFx = 'aff.implicit' | 'aff.join_failed' | 'aff.leave' | 'floor.join' | 'floor.leave' | 'link.epoch_changed' | 'link.room_left' | 'link.table' | 'pub.room_gone' | 'ready.tracks' | 'room.sub_rooms' | 'sdp.rebuild' | 'store.drop' | 'sub.drop' | 'trk.delta' | 'trk.snapshot'
 export type TimerName = never
 
 /** 클라 상태 — 원천 ROOM K */
@@ -60,6 +60,7 @@ export const SEAMS = {
   'sdp.rebuild': { to: 'LINK', react: ['CRenego'] },
   'store.drop': { to: 'TRK', react: ['CStoreDrop'] },
   'sub.drop': { to: 'SUB', react: ['CDropRoom'] },
+  'trk.delta': { to: 'TRK', react: ['CTrackEvent', 'CTrackState'] },
   'trk.snapshot': { to: 'TRK', react: ['CSnapshot'] },
 } as const
 /** 이음매가 부르는 입구 — 다른 영역(또는 이 영역)의 효과가 부른다 · 부르는 곳은 위가 정했다(아래가 넣는 사건이 아니다) */
@@ -164,7 +165,7 @@ export function delta(s: St, m: { readonly version: { readonly epoch: number; re
     return done(s, s, 'ROOM.C.JOINED.delta_old', [], [], [], [])
   }
   if (m.version.seq === s.cseq + 1) {
-    return done(s, { ...s, cseq: m.version.seq }, 'ROOM.C.JOINED.delta_apply', [], ['app.members'], [], [])
+    return done(s, { ...s, cseq: m.version.seq }, 'ROOM.C.JOINED.delta_apply', [], ['app.members'], [{ fx: 'trk.delta', to: 'TRK', at: 'self' }], [])
   }
   if (s.rsync) {
     return done(s, { ...s, ahead: m.version.seq > s.ahead ? m.version.seq : s.ahead }, 'ROOM.C.JOINED.delta_gap_inflight', [], [], [], [])

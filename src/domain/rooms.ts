@@ -268,6 +268,7 @@ export class RoomCore {
       case 'sub.drop': this.subStep('dropRoom', SUB.dropRoom(this.sub), label); break
       case 'pub.room_gone': for (const l of core.media.inRoom(this.id)) l.roomGone(); break
       case 'store.drop': this.trkStep('storeDrop', TRK.storeDrop(this.trk), label); this.store.tracks.clear(); this.syncRemotes(); break
+      case 'trk.delta': if (this.deltaIn) this.trkDelta(this.deltaIn.op, this.deltaIn.body); break
       case 'link.room_left': {
         const last = core.roomsOn(this.sfuId).every((r) => r === this || r.st.rs === 'NONE')
         link?.roomLeft(last)
@@ -360,9 +361,14 @@ export class RoomCore {
     const step = ROOM.delta(this.st, m, bare)
     const applied = step.label === 'ROOM.C.JOINED.delta_apply' || step.label === 'ROOM.C.JOINED.delta_bare'
     if (applied) this.applyContent(op, body)
+    this.deltaIn = { op, body }
     this.roomStep('delta', step, op)
+    this.deltaIn = null
     if (applied) this.afterContent(op, body)
   }
+
+  /** 방 상태기가 받은 통지 — 트랙 통지는 위 이음매 trk.delta 로만 트랙 상태기에 닿는다(version 판정은 방 상태기 한 곳 · SDK:RULE-TRK-STORE) */
+  private deltaIn: { op: string; body: Record<string, unknown> } | null = null
 
   private permChanges: { userId: string; permission: Permission; mine: boolean }[] = []
 
@@ -382,11 +388,15 @@ export class RoomCore {
       const cur = this.store.members.get(b.user_id)
       if (cur) this.store.members.set(b.user_id, { ...cur, permission: perm })
       this.permChanges.push({ userId: b.user_id, permission: perm, mine })
-    } else if (op === 'TRACK_EVENT') {
+    }
+  }
+
+  private trkDelta(op: string, body: Record<string, unknown>): void {
+    if (op === 'TRACK_EVENT') {
       const b = body as unknown as TrackEventBody
       for (const t of b.tracks) {
         const mine = this.core.media.ownsTrack(t.track_id)
-        const step = TRK.trackEvent(this.trk, { action: b.action, tracks: { active: t.active ?? true, muted: t.muted ?? false, track_id: t.track_id as TRK.TrackId } }, mine)
+        const step = TRK.trackEvent(this.trk, { t: 'TRACK_EVENT', action: b.action, tracks: { active: t.active ?? true, muted: t.muted ?? false, track_id: t.track_id as TRK.TrackId } }, mine)
         if (!mine) {
           if (b.action === 'remove') this.store.tracks.delete(t.track_id)
           else this.store.tracks.set(t.track_id, t)
@@ -397,7 +407,7 @@ export class RoomCore {
       const b = body as unknown as TrackStateBody
       const cur = this.store.tracks.get(b.track_id)
       if (cur) this.store.tracks.set(b.track_id, { ...cur, muted: b.muted })
-      this.trkStep('trackState', TRK.trackState(this.trk, { muted: b.muted, track_id: b.track_id as TRK.TrackId }), op, b.track_id)
+      this.trkStep('trackState', TRK.trackState(this.trk, { t: 'TRACK_STATE', muted: b.muted, track_id: b.track_id as TRK.TrackId }), op, b.track_id)
     }
   }
 
@@ -464,7 +474,8 @@ export class RoomCore {
     this.trkStep('snapshot', TRK.snapshot(this.trk, lay as unknown as TRK.St['lay'], muted as unknown as TRK.St['muted']), 'snapshot')
   }
 
-  private trkStep(entry: string, step: TRK.Step, cause: string, key?: string): void {
+  private trkStep(entry: string, step: TRK.Step | null, cause: string, key?: string): void {
+    if (!step) { this.core.impossible('TRK', this.id, '-', entry); return }
     const plan = TB.plan(step)
     this.trk = plan.state
     this.core.record('TRK', key ? `${this.id}/${key}` : this.id, '-', '-', plan.label, cause)
