@@ -2,3 +2,4 @@
 # 위반	갈래	사유
 domain/defaults.ts: 영역 디렉터리 밖의 domain 파일	가로지름	createClient 설정 해석(정책서 SDK 몫 · 영역 공통 — 가로지르는 것은 층 자체가 자리)
 internal/probe.ts: 영역 디렉터리 밖의 internal 파일	가로지름	진단 수집(DIAG — 가로지르는 것은 층 자체가 자리)
+domain/diag.ts: 영역 디렉터리 밖의 domain 파일	가로지름	진단(DIAG — 가로지르는 것은 층 자체가 자리)

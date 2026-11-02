@@ -104,10 +104,15 @@ export async function permission(name: 'microphone' | 'camera'): Promise<PermSta
   }
 }
 
-export async function enumerate(): Promise<MediaDeviceInfo[]> {
+/** 장치 목록 — 못 모으면 null(빈 목록 「장치 0」과 「못 쟀다」를 가른다 — 연:RULE-AUX-PROBE-NO-INVENT) */
+export async function listDevices(): Promise<MediaDeviceInfo[] | null> {
   const md = media()
-  if (!md) return []
-  try { return await md.enumerateDevices() } catch { return [] }
+  if (!md) return null
+  try { return await md.enumerateDevices() } catch { return null }
+}
+
+export async function enumerate(): Promise<MediaDeviceInfo[]> {
+  return (await listDevices()) ?? []
 }
 
 /** 장치 목록 바뀜을 듣는다 — Source 블록의 손잡이(SDK:IMPL-SRC-BLOCKS) */
@@ -147,14 +152,14 @@ export function userAgent(): string {
   return typeof navigator !== 'undefined' ? navigator.userAgent : ''
 }
 
-/** 환경 요약 — probe env(SDK:IMPL-DIAG-PROBE) */
-export function describe(): Record<string, unknown> {
-  const out: Record<string, unknown> = { ua: userAgent() }
+/** 환경 요약 — probe env(SDK:IMPL-DIAG-PROBE) · 아는 칸만 싣고 하나도 모르면 null(칸을 뺀다 — 지어내지 않는다) */
+export function describe(): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {}
   if (typeof navigator !== 'undefined') {
-    out['platform'] = navigator.platform
-    out['language'] = navigator.language
-    out['online'] = navigator.onLine
+    for (const [k, v] of [['ua', navigator.userAgent], ['platform', navigator.platform], ['language', navigator.language], ['online', navigator.onLine]] as const) {
+      if (v !== undefined && v !== null && v !== '') out[k] = v
+    }
   }
-  if (typeof document !== 'undefined') out['visibility'] = document.visibilityState
-  return out
+  if (typeof document !== 'undefined' && document.visibilityState) out['visibility'] = document.visibilityState
+  return Object.keys(out).length ? out : null
 }

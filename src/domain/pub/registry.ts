@@ -1,6 +1,6 @@
 // author: kodeholic (powered by Claude)
 // spec: v1.2 @d626fda · SDK:IMPL-PUB-API acquire · enable* · publish · SDK:RULE-SRC-PROFILE · SDK:RULE-SRC-DEVICES · SDK:IMPL-SRC-BLOCKS Source · SDK:RULE-ROOM-PERMISSION-BITS 자동 발행을 멈춘다 · SDK:RULE-MOD-TEARDOWN · SDK:IMPL-MOD-TABLE media-registry · SDK:RULE-MOD-AREA-MIRROR domain/pub · model: claude-opus-5-5
-// 옛 domain/media-registry.ts 의 발행 몫(로컬 트랙 목록 · 획득 · 장치 정책)을 다시 지었다 — 재생(Playback)은 trk/ · 진단 수집은 ses/diag 로 옮겼다.
+// 옛 domain/media-registry.ts 의 발행 몫(로컬 트랙 목록 · 획득 · 장치 정책)을 다시 지었다 — 재생(Playback)은 trk/ · 진단 수집은 domain/diag(가로지름) 로 옮겼다.
 import type { Publication } from '../../internal/wire/ws.js'
 import { Emitter } from '../../platform/emitter.js'
 import { stateFault } from '../../platform/fault.js'
@@ -24,6 +24,21 @@ class Ids {
   }
 }
 
+/** 'default' 는 OS 기본의 별칭이다 — 같은 kind · groupId 의 실제 장치로 정규화하고 겹친 것은 하나만 남긴다(SDK:RULE-SRC-DEVICES · 선례 LiveKit normalizeDeviceId) · groupId 가 없으면(권한 전) 가르지 못하니 그대로 둔다 */
+export function normalizeDevices(list: readonly MediaDeviceInfo[]): MediaDeviceInfo[] {
+  const out: MediaDeviceInfo[] = []
+  const seen = new Set<string>()
+  for (const d of list) {
+    const real = d.deviceId === 'default' && d.groupId ? list.find((x) => x.kind === d.kind && x.groupId === d.groupId && x.deviceId !== 'default') : undefined
+    const x = real ?? d
+    const k = `${x.kind}:${x.deviceId}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(x)
+  }
+  return out
+}
+
 export interface DeviceChange { added: MediaDeviceInfo[]; removed: MediaDeviceInfo[]; list: MediaDeviceInfo[] }
 
 /**
@@ -39,12 +54,15 @@ export class MediaRegistry {
   readonly opusLine: string
   coldAfter: number
   private lastDevices: MediaDeviceInfo[] = []
+  /** 핫플러그 견줌의 기준선 — 만들 때 한 번 센다(안 세면 첫 devicechange 가 있던 장치까지 added 로 낸다) */
+  private readonly seeded: Promise<void>
 
   constructor(readonly cfg: PubSettings, readonly book: LogBook, readonly links: ReadonlyMap<string, LinkCore>, readonly aff: AffCore) {
     this.log = book.scope('pub')
     this.opusLine = opusFmtpLine(cfg.opusFmtpDefault)
     this.coldAfter = cfg.micColdAfterMs
     const md = deviceChanges()
+    this.seeded = md ? enumerate().then((l) => { this.lastDevices = l }) : Promise.resolve()
     if (md) md.addEventListener('devicechange', () => void this.devicesChanged())
   }
 
@@ -167,6 +185,7 @@ export class MediaRegistry {
   }
 
   private async devicesChanged(): Promise<void> {
+    await this.seeded
     const list = await enumerate()
     const key = (d: MediaDeviceInfo): string => `${d.kind}:${d.deviceId}`
     const before = new Set(this.lastDevices.map(key))
@@ -198,8 +217,9 @@ export class MediaRegistry {
         t.stop()
       } catch { /* 권한이 없다 — 목록은 그대로 */ }
     }
-    const list = await enumerate()
-    this.lastDevices = list
+    const raw = await enumerate()
+    this.lastDevices = raw
+    const list = normalizeDevices(raw)
     return kind ? list.filter((d) => d.kind === kind) : list
   }
 

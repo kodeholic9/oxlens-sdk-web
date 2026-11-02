@@ -19,7 +19,7 @@ import type { LinkCore, LinkInfo } from '../link/core.js'
 import { MediaRegistry } from '../pub/registry.js'
 import type { LocalCore } from '../pub/local.js'
 import { SesClock } from './clock.js'
-import { Diag } from './diag.js'
+import { Diag } from '../diag.js'
 
 export type SessionState = 'disconnected' | 'connecting' | 'active' | 'resuming'
 export type Health = 'ok' | 'degraded' | 'recovering' | 'offline'

@@ -60,12 +60,12 @@ export interface TrackOptions {
   readonly frameRate?: number
 }
 
+/** LocalTrack 이벤트 — state · owner 는 이벤트 없이 속성으로 읽는다(SDK:IMPL-API-EVENT-MAP LocalTrack.state) */
 export interface LocalEvents extends Record<string, unknown[]> {
   ended: [{ reason: EndReason }]
   silence: []
   published: []
   publishFailed: [Fault]
-  state: [LocalState]
 }
 
 /** 입구 표의 입구 — 위 결합(pub_binding)의 ENTRY 열쇠 그대로 */
@@ -115,8 +115,6 @@ export class LocalCore {
   private retried3008 = false
   /** 다음 트랜시버 확보는 새 트랜시버로(3008 재시도 한 번) */
   private freshSlot = false
-  /** 앱에 마지막으로 낸 state — 같은 값은 다시 내지 않는다 */
-  private shown: LocalState
   private silenceChecked = false
   /** 지금 넣는 사건이 실어 온 실패 — 위가 app.publish_failed 를 내면 이것으로 알린다 */
   private lastFault: Fault | null = null
@@ -130,7 +128,6 @@ export class LocalCore {
     this.opts = opts
     this.simulcast = kind === 'video' && source === 'camera' && opts.simulcast === true
     this.coldTimer = new Timer(media.cfg.wakeDetectMs)
-    this.shown = this.state
     this.watchTrack(track)
   }
 
@@ -201,18 +198,9 @@ export class LocalCore {
     for (const a of plan.actions) this.action(a)
     for (const sm of plan.seams) this.seam(sm.fx)
     for (const e of plan.events) this.emit(e)
-    this.show()
     // 발행 등록이 섰다 — Encoder 가 sender 에 트랙을 얹는다(입구 attach 의 사실)
     if (prev.ps === 'STAGED' && plan.state.ps === 'REGISTERED' && this.st === plan.state) void this.attach()
     for (const tx of plan.send) this.send(tx)
-  }
-
-  /** state 는 값이 바뀔 때만 */
-  private show(): void {
-    const s = this.state
-    if (s === this.shown) return
-    this.shown = s
-    this.events.emit('state', s)
   }
 
   // ── 효과 표 — 동작 · 이벤트는 결합(effect)이 정한다 · 덧붙임만 여기 ─────
@@ -335,7 +323,11 @@ export class LocalCore {
   /** 연결이 새로 섰다 — 협상을 기다리는 발행이면 트랜시버를 확보한다 */
   wantsSlot(): boolean { return this.st.ps === 'STAGED' && this.slot === null }
 
-  private layers(): readonly Layer[] { return this.opts.encoding?.layers ?? this.media.cfg.simulcastLayers }
+  /** 시뮬캐스트 레이어 — sendEncodings 는 낮은 품질부터(축소 큰 것 → 원본 · 같으면 비트레이트 낮은 것부터 — SDK:RULE-SRC-PROFILE · 연:RULE-LINK-SDP-PUB-MLINE) · 앱이 준 순서가 달라도 맞춘다 */
+  private layers(): readonly Layer[] {
+    const ls = this.opts.encoding?.layers ?? this.media.cfg.simulcastLayers
+    return [...ls].sort((a, b) => (b.scaleResolutionDownBy ?? 1) - (a.scaleResolutionDownBy ?? 1) || (a.maxBitrate ?? 0) - (b.maxBitrate ?? 0))
+  }
 
   /** opus answer fmtp — 방 고정값 하나 · 트랙별 dtx · fec · stereo 는 wire 에 닿지 않는다(로그 — SDK:RULE-SRC-PROFILE 증상) */
   private opusLine(): string {
@@ -455,7 +447,7 @@ export class LocalCore {
   /** 발행 — 입구 on · 기준 방은 부르는 쪽이 고른다(enable* · publish = 발언 방 · ptt.enable = 그 방) · resolve 때 owner 가 sdk(external 은 그대로) */
   publish(roomId: string, duplex: 'full' | 'half'): Promise<void> {
     return this.locked(async () => {
-      if (this.ended) throw closedFault('ENDED')
+      if (this.ended) throw closedFault()
       const room = this.media.aff.pubRoom(roomId)
       if (!room) throw stateFault('STATE_NOT_JOINED', { room: roomId })
       if (!bitIn(room, this.kind, this.source)) throw stateFault('STATE_NO_PERMISSION', { denied: [bitOf(this.kind, this.source)] })
@@ -500,16 +492,16 @@ export class LocalCore {
     this.coldTimer.stop()
     if (stopSource) { this.track.stop(); this.deviceTrack?.stop() }
     this.media.unregister(this)
-    this.show()
     this.events.emit('ended', { reason })
     for (const f of this.media.aff.floorsOn(this.sfuId)) f.surface()
   }
 
-  // ── 트랙 설정(연:PUB.op.TRACK_SET) ───────────────────────────────────
+  // ── 트랙 설정(연:PUB.op.TRACK_SET) — 끝난 트랙(닫힌 핸들)의 조작은 closed · CLOSED(SDK:IMPL-ERR-TYPE) ──
 
   /** mute — 손잡이는 track.enabled(인코더는 돈다) · 반이중은 mute 가 없다(wire 전에 거절) · 발행 전이면 로컬만 */
   setMuted(m: boolean): Promise<void> {
     return this.locked(async () => {
+      if (this.ended) throw closedFault()
       if (this.duplex === 'half') throw stateFault('STATE_HALF_DUPLEX_NO_MUTE')
       const link = this.link
       if (!this.trackId || !this.roomId || !link) { this.muted = m; this.track.enabled = !m; return }
@@ -526,6 +518,7 @@ export class LocalCore {
    */
   setDuplex(d: 'full' | 'half'): Promise<void> {
     return this.locked(async () => {
+      if (this.ended) throw closedFault()
       if (d === this.duplex) return
       const base = this.media.aff.speakingRoom
       if (!base) throw stateFault('STATE_NO_SPEAKING_ROOM')
@@ -552,13 +545,13 @@ export class LocalCore {
       }
       const sender = this.sender
       if (sender) await this.applyEncoding(sender)
-      this.show()
       for (const f of this.media.aff.floorsOn(this.sfuId)) f.surface()
     })
   }
 
   setEncoding(e: VideoEncoding & AudioEncoding): Promise<void> {
     return this.locked(async () => {
+      if (this.ended) throw closedFault()
       this.opts = { ...this.opts, encoding: { ...(this.opts.encoding ?? {}), ...e } }
       const sender = this.sender
       if (sender) await this.applyEncoding(sender)
@@ -570,6 +563,7 @@ export class LocalCore {
   /** 소스 교체 — Encoder.source 갱신 · 게이트가 열려 있을 때만 sender 에 얹는다(SSRC · 발행 · 발언권 보존) */
   replaceSource(t: MediaStreamTrack | null): Promise<void> {
     return this.locked(async () => {
+      if (this.ended) throw closedFault()
       if (t) {
         if (this.owner === 'sdk' && !this.deviceTrack) this.deviceTrack = this.track
         this.track = t

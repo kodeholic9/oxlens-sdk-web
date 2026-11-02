@@ -29,6 +29,8 @@ export class Subscription {
   private readyFault: Fault | null = null
   private queue = new Map<string, LayerTarget>()
   private waiters: Waiter[] = []
+  /** 트랙마다 마지막으로 요청한 레이어 상한 — probe sub_tracks 의 spatial · temporal · paused(SDK:IMPL-DIAG-PROBE) */
+  readonly asked = new Map<string, LayerTarget>()
 
   constructor(private readonly room: RoomCore) {}
 
@@ -61,6 +63,7 @@ export class Subscription {
   setLayer(t: LayerTarget): Promise<void> {
     const cur = this.queue.get(t.track_id) ?? { track_id: t.track_id }
     this.queue.set(t.track_id, { ...cur, ...t })
+    this.asked.set(t.track_id, { ...(this.asked.get(t.track_id) ?? {}), ...t })
     return new Promise((resolve, reject) => {
       this.waiters.push({ resolve, reject })
       this.enter('layer', 'app', [])

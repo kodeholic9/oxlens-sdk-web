@@ -22,7 +22,7 @@ export async function main(): Promise<void> {
   client.on('closed', (e) => { if (e.retryable) void client.connect() })            // 백오프 소진 → 다시
 
   // ★트랙 리스너는 join 전에 client 레벨로 — join 과 room.on 사이의 await(enable)가 초기 트랙을 놓치게 한다(§6-2).
-  client.on('track', (_room, t) => { if (t.kind === 'video' && t.slot) app.ui.video(t.mediaStreamTrack) })   // 무전 슬롯 영상(userId 없음)
+  client.on('track', (_room, t) => { if (t.kind === 'video' && t.type === 'slot') app.ui.video(t.mediaStreamTrack) })   // 무전 슬롯 영상(userId 없음)
   client.on('audioPlayback', (ok) => { if (!ok) app.ui.status('tap to enable audio') })
 
   try { await client.connect() }
@@ -40,7 +40,7 @@ export async function main(): Promise<void> {
 
   ptt.on('state', (s) => { app.ui.ptt(s); app.button.disabled = !s.canRequest && s.phase !== 'has_permission' && s.phase !== 'queued' })
   ptt.on('speaker', (e) => app.ui.speaker(e.userId))
-  app.button.addEventListener('pointerdown', () => { void client.media.audio.startAudio() }, { once: true })
+  app.button.addEventListener('pointerdown', () => { void client.media.startAudio() }, { once: true })
   room.on('error', (e) => app.ui.status(`background: ${e.name}`))
 
   // ★토글은 로컬 플래그가 아니라 phase 로 가른다 — 큐 승계 뒤(acceptPending)의 "다시 누르기"는 수락, 그 전의 queued 클릭은 철회다.
@@ -61,7 +61,7 @@ export async function main(): Promise<void> {
     else if (e instanceof OxLensError && e.category === 'device') app.ui.status(`camera blocked by ${String(e.details?.['blockedBy'])}`)
     else throw e
   }
-  cam?.on('ended', (e) => { if (e.reason === 'server_lost') app.ui.status('server forgot the camera — enable again') })   // RESUME publish_failed
+  cam?.on('ended', (e) => { if (e.reason === 'device_lost') app.ui.status('camera lost — enable again') })   // 대체 장치 없음 — 다시 켜는 것은 앱(재접속 재발행은 SDK 몫)
 
   window.addEventListener('pagehide', () => { void cam?.stop(); void client.close() })
 }

@@ -25,10 +25,10 @@ export async function main(): Promise<void> {
   client.on('closed', (e) => app.ui.warn(`closed ${e.code} ${e.name} retryable=${e.retryable}`))
   client.on('speakingRoom', (r) => app.ui.speakingChannel(r?.id ?? null))       // 지금 송신 채널
   client.on('audioPlayback', (ok) => { if (!ok) app.ui.warn('click anywhere to enable audio') })   // autoplay 정책
-  window.addEventListener('click', () => { void client.media.audio.startAudio() }, { once: true })
+  window.addEventListener('click', () => { void client.media.startAudio() }, { once: true })
   // ★트랙은 client 레벨에서, join 전에 건다 — 초기 트랙(join resolve 다음 tick)을 allSettled 뒤의 루프가 놓치지 않는다(§6-2).
   client.on('track', (room, t) => { if (t.kind === 'video') app.ui.attachVideo(room.id, t) })   // ui 는 t.attach(el) 로 붙인다 → adaptiveStream 이 안 보는 채널을 멈춘다. 오디오는 SDK 가 재생한다
-  client.on('trackUnreachable', (room, t) => app.ui.warn(`${room.id}: track ${t.id} unreachable (mid exhausted)`))
+  client.on('link', (l) => { if (l.state === 'rebuilding') app.ui.warn(`${l.server}: media lost, rebuilding`) })   // 서버 하나의 재구축 — 그 서버 방들 room.rebuilding
 
   try {
     await client.connect()
@@ -49,7 +49,7 @@ export async function main(): Promise<void> {
   for (const room of rooms) {
     room.on('participants', (list) => app.ui.roster(room.id, list))                // mode 로 청취/참여 구분(입장 시점 select — 자격 아님)
     room.on('forced', (e) => app.ui.warn(`${room.id}: removed by server (${e.cause})`))
-    room.on('rebuilding', () => app.ui.warn(`${room.id}: media lost, rebuilding`))
+    room.on('trackUnreachable', (t) => app.ui.warn(`${room.id}: track ${t.id} unreachable (mid exhausted)`))   // 줄이 오면 track 으로 온다
     room.on('error', (e) => app.ui.warn(`${room.id}: background failure ${e.name}`))
     room.ptt.on('speaker', (e) => app.ui.speaker(room.id, e.userId))              // 화자 표시는 발언권 축 하나(연§11-6)
     room.audio.setVolume(0.6)                                                       // 모니터링 채널은 낮게

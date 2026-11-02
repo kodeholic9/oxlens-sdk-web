@@ -7,7 +7,7 @@ import type { FloorCore, PttState as CorePttState, PressSource } from '../domain
 import type { Participant, Permission } from '../domain/room/store.js'
 import type { LinkState } from '../domain/link/core.js'
 import type { Core } from '../domain/ses/core.js'
-import { Fault, fromFailure, stateFault } from '../platform/fault.js'
+import { Fault, fromFailure, stateFault, closedFault } from '../platform/fault.js'
 import { OxLensError, toError, wrap } from './errors.js'
 
 type Fn<A extends unknown[]> = (...a: A) => void
@@ -58,6 +58,8 @@ export class Room {
   leave(): Promise<void> { return wrap(this.core.leave()) }
 
   async sendMessage(content: string): Promise<{ msgId: string }> {
+    // 닫힌 방 핸들은 wire 에 닿지 않는다 — closed · CLOSED(SDK:IMPL-ERR-TYPE 닫힌 핸들에 API)
+    if (this.core.closed) throw toError(closedFault())
     const r = await wrap(this.core.core.sig.request('MESSAGE', { room_id: this.id, content }))
     if (!r.ok) throw toError(fromFailure(r.body))
     return { msgId: String((r.body as { msg_id?: string }).msg_id ?? '') }
@@ -168,7 +170,6 @@ export class LocalTrack {
   on(name: 'ended', fn: Fn<[{ reason: EndReason }]>): Off
   on(name: 'silence' | 'published', fn: Fn<[]>): Off
   on(name: 'publishFailed', fn: Fn<[OxLensError]>): Off
-  on(name: 'state', fn: Fn<[LocalState]>): Off
   on(name: string, fn: Fn<never[]>): Off {
     const f = fn as unknown as Fn<unknown[]>
     return this.core.events.on(name, ((...a: unknown[]) => f(...a.map(mapArg))) as never)
