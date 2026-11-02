@@ -1,0 +1,148 @@
+{
+ "generated": "spec/tools/deps.py — 손으로 고치지 않는다",
+ "set": "sdk",
+ "side": "client",
+ "rule": "불러도 되는 영역 = 관계의 직접 대상 ∪ 이음매의 직접 대상(닫힘 아님) · 가로지르는 것은 표 밖(재생성이 잰다)",
+ "concepts": [
+  "SES",
+  "ROOM",
+  "AFF",
+  "FLR",
+  "PUB",
+  "TRK",
+  "LINK"
+ ],
+ "aspects": [
+  "DOC",
+  "API",
+  "ERR",
+  "SRC",
+  "MOD",
+  "DIAG",
+  "PLAT"
+ ],
+ "fold": {
+  "SUB": "TRK"
+ },
+ "relation_cycles": [],
+ "areas": {
+  "AFF": {
+   "relation": [
+    "ROOM"
+   ],
+   "seam": [
+    "FLR"
+   ],
+   "may_use": [
+    "FLR",
+    "ROOM"
+   ],
+   "known_area": true
+  },
+  "FLR": {
+   "relation": [
+    "AFF",
+    "PUB",
+    "ROOM"
+   ],
+   "seam": [
+    "PUB"
+   ],
+   "may_use": [
+    "AFF",
+    "PUB",
+    "ROOM"
+   ],
+   "known_area": true
+  },
+  "LINK": {
+   "relation": [
+    "SES"
+   ],
+   "seam": [
+    "FLR",
+    "PUB",
+    "ROOM",
+    "TRK"
+   ],
+   "may_use": [
+    "FLR",
+    "PUB",
+    "ROOM",
+    "SES",
+    "TRK"
+   ],
+   "known_area": true
+  },
+  "PUB": {
+   "relation": [
+    "AFF",
+    "LINK"
+   ],
+   "seam": [
+    "FLR",
+    "LINK"
+   ],
+   "may_use": [
+    "AFF",
+    "FLR",
+    "LINK"
+   ],
+   "known_area": true
+  },
+  "ROOM": {
+   "relation": [
+    "LINK",
+    "SES"
+   ],
+   "seam": [
+    "AFF",
+    "FLR",
+    "LINK",
+    "PUB",
+    "TRK"
+   ],
+   "may_use": [
+    "AFF",
+    "FLR",
+    "LINK",
+    "PUB",
+    "SES",
+    "TRK"
+   ],
+   "known_area": true
+  },
+  "SES": {
+   "relation": [],
+   "seam": [
+    "FLR",
+    "LINK",
+    "PUB",
+    "ROOM"
+   ],
+   "may_use": [
+    "FLR",
+    "LINK",
+    "PUB",
+    "ROOM"
+   ],
+   "known_area": true
+  },
+  "TRK": {
+   "relation": [
+    "LINK",
+    "ROOM"
+   ],
+   "seam": [
+    "LINK",
+    "PUB"
+   ],
+   "may_use": [
+    "LINK",
+    "PUB",
+    "ROOM"
+   ],
+   "known_area": true
+  }
+ }
+}
