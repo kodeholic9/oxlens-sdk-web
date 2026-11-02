@@ -8,11 +8,11 @@ import * as TRK from './gen/trk_client.js'
 import * as TB from './gen/trk_binding.js'
 import * as AFF from './gen/aff_client.js'
 import type { RoomJoinRes, MemberInfo, ParticipantStateBody, ParticipantEventBody, TrackEventBody, TrackStateBody, GetRoomRes, RoomSnapshot, Version } from '../internal/wire/ws.js'
-import type { Reply } from '../internal/signaling.js'
+import type { Reply } from '../internal/ses/signaling.js'
 import { Emitter } from '../platform/emitter.js'
 import { Fault, fromFailure, closedFault, negotiationFault } from '../platform/fault.js'
 import { sleep } from '../platform/clock.js'
-import type { Core } from './session.js'
+import type { Core } from './ses/core.js'
 import { RoomStore, participantOf, permissionOf, ALL_TRUE, type Participant, type Permission } from './store.js'
 import { FloorCore } from './floor.js'
 import { RemoteCore, type RemoteInfo } from './remote.js'
@@ -168,12 +168,12 @@ export class RoomCore {
       }
     }
     // select:true 는 발언 방이 없고 전환이 안 떠 있을 때만(연:RULE-ROOM-JOIN-START 2) · 4009 되풀이는 앞 입장이 건 기다림을 그대로 잇는다
-    const aff = this.core.aff
+    const aff = this.core.rooms.aff.st
     if (aff.wait === 'JOIN' && aff.want === this.id) this.joinSel = true
     else {
       const js = this.mode === 'talk' ? AFF.joinSelect(aff, this.id) : null
       this.joinSel = js !== null
-      if (js) this.core.affStep('joinSelect', js, 'app')
+      if (js) this.core.rooms.aff.step('joinSelect', js, 'app')
     }
     body['select'] = this.joinSel
     let r: Reply
@@ -253,16 +253,17 @@ export class RoomCore {
         for (const other of core.roomsOn(this.sfuId)) if (other !== this) other.roomStep('subRooms', ROOM.subRooms(other.st, listed.includes(other.id)), 'ROOM_JOIN.sub_rooms')
         break
       }
-      case 'aff.leave': core.affStep('left', AFF.left(core.aff, this.id), label); break
+      case 'aff.leave': core.rooms.aff.step('left', AFF.left(core.rooms.aff.st, this.id), label); break
       case 'aff.implicit': {
         // 위 이음매 — 입장 응답의 affiliation(SDK:IMPL-AFF-SPEAKING-ROOM 입구 implicit) · p 는 그 방이 응답의 sub_rooms 에 있을 때만 · onPub = 지금 발언 방이 이 응답을 낸 서버의 방
         const a = this.lastJoin?.affiliation
         const p = a && a.pub_room !== null && a.sub_rooms.includes(a.pub_room) ? a.pub_room : 'NONE'
-        const onPub = core.aff.pub !== 'NONE' && core.rooms.get(core.aff.pub)?.sfuId === this.sfuId
-        core.affStep('implicit', AFF.implicit(core.aff, this.id, this.joinSel, p, onPub), label)
+        const aff = core.rooms.aff
+        const onPub = aff.st.pub !== 'NONE' && core.rooms.get(aff.st.pub)?.sfuId === this.sfuId
+        aff.step('implicit', AFF.implicit(aff.st, this.id, this.joinSel, p, onPub), label)
         break
       }
-      case 'aff.join_failed': core.affStep('joinFailed', AFF.joinFailed(core.aff, this.id), label); break
+      case 'aff.join_failed': core.rooms.aff.step('joinFailed', AFF.joinFailed(core.rooms.aff.st, this.id), label); break
       case 'floor.join': this.floor.join(); break
       case 'floor.leave': this.floor.leave(); break
       case 'sub.drop': this.subStep('dropRoom', SUB.dropRoom(this.sub), label); break
@@ -281,7 +282,8 @@ export class RoomCore {
   private roomEffect(f: ROOM.Fx, label: string): void {
     const e = RB.effect(f).event
     if (e === 'joined') {
-      this.rebuilding = false
+      // 재구축이 끝났다 — recovering · health 는 세션 표면이 한 곳에서 다시 잰다
+      if (this.rebuilding) { this.rebuilding = false; this.core.surface() }
       this.joinPending = true
       setTimeout(() => this.finishJoin(), JOIN_SETTLE_MS)
       this.events.emit('joined')
@@ -325,7 +327,7 @@ export class RoomCore {
     for (const r of this.remotes.values()) r.end()
     this.remotes.clear()
     this.floor.dispose()
-    this.core.dropRoom(this)
+    this.core.rooms.drop(this)
     this.events.emit('state', 'closed')
   }
 

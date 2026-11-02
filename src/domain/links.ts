@@ -7,7 +7,7 @@ import { PeerLink } from '../internal/transport.js'
 import * as Mbcp from '../internal/mbcp.js'
 import { Timer, wall } from '../platform/clock.js'
 import { Fault, fromFailure } from '../platform/fault.js'
-import type { Core } from './session.js'
+import type { Core } from './ses/core.js'
 import { TableStore } from './store.js'
 
 export type LinkState = 'connecting' | 'up' | 'wobbly' | 'restarting' | 'rebuilding' | 'closed'

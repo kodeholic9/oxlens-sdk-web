@@ -6,7 +6,7 @@ import * as ROOM from '../src/domain/gen/room_client.js'
 import * as AFF from '../src/domain/gen/aff_client.js'
 import { RoomCore } from '../src/domain/rooms.js'
 import type { MemberInfo, Permission, RoomSnapshot } from '../src/internal/wire/ws.js'
-import type { Core } from '../src/domain/session.js'
+import type { Core } from '../src/domain/ses/core.js'
 
 const ALL: Permission = { publish_audio: true, publish_video: true, publish_screen: true, floor_request: true }
 const NO_FLOOR: Permission = { ...ALL, floor_request: false }
@@ -64,7 +64,7 @@ test('연:DEV-ROOM-HIDDEN-SELF-PSTATE — version 없는 내 PARTICIPANT_STATE �
 /** 방을 내리거나 트랙을 붙이는 길이 지나는 곳만 더한 가짜(소속 · 연결 없음) */
 function fakeWide(): { core: Core; sent: { op: string; body: unknown }[] } {
   const f = fake()
-  Object.assign(f.core, { aff: AFF.initial(), affStep: () => undefined, rooms: new Map(), roomsOn: () => [], linkFor: () => undefined })
+  Object.assign(f.core, { rooms: Object.assign(new Map(), { aff: { st: AFF.initial(), step: () => undefined }, drop: () => undefined }), roomsOn: () => [], linkFor: () => undefined })
   return f
 }
 

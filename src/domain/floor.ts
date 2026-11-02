@@ -7,7 +7,7 @@ import * as Mbcp from '../internal/mbcp.js'
 import { Emitter } from '../platform/emitter.js'
 import { Timer, now, wall } from '../platform/clock.js'
 import { Fault, closedFault } from '../platform/fault.js'
-import type { Core } from './session.js'
+import type { Core } from './ses/core.js'
 import type { RoomCore } from './rooms.js'
 
 export type Phase = 'off' | 'no_permission' | 'pending_request' | 'has_permission' | 'pending_release' | 'queued'
@@ -142,7 +142,7 @@ export class FloorCore {
       await this.core.media.ensureHalfMic(this.room)
       if (this.stopIfCancelled()) return
       this.stage('select')
-      if (this.core.speakingRoom !== this.room.id) await this.core.setSpeakingRoom(this.room.id)
+      if (this.core.rooms.aff.speakingRoom !== this.room.id) await this.core.rooms.aff.setSpeakingRoom(this.room.id)
       if (this.stopIfCancelled()) return
       for (;;) {
         const link = this.room.link

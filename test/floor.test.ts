@@ -8,7 +8,7 @@ import * as C from '../src/internal/wire/floor_codec.js'
 import * as Mbcp from '../src/internal/mbcp.js'
 import * as FLR from '../src/domain/gen/floor_client.js'
 import { RoomCore } from '../src/domain/rooms.js'
-import type { Core } from '../src/domain/session.js'
+import type { Core } from '../src/domain/ses/core.js'
 
 interface Rig { room: RoomCore; speakers: (string | null)[]; acks: number[]; sent: number[]; rx(m: C.Message): void }
 

@@ -6,7 +6,7 @@ import { LocalCore, type LocalState, type Owner, type EndReason, type TrackOptio
 import type { FloorCore, PttState as CorePttState, PressSource } from '../domain/floor.js'
 import type { Participant, Permission } from '../domain/store.js'
 import type { LinkState } from '../domain/links.js'
-import type { Core } from '../domain/session.js'
+import type { Core } from '../domain/ses/core.js'
 import { Fault, fromFailure, stateFault } from '../platform/fault.js'
 import { OxLensError, toError, wrap } from './errors.js'
 
@@ -219,7 +219,7 @@ export class RemoteTrack {
 
 /** 발언 방 기준 — 발행에 쓰는 방 · 없으면 STATE_NO_SPEAKING_ROOM */
 export function speakingRoomCore(core: Core): RoomCore {
-  const id = core.speakingRoom
+  const id = core.rooms.aff.speakingRoom
   const r = id ? core.rooms.get(id) : undefined
   if (!r) throw toError(stateFault('STATE_NO_SPEAKING_ROOM'))
   return r

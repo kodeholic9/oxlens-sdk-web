@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { decodeFrame, encodeFrame, FrameError, MAX_FRAME } from '../src/internal/signaling.js'
+import { decodeFrame, encodeFrame, FrameError, MAX_FRAME } from '../src/internal/ses/signaling.js'
 
 declare const __SPEC_VECTORS__: string
 

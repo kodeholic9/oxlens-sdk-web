@@ -9,7 +9,7 @@ import { Emitter } from '../platform/emitter.js'
 import { Fault, fromFailure, stateFault, closedFault, negotiationFault } from '../platform/fault.js'
 import { capture, enumerate, permission, deviceChanges, describe, canSetSink, documentTarget, type DeviceKind, type PermState } from '../platform/env.js'
 import { Timer, sleep } from '../platform/clock.js'
-import type { Core } from './session.js'
+import type { Core } from './ses/core.js'
 import type { RoomCore } from './rooms.js'
 import type { Layer } from './defaults.js'
 
@@ -432,7 +432,7 @@ export class LocalCore {
   setDuplex(d: 'full' | 'half'): Promise<void> {
     return this.locked(async () => {
       if (d === this.duplex) return
-      const base = this.core.speakingRoom
+      const base = this.core.rooms.aff.speakingRoom
       if (!base) throw stateFault('STATE_NO_SPEAKING_ROOM')
       if (!this.trackId) throw stateFault('STATE_NOT_PUBLISHED')
       const r = await this.core.sig.request('TRACK_SET', { room_id: base, track_id: this.trackId, duplex: d })
@@ -798,7 +798,7 @@ export class MediaRegistry {
         session: this.core.sessionState,
         rooms: [...this.core.rooms.values()].map((x) => ({ room_id: x.id, state: x.state, floor: x.floor.phase, link: x.link?.state ?? null })),
         links: [...this.core.links.values()].map((l) => l.info()),
-        pub_room: this.core.speakingRoom,
+        pub_room: this.core.rooms.aff.speakingRoom,
       }
       if (reports.length) r.network = Probe.network(reports)
     } catch (e) {

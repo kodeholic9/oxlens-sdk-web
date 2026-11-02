@@ -1,11 +1,11 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/signaling · 연:TRN.frame.WS · 연:RULE-TRN-FLOW-CONTROL · 연:RULE-TRN-NOTIFY-ACK-STEPS · 연:RULE-LINK-RECOVERY-WS-FIRST · model: claude-opus-5-5
-import { Op, Lane, type OpName, type LeaveBody } from './wire/ws.js'
-import { openSocket, wsUrl } from '../platform/net.js'
-import { closedFault, type Fault } from '../platform/fault.js'
-import { Queue } from '../platform/queue.js'
-import { now } from '../platform/clock.js'
-import type { Logger } from '../platform/log.js'
+// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/signaling(SES 의 연결 — internal/ses) · 연:TRN.frame.WS · 연:RULE-TRN-FLOW-CONTROL · 연:RULE-TRN-NOTIFY-ACK-STEPS · 연:RULE-LINK-RECOVERY-WS-FIRST · model: claude-opus-5-5
+import { Op, Lane, type OpName, type LeaveBody } from '../wire/ws.js'
+import { openSocket, wsUrl } from '../../platform/net.js'
+import { closedFault, type Fault } from '../../platform/fault.js'
+import { Queue } from '../../platform/queue.js'
+import { now } from '../../platform/clock.js'
+import type { Logger } from '../../platform/log.js'
 
 const NAME_OF = new Map<number, OpName>(Object.entries(Op).map(([k, v]) => [v, k as OpName]))
 

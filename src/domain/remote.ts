@@ -5,7 +5,7 @@ import { Emitter } from '../platform/emitter.js'
 import { documentTarget } from '../platform/env.js'
 import { setPlayoutDelay } from '../platform/webrtc.js'
 import { bugFault } from '../platform/fault.js'
-import type { Core } from './session.js'
+import type { Core } from './ses/core.js'
 import type { RoomCore } from './rooms.js'
 
 export interface RemoteInfo {

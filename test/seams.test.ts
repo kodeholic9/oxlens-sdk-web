@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import * as ROOM from '../src/domain/gen/room_client.js'
 import * as FLR from '../src/domain/gen/floor_client.js'
 import { RoomCore } from '../src/domain/rooms.js'
-import type { Core } from '../src/domain/session.js'
+import type { Core } from '../src/domain/ses/core.js'
 
 function fakeCore(): Core {
   return {

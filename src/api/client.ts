@@ -1,6 +1,6 @@
 // author: kodeholic (powered by Claude)
 // spec: v1.2 @d626fda · SDK:RULE-API-HANDLES OxLensClient · SDK:IMPL-SES-API · SDK:IMPL-AFF-SPEAKING-ROOM · SDK:IMPL-PUB-API media · SDK:RULE-SRC-DEVICES · SDK:RULE-DIAG-EVENTS · model: claude-opus-5-5
-import { Core, type SessionInfo, type SessionState, type Health, type Quality, type Transition } from '../domain/session.js'
+import { Core, type SessionInfo, type SessionState, type Health, type Quality, type Transition } from '../domain/ses/core.js'
 import type { ClientOptions } from '../domain/defaults.js'
 import type { LinkInfo } from '../domain/links.js'
 import type { Participant } from '../domain/store.js'
@@ -161,7 +161,7 @@ export class OxLensClient {
   }
 
   get speakingRoom(): Room | null {
-    const id = this.core.speakingRoom
+    const id = this.core.rooms.aff.speakingRoom
     const r = id ? this.core.rooms.get(id) : undefined
     return r ? roomOf(r) : null
   }
@@ -173,10 +173,10 @@ export class OxLensClient {
   setToken(token: string): void { this.core.setToken(token) }
 
   async join(roomId: string, opts: { mode?: 'listen' | 'talk'; role?: number } = {}): Promise<Room> {
-    return roomOf(await wrap(this.core.join(roomId, opts)))
+    return roomOf(await wrap(this.core.rooms.join(roomId, opts)))
   }
 
-  setSpeakingRoom(roomId: string | null): Promise<void> { return wrap(this.core.setSpeakingRoom(roomId)) }
+  setSpeakingRoom(roomId: string | null): Promise<void> { return wrap(this.core.rooms.aff.setSpeakingRoom(roomId)) }
 
   /** 입장 전 미리보기 — 401 은 auth reject + tokenRequired */
   async preview(roomId: string): Promise<RoomPreview> {
