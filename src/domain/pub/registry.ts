@@ -63,15 +63,20 @@ export class MediaRegistry {
   halfMic(sfuId: string | null): LocalCore | undefined { return this.on(sfuId).find((t) => t.kind === 'audio' && t.duplex === 'half' && !t.ended) }
   halfMicCold(sfuId: string | null): boolean { return this.halfMic(sfuId)?.cold ?? false }
 
-  /** press 의 첫 단계 · ptt.enable — 그 방 서버에 반이중 마이크가 없으면 획득해 발행한다(기준 방 = 그 방) · 자기가 만든 트랙이 실패하면 정지 */
-  async ensureHalfMic(roomId: string, o: TrackOptions = {}): Promise<LocalCore> {
+  /** press 의 첫 단계 · ptt.enable — 그 방 서버에 반이중 마이크가 없으면 획득해(track 이면 그 외부 트랙으로) 발행한다(기준 방 = 그 방).
+   *  서버당 하나 — 옵션은 서버당 첫 것이 이긴다(뒤 것은 로그) · 자기가 만든 트랙이 실패하면 정지 */
+  async ensureHalfMic(roomId: string, o: TrackOptions & { track?: MediaStreamTrack } = {}): Promise<LocalCore> {
     const room = this.aff.pubRoom(roomId)
     if (!room) throw stateFault('STATE_NOT_JOINED', { room: roomId })
     const have = this.halfMic(room.sfuId)
-    if (have && have.st.ps !== 'IDLE') return have
+    if (have && have.st.ps !== 'IDLE') {
+      if (Object.keys(o).length) this.log.info('그 서버에 반이중 마이크가 이미 있다 — 서버당 첫 enable 의 옵션이 이긴다(뒤 것은 무시)', { server: room.sfuId, room: roomId })
+      return have
+    }
     if (!room.bits.publishAudio) throw stateFault('STATE_NO_PERMISSION', { denied: ['publish_audio'] })
-    const t = have ?? (await this.acquireOne('audio', 'microphone', { ...o, profile: o.profile ?? 'ptt' }, 'sdk'))
-    try { await t.publish(roomId, 'half') } catch (e) { if (!have) await t.stop(); throw e }
+    const { track, ...opts } = o
+    const t = have ?? (track ? this.external('audio', 'external', track, { ...opts, profile: opts.profile ?? 'ptt' }) : await this.acquireOne('audio', 'microphone', { ...opts, profile: opts.profile ?? 'ptt' }, 'sdk'))
+    try { await t.publish(roomId, 'half') } catch (e) { if (!have && !track) await t.stop(); throw e }
     return t
   }
 

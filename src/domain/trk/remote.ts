@@ -147,7 +147,13 @@ export class RemoteCore {
     if (this.watched === t) return
     this.watched = t
     this.receiving = false
-    const fire = (): void => { if (!this.receiving && this.watched === t && !this.ended) { this.receiving = true; this.events.emit('receiving') } }
+    const fire = (): void => {
+      if (this.receiving || this.watched !== t || this.ended) return
+      this.receiving = true
+      this.events.emit('receiving')
+      // 그 방 무전 슬롯 오디오가 닿았다 — 방을 지나 발언권 입구 rtpRx(SDK:IMPL-FLR-BUTTON 입구 표)
+      if (this.kind === 'audio' && this.type === 'slot') this.room.voiceArrived()
+    }
     if (!t.muted) void nextTick().then(fire)
     t.addEventListener('unmute', fire, { once: true })
   }

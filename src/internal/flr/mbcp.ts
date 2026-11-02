@@ -1,6 +1,6 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/mbcp · 연:TRN.frame.DC · 연:RULE-FLR-HEADER · 연:RULE-FLR-TLV · 연:RULE-FLR-ROOM-KEY · model: claude-opus-5-5
-import * as C from './wire/floor_codec.js'
+// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/mbcp · SDK:RULE-MOD-AREA-MIRROR internal/flr · 연:TRN.frame.DC · 연:RULE-FLR-HEADER · 연:RULE-FLR-TLV · 연:RULE-FLR-ROOM-KEY · model: claude-opus-5-5
+import * as C from '../wire/floor_codec.js'
 
 const SVC_FLOOR = 0x01
 const MAX_PAYLOAD = 65532

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as C from '../src/internal/wire/floor_codec.js'
-import * as Mbcp from '../src/internal/mbcp.js'
+import * as Mbcp from '../src/internal/flr/mbcp.js'
 
 declare const __SPEC_VECTORS__: string
 

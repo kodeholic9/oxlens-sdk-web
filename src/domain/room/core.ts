@@ -8,7 +8,7 @@ import { Emitter } from '../../platform/emitter.js'
 import { Fault, fromFailure, closedFault, negotiationFault } from '../../platform/fault.js'
 import { Timer, sleep } from '../../platform/clock.js'
 import type { Core } from '../ses/core.js'
-import { FloorCore } from '../floor.js'
+import { FloorCore } from '../flr/core.js'
 import { LinkCore } from '../link/core.js'
 import { RoomTracks } from '../trk/tracks.js'
 import type { RemoteCore, RemoteInfo } from '../trk/remote.js'
@@ -60,6 +60,7 @@ const JOIN_SETTLE_MS = 10_000
  * 절차는 위가 정한다 — 여기는 입구 표(어느 SDK 사건이 어느 입구를) · 효과 표(위 효과를 어느 표면으로) · 이음매 집행만.
  * 받는 트랙(트랙 · 구독 상태기)은 domain/trk 의 RoomTracks 가 들고, 위 이음매대로 직접 부른다.
  * TRK 는 세션 영역을 부르지 않는다(may_use) — 받는 쪽이 세션에서 쓰는 것(신원 · 기록 · 요청 · 클라이언트 track)은 방이 내준다.
+ * FLR 도 같다 — 발언권이 쓰는 DC 송신 · 연결 단계 · 슬롯 트랙 · 기록은 방이 내준다.
  */
 export class RoomCore {
   st: ROOM.St = ROOM.initial()
@@ -101,7 +102,7 @@ export class RoomCore {
   constructor(readonly core: Core, readonly id: string, opts: JoinOptions) {
     this.mode = opts.mode ?? 'listen'
     this.role = opts.role ?? 255
-    this.floor = new FloorCore(core, this)
+    this.floor = new FloorCore(this, core.media, core.rooms.aff, core.cfg, core.log)
     this.trk = new RoomTracks(this, core.media, core.rooms.playback, core.cfg, core.log)
     this.retryTimer = new Timer(core.cfg.wakeDetectMs)
     this.settleTimer = new Timer(core.cfg.wakeDetectMs)
@@ -148,6 +149,30 @@ export class RoomCore {
 
   /** 받는 트랙 목록이 바뀌었다 — 슬롯 화자 표면(발언권)이 다시 잰다 */
   tracksChanged(): void { this.floor.speakerTracks() }
+
+  /** 그 방 슬롯 오디오가 닿았다(첫 디코딩 프레임) — 발언권 입구 rtpRx */
+  voiceArrived(): void { this.floor.rtpRx() }
+
+  // ── 발언권(FLR)이 방을 지나 쓰는 것 — 발언권은 세션 · 연결 · 트랙 영역을 부르지 않는다(may_use) ─────
+
+  /** 세션이 끝났다 — press() 의 reject(closed) */
+  get sessionClosed(): boolean { return this.core.ses.cs === 'DISCONNECTED' }
+
+  /** 그 서버로 가는 발언권 길 — DC 가 열렸나 · 처음 세우는 중(transport) · 연결 복구 중(recovering) */
+  floorPath(): 'open' | 'transport' | 'recovering' {
+    const link = this.link
+    if (!link || link.state !== 'up') return link && link.everUp ? 'recovering' : 'transport'
+    return link.peer?.dcOpen ? 'open' : 'transport'
+  }
+
+  /** 발언권 메시지를 그 서버 DC 로 — 못 보내면 false(위 타이머가 다시 보낸다) */
+  sendFloor(bytes: Uint8Array): boolean { return this.link?.peer?.sendDc(bytes) ?? false }
+
+  /** 화자의 슬롯 트랙 — 줄이 선 무전 슬롯(연:RULE-FLR-SLOT-SPEAKER) */
+  slotTrackIds(): string[] { return [...this.trk.remotes.values()].filter((r) => r.type === 'slot' && r.row !== null).map((r) => r.id) }
+
+  /** 효과 media.render(playback.render) — 받은 슬롯 오디오를 그 방 room.audio 로 */
+  renderVoice(): void { for (const r of this.trk.remotes.values()) if (r.type === 'slot') r.applyPlayback() }
 
   joined(): Promise<RoomCore> {
     if (this.st.rs === 'JOINED') return Promise.resolve(this)

@@ -7,7 +7,7 @@ import { Emitter } from '../../platform/emitter.js'
 import type { Logger } from '../../platform/log.js'
 import { Fault, fromFailure, closedFault, stateFault } from '../../platform/fault.js'
 import type { RoomTable } from '../room/table.js'
-import type { FloorCore } from '../floor.js'
+import type { FloorCore } from '../flr/core.js'
 
 export interface AffEvents extends Record<string, unknown[]> {
   speakingRoom: [string | null]

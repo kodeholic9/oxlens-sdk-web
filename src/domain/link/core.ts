@@ -6,7 +6,7 @@ import type { ServerConfig, MlineTable, IceRestartRes } from '../../internal/wir
 import { PeerLink, type LinkFact } from '../../internal/link/transport.js'
 import type { Creds } from '../../internal/link/sdp.js'
 import type { Reply } from '../../internal/ses/signaling.js'
-import * as Mbcp from '../../internal/mbcp.js'
+import * as Mbcp from '../../internal/flr/mbcp.js'
 import { Timer, now, wall, type Fired } from '../../platform/clock.js'
 import { Fault, fromFailure } from '../../platform/fault.js'
 import type { Core } from '../ses/core.js'

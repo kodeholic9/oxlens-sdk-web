@@ -9,7 +9,7 @@ import { SA, SB, up, linkOf, drain, enter, joinBody, joinFrame, leaveFrame, type
 import * as AFF from '../src/domain/gen/aff_client.js'
 import * as AB from '../src/domain/gen/aff_binding.js'
 import * as C from '../src/internal/wire/floor_codec.js'
-import * as Mbcp from '../src/internal/mbcp.js'
+import * as Mbcp from '../src/internal/flr/mbcp.js'
 import { Op } from '../src/internal/wire/ws.js'
 import { OxLensError, type Room } from '../src/index.js'
 

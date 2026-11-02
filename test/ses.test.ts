@@ -16,7 +16,7 @@ import { LinkCore } from '../src/domain/link/core.js'
 import { RoomCore } from '../src/domain/room/core.js'
 import type { Core } from '../src/domain/ses/core.js'
 import * as FC from '../src/internal/wire/floor_codec.js'
-import * as Mbcp from '../src/internal/mbcp.js'
+import * as Mbcp from '../src/internal/flr/mbcp.js'
 import { SC } from './_fixtures.js'
 
 class FakeWS {

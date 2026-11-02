@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import * as C from '../src/internal/wire/floor_codec.js'
-import * as Mbcp from '../src/internal/mbcp.js'
+import * as Mbcp from '../src/internal/flr/mbcp.js'
 import * as FLR from '../src/domain/gen/floor_client.js'
 import { RoomCore } from '../src/domain/room/core.js'
 import type { Core } from '../src/domain/ses/core.js'
@@ -28,9 +28,10 @@ function rig(): Rig {
     record: () => undefined,
     impossible: (layer: string, key: string, from: string, entry: string) => { throw new Error(`받지 않는 사건 ${layer} ${key} ${from} ${entry}`) },
     linkFor: () => ({ peer }),
+    ses: { cs: 'ACTIVE' },
     log: { debug: () => undefined, warn: () => undefined, error: () => undefined },
     media: { hasHalfMic: () => true, halfMicCold: () => false, floorClose: () => undefined, floorOpen: () => undefined },
-    rooms: { playback: {} },
+    rooms: { playback: {}, aff: {} },
   } as unknown as Core
   const room = new RoomCore(core, 'ch-3', {})
   const speakers: (string | null)[] = []
@@ -111,7 +112,7 @@ test('연:FLR.C.QUEUED.rx_GRANTED · 연:DEV-FLR-T132-DISPLAY — 대기 중 승
   r.rx(granted())
   assert.deepEqual(r.speakers, ['u2', null])
   assert.equal(r.room.floor.st.sub, 'GRANTED')
-  r.room.floor.flrStep('intent', FLR.intent(r.room.floor.st), 'press')
+  r.room.floor.enter('intent', 'press', [])
   assert.equal(r.room.floor.st.cs, 'PERM')
   assert.deepEqual(r.speakers, ['u2', null], '수락은 표시를 다시 바꾸지 않는다')
   r.room.floor.dispose()
@@ -137,7 +138,7 @@ test('연:FLR.C.any.down · 연:DEV-FLR-DOWN-FRESH — 재구축은 앱에 화�
 })
 
 const revoke = (): C.Message => C.buildRevoke({ cause: 4, room: 'ch-3' })
-const expire = (r: Rig, t: FLR.TimerName): void => r.room.floor.flrStep(`expire.${t}`, FLR.expire(r.room.floor.st, t), 'timer')
+const expire = (r: Rig, t: FLR.TimerName): void => { r.room.floor.enter('expire', 'timer', [t]) }
 
 test('연:ASM-FLR-T20-OVER-RTP · 연:ASM-FLR-TIMER-EMPTY — 발언 중에 다시 온 GRANTED(T20 · 재요청 응답)는 ACK 만 하고 상태를 두지 않는다', () => {
   const r = rig()
@@ -168,7 +169,7 @@ test('연:RACE-FLR-T101-OVERTAKE · 연:ASM-FLR-STALE-GUARD — T101 이 REQUEST
   r.room.floor.st = { ...r.room.floor.st, cs: 'PREQ', want: true, c101: 1 }
   expire(r, 'T101')
   assert.equal(r.sent.at(-1), C.Type.REQUEST, 'T101 이 REQUEST 를 다시 보낸다')
-  r.room.floor.flrStep('release', FLR.release(r.room.floor.st), 'user')
+  r.room.floor.enter('release', 'user', [])
   assert.equal(r.room.floor.st.cs, 'PREL')
   assert.equal(r.sent.at(-1), C.Type.RELEASE)
   r.rx(idle(4))
@@ -190,7 +191,7 @@ test('연:RACE-FLR-T132-PREEMPT — 승계 의지 대기 중 REVOKE 는 버리�
   r.room.floor.st = { ...r.room.floor.st, cs: 'QUEUED', sub: 'GRANTED', want: true }
   r.rx(revoke())
   assert.equal(r.room.floor.st.cs, 'QUEUED', 'REVOKE 를 버린다')
-  r.room.floor.flrStep('intent', FLR.intent(r.room.floor.st), 'press')
+  r.room.floor.enter('intent', 'press', [])
   assert.equal(r.room.floor.st.cs, 'PERM')
   r.rx(revoke())
   assert.equal(r.room.floor.st.cs, 'PREL', 'T8 재전송 REVOKE 가 닿으면 반환한다(ASM-FLR-T8-OVER-T132 — 마지막 재전송은 T132 뒤)')
@@ -219,7 +220,7 @@ test('연:RACE-FLR-DC-STALE — DC 만 끊긴 사이 회수를 놓친 발언자�
   r.room.floor.dcUp()
   assert.equal(r.room.floor.snapshot().trusted, true)
   assert.equal(r.room.floor.st.cs, 'PERM', '회수를 모른 채 남는다(받아들인다)')
-  r.room.floor.flrStep('release', FLR.release(r.room.floor.st), 'user')
+  r.room.floor.enter('release', 'user', [])
   assert.equal(r.room.floor.st.cs, 'PREL')
   r.rx(idle(9))
   assert.equal(r.room.floor.st.cs, 'NOPERM', '서버의 반환 확인 IDLE 이 푼다')

@@ -3,7 +3,7 @@
 import type { RoomCore, RoomState } from '../domain/room/core.js'
 import type { RemoteCore, RemoteInfo } from '../domain/trk/remote.js'
 import type { LocalCore, LocalState, Owner, EndReason, TrackOptions, VideoEncoding, AudioEncoding } from '../domain/pub/local.js'
-import type { FloorCore, PttState as CorePttState, PressSource } from '../domain/floor.js'
+import type { FloorCore, PttState as CorePttState, PressSource } from '../domain/flr/core.js'
 import type { Participant, Permission } from '../domain/room/store.js'
 import type { LinkState } from '../domain/link/core.js'
 import type { Core } from '../domain/ses/core.js'
@@ -112,14 +112,8 @@ export class Ptt {
 
   /** 반이중 마이크 미리 발행(미리 데우기) — 부르지 않아도 press 의 첫 단계가 한다 */
   async enable(o: TrackOptions & { track?: MediaStreamTrack } = {}): Promise<void> {
-    const media = this.room.core.media
     await wrap(this.room.core.untilActive())
-    if (o.track) {
-      const t = media.external('audio', 'external', o.track, { ...o, profile: o.profile ?? 'ptt' })
-      await wrap(t.publish(this.room.id, 'half'))
-      return
-    }
-    await wrap(media.ensureHalfMic(this.room.id, o))
+    await wrap(this.room.core.media.ensureHalfMic(this.room.id, o))
   }
 
   /** 반이중 영상 — 이 방의 미디어 코덱으로 · 송출은 발언권 게이트를 따른다 */

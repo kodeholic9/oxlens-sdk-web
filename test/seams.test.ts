@@ -15,7 +15,7 @@ function fakeCore(): Core {
     linkFor: () => undefined,
     log: { debug: () => undefined, warn: () => undefined, error: () => undefined },
     media: { hasHalfMic: () => false, halfMicCold: () => true, floorClose: () => undefined, floorOpen: () => undefined },
-    rooms: { playback: {} },
+    rooms: { playback: {}, aff: {} },
   } as unknown as Core
 }
 
@@ -27,8 +27,8 @@ test('연:FLR.C.any.join — ROOM 이 발언권으로 보내는 이음매는 전
   for (const [fx, s] of toFloor) {
     const room = new RoomCore(fakeCore(), 'r1', {})
     const entries: string[] = []
-    const step = room.floor.flrStep.bind(room.floor)
-    room.floor.flrStep = (entry, st, cause) => { entries.push(entry); step(entry, st, cause) }
+    const enter = room.floor.enter.bind(room.floor)
+    room.floor.enter = ((name: string, cause: string, args: never, o?: never) => { entries.push(name); return enter(name as never, cause, args, o) }) as typeof room.floor.enter
     ;(room as unknown as Seamed).seam(fx, 'test')
     assert.deepEqual(entries, s.react.map((r) => FLR.PROC_ENTRY[r]), `${fx} 를 받는 자리가 없다`)
   }
