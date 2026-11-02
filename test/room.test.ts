@@ -8,7 +8,6 @@ import { FakeWS, tick, type Frame } from './_ws.js'
 import { BIND_OK, SA, SB, up, linkOf, drain, joinBody, joinFrame, leaveFrame, FAIL, enter, vers, note, httpMock, getRoom, mem, type Rig, type JB } from './_rig.js'
 import * as ROOM from '../src/domain/gen/room_client.js'
 import * as RB from '../src/domain/gen/room_binding.js'
-import * as AFF from '../src/domain/gen/aff_client.js'
 import { RoomCore } from '../src/domain/room/core.js'
 import { Op, type MemberInfo, type Permission, type RoomSnapshot } from '../src/internal/wire/ws.js'
 import type { Core } from '../src/domain/ses/core.js'
@@ -72,7 +71,7 @@ test('연:DEV-ROOM-HIDDEN-SELF-PSTATE — version 없는 내 PARTICIPANT_STATE �
 /** 방을 내리거나 트랙을 붙이는 길이 지나는 곳만 더한 가짜(소속 · 연결 없음) */
 function fakeWide(): { core: Core; sent: { op: string; body: unknown }[] } {
   const f = fake()
-  Object.assign(f.core, { rooms: Object.assign(new Map(), { aff: { st: AFF.initial(), step: () => undefined }, drop: () => undefined }), roomsOn: () => [], linkFor: () => undefined })
+  Object.assign(f.core, { rooms: Object.assign(new Map(), { aff: { left: () => undefined, implicit: () => undefined, joinFailed: () => undefined, joinSelect: () => false }, drop: () => undefined }), roomsOn: () => [], linkFor: () => undefined })
   return f
 }
 

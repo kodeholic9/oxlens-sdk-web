@@ -205,10 +205,12 @@ export class OxLensClient {
   on(name: 'audioPlayback', fn: Fn<[boolean]>): Off
   on(name: string, fn: Fn<never[]>): Off {
     const f = fn as unknown as Fn<unknown[]>
+    // 발언 방 이벤트는 소속(AFF)이 직접 낸다
+    const aff = this.core.rooms.aff.events
+    if (name === 'speakingRoom') return aff.on('speakingRoom', (id) => { const r = id ? this.core.rooms.get(id) : undefined; f(r ? roomOf(r) : null) })
+    if (name === 'speakingRoomFailed') return aff.on('speakingRoomFailed', (x) => f(toError(x)))
     return this.core.events.on(name, ((...a: unknown[]) => {
       if (name === 'track') f(roomOf(a[0] as RoomCore), remoteOf(a[1] as RemoteCore))
-      else if (name === 'speakingRoom') { const id = a[0] as string | null; const r = id ? this.core.rooms.get(id) : undefined; f(r ? roomOf(r) : null) }
-      else if (name === 'speakingRoomFailed') f(toError(a[0]))
       else f(...a)
     }) as never)
   }
@@ -218,7 +220,10 @@ export class OxLensClient {
     return off
   }
 
-  off(name: string): void { this.core.events.off(name) }
+  off(name: string): void {
+    if (name === 'speakingRoom' || name === 'speakingRoomFailed') this.core.rooms.aff.events.off(name)
+    else this.core.events.off(name)
+  }
 }
 
 export function createClient(opts: ClientOptions): OxLensClient {

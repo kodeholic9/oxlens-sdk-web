@@ -52,8 +52,6 @@ export interface CoreEvents extends Record<string, unknown[]> {
   closed: [{ code: number; name: string; retryable: boolean }]
   rebuilt: []
   link: [LinkInfo]
-  speakingRoom: [string | null]
-  speakingRoomFailed: [Fault]
   /** 받는 트랙 핸들은 방 이벤트가 든 그 형(SES 는 TRK 를 부르지 않는다 · tools/sdk_deps.json may_use) */
   track: [RoomCore, RoomEvents['track'][0]]
   audioPlayback: [boolean]

@@ -2,7 +2,6 @@
 // spec: v1.2 @d626fda · SDK:IMPL-ROOM-API · SDK:RULE-ROOM-PERMISSION-BITS · SDK:RULE-ROOM-RESYNC · SDK:RULE-MOD-EVENT-ORDER · SDK:RULE-MOD-AREA-MIRROR domain/room · model: claude-opus-5-5
 import * as ROOM from '../gen/room_client.js'
 import * as RB from '../gen/room_binding.js'
-import * as AFF from '../gen/aff_client.js'
 import type { RoomJoinRes, MemberInfo, TrackEntry, MediaCodecs, GetRoomRes, RoomSnapshot, Version } from '../../internal/wire/ws.js'
 import type { Reply } from '../../internal/ses/signaling.js'
 import { Emitter } from '../../platform/emitter.js'
@@ -240,14 +239,8 @@ export class RoomCore {
         return
       }
     }
-    // select:true 는 발언 방이 없고 전환이 안 떠 있을 때만(연:RULE-ROOM-JOIN-START 2) · 4009 되풀이는 앞 입장이 건 기다림을 그대로 잇는다
-    const aff = this.core.rooms.aff.st
-    if (aff.wait === 'JOIN' && aff.want === this.id) this.joinSel = true
-    else {
-      const js = this.mode === 'talk' ? AFF.joinSelect(aff, this.id) : null
-      this.joinSel = js !== null
-      if (js) this.core.rooms.aff.step('joinSelect', js, 'app')
-    }
+    // select:true 는 발언 방이 없고 전환이 안 떠 있을 때만 — 소속 상태기가 정한다(연:RULE-ROOM-JOIN-START 2 · 입구 joinSelect)
+    this.joinSel = this.core.rooms.aff.joinSelect(this.id, this.mode === 'talk')
     body['select'] = this.joinSel
     let r: Reply
     try { r = await this.core.sig.request('ROOM_JOIN', body) } catch {
@@ -415,17 +408,9 @@ export class RoomCore {
         for (const other of core.roomsOn(this.sfuId)) if (other !== this) other.enter('subRooms', 'ROOM_JOIN.sub_rooms', [listed.includes(other.id)])
         break
       }
-      case 'aff.leave': core.rooms.aff.step('left', AFF.left(core.rooms.aff.st, this.id), label); break
-      case 'aff.implicit': {
-        // 입장 응답의 affiliation(SDK:IMPL-AFF-SPEAKING-ROOM 입구 implicit) · p 는 그 방이 응답의 sub_rooms 에 있을 때만 · onPub = 지금 발언 방이 이 응답을 낸 서버의 방
-        const a = this.lastJoin?.affiliation
-        const p = a && a.pub_room !== null && a.sub_rooms.includes(a.pub_room) ? a.pub_room : 'NONE'
-        const aff = core.rooms.aff
-        const onPub = aff.st.pub !== 'NONE' && core.rooms.get(aff.st.pub)?.sfuId === this.sfuId
-        aff.step('implicit', AFF.implicit(aff.st, this.id, this.joinSel, p, onPub), label)
-        break
-      }
-      case 'aff.join_failed': core.rooms.aff.step('joinFailed', AFF.joinFailed(core.rooms.aff.st, this.id), label); break
+      case 'aff.leave': core.rooms.aff.left(this.id, label); break
+      case 'aff.implicit': core.rooms.aff.implicit(this.id, this.joinSel, this.lastJoin?.affiliation, this.sfuId, label); break
+      case 'aff.join_failed': core.rooms.aff.joinFailed(this.id, this.lastFault, label); break
       case 'floor.join': this.floor.join(); break
       case 'floor.leave': this.floor.leave(); break
       case 'pub.room_gone': for (const l of core.media.inRoom(this.id)) l.roomGone(); break
