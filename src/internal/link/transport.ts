@@ -224,9 +224,9 @@ export class PeerLink {
     this.subDirty = true
   }
 
-  /** 발행 자리를 얻는다 — 같은 kind · 같은 구조의 쉬는 자리를 먼저 되쓴다(BUNDLE 천장 — SDK:IMPL-SRC-BLOCKS) */
-  acquireSlot(kind: 'audio' | 'video', simulcast: boolean, encodings: readonly Encoding[], room: SendSlot['room'], opusFmtp: string): SendSlot {
-    const free = this.slots.find((s) => !s.owned && s.kind === kind && s.simulcast === simulcast)
+  /** 발행 자리를 얻는다 — 같은 kind · 같은 구조의 쉬는 자리를 먼저 되쓴다(BUNDLE 천장 — SDK:IMPL-SRC-BLOCKS) · fresh 면 새 트랜시버(1pc SSRC 충돌 3008 의 재발행 — 새 SSRC 는 새 트랜시버가 만든다) */
+  acquireSlot(kind: 'audio' | 'video', simulcast: boolean, encodings: readonly Encoding[], room: SendSlot['room'], opusFmtp: string, fresh = false): SendSlot {
+    const free = fresh ? undefined : this.slots.find((s) => !s.owned && s.kind === kind && s.simulcast === simulcast)
     if (free) {
       if (!free.active) this.pubDirty = true
       free.owned = true

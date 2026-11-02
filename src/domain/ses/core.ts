@@ -7,7 +7,7 @@ import { Code } from '../../internal/wire/ws.js'
 import { Signaling, type Inbound, type Reply } from '../../internal/ses/signaling.js'
 import { Emitter } from '../../platform/emitter.js'
 import { LogBook, type Logger } from '../../platform/log.js'
-import { sleep, wall } from '../../platform/clock.js'
+import { sleep } from '../../platform/clock.js'
 import { Fault, fromFailure, closedFault } from '../../platform/fault.js'
 import { httpJson, httpUrl } from '../../platform/net.js'
 import { decide } from '../../platform/capability.js'
@@ -16,8 +16,10 @@ import { settle, opusFmtpLine, type ClientOptions, type Settings } from '../defa
 import { RoomTable } from '../room/table.js'
 import type { RoomCore, RoomEvents } from '../room/core.js'
 import type { LinkCore, LinkInfo } from '../link/core.js'
-import { MediaRegistry, type LocalCore } from '../media-registry.js'
+import { MediaRegistry } from '../pub/registry.js'
+import type { LocalCore } from '../pub/local.js'
 import { SesClock } from './clock.js'
+import { Diag } from './diag.js'
 
 export type SessionState = 'disconnected' | 'connecting' | 'active' | 'resuming'
 export type Health = 'ok' | 'degraded' | 'recovering' | 'offline'
@@ -33,18 +35,7 @@ export interface SessionInfo {
   readonly quality: Quality
 }
 
-/** 전이 기록 — 기록 없이 바뀌는 상태가 없다(SDK:IMPL-LINK-PROJECTION 출입구 하나) */
-export interface Transition {
-  readonly ts: number
-  readonly layer: string
-  readonly key: string
-  readonly from: string
-  readonly to: string
-  readonly cause: string
-  readonly label: string
-  readonly rung?: number
-  readonly attempt?: number
-}
+export type { Transition } from '../../platform/log.js'
 
 export interface CoreEvents extends Record<string, unknown[]> {
   session: [SessionInfo]
@@ -54,10 +45,8 @@ export interface CoreEvents extends Record<string, unknown[]> {
   link: [LinkInfo]
   /** 받는 트랙 핸들은 방 이벤트가 든 그 형(SES 는 TRK 를 부르지 않는다 · tools/sdk_deps.json may_use) */
   track: [RoomCore, RoomEvents['track'][0]]
-  audioPlayback: [boolean]
   probe: [unknown]
   stats: [unknown]
-  transition: [Transition]
 }
 
 /** 입구 표의 입구 — 위 결합(session_binding)의 ENTRY 열쇠 그대로 */
@@ -94,6 +83,7 @@ export class Core {
   readonly rooms: RoomTable
   readonly links = new Map<string, LinkCore>()
   readonly media: MediaRegistry
+  readonly diag: Diag
   readonly sids = new Interner()
   readonly epochs = new Interner()
   readonly clock: SesClock
@@ -122,7 +112,8 @@ export class Core {
     this.log = this.book.scope('session')
     this.sig = new Signaling({ base: this.cfg.base, reqTimeoutMs: SES.TIMER_MS.TReq ?? 30000 }, this.book.scope('signaling'))
     this.rooms = new RoomTable(this)
-    this.media = new MediaRegistry(this)
+    this.media = new MediaRegistry(this.cfg, this.book, this.links, this.rooms.aff)
+    this.diag = new Diag(this)
     this.clock = new SesClock(this, this.cfg.wakeDetectMs)
     if (this.cfg.disconnectOnPageLeave) {
       const w = pageTarget()
@@ -135,14 +126,12 @@ export class Core {
   // ── 출입구 ────────────────────────────────────────────────────────────
 
   record(layer: string, key: string, from: string, to: string, label: string, cause: string, extra?: { rung?: number; attempt?: number }): void {
-    const t: Transition = { ts: wall(), layer, key, from, to, cause, label, ...(extra ?? {}) }
-    this.events.emit('transition', t)
-    this.book.write(cause === 'impossible' ? 'warn' : 'debug', layer.toLowerCase(), `${key} ${from}→${to} ${label}`, cause === 'impossible' ? t : undefined)
+    this.book.record(layer, key, from, to, label, cause, extra)
   }
 
   /** 받지 않는 사건 — 조용히 무시하지 않는다(SDK:IMPL-LINK-PROJECTION 받지 않는 사건) */
   impossible(layer: string, key: string, from: string, entry: string): void {
-    this.record(layer, key, from, from, entry, 'impossible')
+    this.book.impossible(layer, key, from, entry)
   }
 
   // ── 앱 조작 셋(SDK:IMPL-SES-API) ──────────────────────────────────────
@@ -184,6 +173,7 @@ export class Core {
     this.failure = null
     for (const l of this.links.values()) l.closeForApp()
     this.enter('disconnect', 'app', [], true)
+    this.diag.stop()
     this.media.closeForApp()
     for (const w of this.connectWaiters.splice(0)) w.reject(closedFault('CLOSED'))
     for (const w of this.activeWaiters.splice(0)) w.reject(closedFault('CLOSED'))
@@ -229,12 +219,12 @@ export class Core {
     for (const sm of plan.seams) this.seam(sm.fx)
     for (const f of step.fx) this.effect(f, entry)
     if (this.ses.cs === 'ACTIVE' && prev.cs !== 'ACTIVE') {
-      this.media.sessionActive(true)
+      this.diag.sessionActive(true)
       for (const w of this.activeWaiters.splice(0)) w.resolve()
       for (const l of this.links.values()) l.sessionBack()
     }
     if (this.ses.cs === 'DISCONNECTED' && prev.cs !== 'DISCONNECTED') {
-      this.media.sessionActive(false)
+      this.diag.sessionActive(false)
       // 효과 없이 끝난 접속(2002 등)도 기다리던 connect() 를 남기지 않는다 — 그 실패 사실로 reject
       const fault = this.failure ?? closedFault(entry === 'expire' ? 'BACKOFF_EXHAUSTED' : 'CLOSED')
       for (const w of this.connectWaiters.splice(0)) w.reject(fault)
@@ -310,7 +300,7 @@ export class Core {
         return
       }
       case 'TASK': {
-        if (b['phase'] === 'request' && b['type'] === 'probe') void this.media.probeTask(Number(b['req_id'] ?? 0))
+        if (b['phase'] === 'request' && b['type'] === 'probe') void this.diag.probeTask(Number(b['req_id'] ?? 0))
         return
       }
       default:

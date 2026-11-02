@@ -5,10 +5,11 @@ import * as TB from '../gen/trk_binding.js'
 import type { TrackEntry, TrackEventBody, TrackStateBody } from '../../internal/wire/ws.js'
 import type { Logger } from '../../platform/log.js'
 import type { Settings } from '../defaults.js'
-import type { MediaRegistry } from '../media-registry.js'
+import type { MediaRegistry } from '../pub/registry.js'
 import type { RoomCore } from '../room/core.js'
 import { RemoteCore } from './remote.js'
 import { Subscription } from './sub.js'
+import type { Playback } from './playback.js'
 
 /** 입구 표의 입구 — 위 결합(trk_binding)의 ENTRY 열쇠 그대로 */
 export type Entry = keyof typeof TB.ENTRY
@@ -36,7 +37,7 @@ export class RoomTracks {
   private audioMuted = false
   private audioVolume = 1
 
-  constructor(readonly room: RoomCore, readonly media: MediaRegistry, readonly cfg: TrkSettings, readonly log: Logger) {
+  constructor(readonly room: RoomCore, readonly media: MediaRegistry, readonly playback: Playback, readonly cfg: TrkSettings, readonly log: Logger) {
     this.sub = new Subscription(room)
   }
 

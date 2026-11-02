@@ -158,7 +158,7 @@ export class RemoteCore {
     const t = this.mediaStreamTrack
     const doc = documentTarget()
     if (!t || !doc || this.ended) return
-    const playback = this.trk.media.playback
+    const playback = this.trk.playback
     if (!this.audioEl) {
       const el = doc.createElement('audio')
       el.autoplay = true
@@ -266,7 +266,7 @@ export class RemoteCore {
     if (this.docWatched) documentTarget()?.removeEventListener('visibilitychange', this.docSeen)
     for (const el of this.attached) if (el.srcObject) el.srcObject = null
     this.attached.clear()
-    if (this.audioEl) { this.trk.media.playback.remove(this.audioEl); this.audioEl.srcObject = null; this.audioEl = null }
+    if (this.audioEl) { this.trk.playback.remove(this.audioEl); this.audioEl.srcObject = null; this.audioEl = null }
     this.events.emit('ended')
   }
 }

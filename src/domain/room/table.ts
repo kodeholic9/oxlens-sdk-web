@@ -5,14 +5,18 @@ import type { Core } from '../ses/core.js'
 import type { Reply } from '../../internal/ses/signaling.js'
 import { RoomCore, type JoinOptions } from './core.js'
 import { AffCore } from '../aff/core.js'
+import { Playback } from '../trk/playback.js'
 
 /** 클라이언트 객체 하나의 방 목록 — 소속(발언 방)은 방 목록 위에 하나다 */
 export class RoomTable extends Map<string, RoomCore> {
   readonly aff: AffCore
+  /** 받는 오디오 재생 — 방 전부가 한 재생을 쓴다(SDK:IMPL-SRC-BLOCKS Playback = rooms · RemoteTrack) */
+  readonly playback: Playback
 
   constructor(private readonly core: Core) {
     super()
     this.aff = new AffCore(this, core.book.scope('aff'))
+    this.playback = new Playback(core.book.scope('playback'))
   }
 
   async join(roomId: string, opts: JoinOptions): Promise<RoomCore> {

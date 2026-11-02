@@ -15,6 +15,7 @@ function fakeCore(): Core {
     linkFor: () => undefined,
     log: { debug: () => undefined, warn: () => undefined, error: () => undefined },
     media: { hasHalfMic: () => false, halfMicCold: () => true, floorClose: () => undefined, floorOpen: () => undefined },
+    rooms: { playback: {} },
   } as unknown as Core
 }
 

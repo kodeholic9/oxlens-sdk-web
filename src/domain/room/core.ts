@@ -102,7 +102,7 @@ export class RoomCore {
     this.mode = opts.mode ?? 'listen'
     this.role = opts.role ?? 255
     this.floor = new FloorCore(core, this)
-    this.trk = new RoomTracks(this, core.media, core.cfg, core.log)
+    this.trk = new RoomTracks(this, core.media, core.rooms.playback, core.cfg, core.log)
     this.retryTimer = new Timer(core.cfg.wakeDetectMs)
     this.settleTimer = new Timer(core.cfg.wakeDetectMs)
   }
@@ -125,6 +125,17 @@ export class RoomCore {
 
   record(layer: string, key: string, from: string, to: string, label: string, cause: string): void { this.core.record(layer, key, from, to, label, cause) }
   impossible(layer: string, key: string, from: string, entry: string): void { this.core.impossible(layer, key, from, entry) }
+
+  /** 발행 거절 2006 이 실어 온 막힌 비트 — 통지보다 거절이 먼저 닿은 창을 메운다(SDK:RULE-PUB-DENIED · 재시도 없음) */
+  denied(bits: readonly string[]): void {
+    const p = { ...this.store.permission }
+    if (bits.includes('publish_audio')) p.publishAudio = false
+    if (bits.includes('publish_video')) p.publishVideo = false
+    if (bits.includes('publish_screen')) p.publishScreen = false
+    this.store.permission = p
+    this.events.emit('permission', { userId: this.core.userId ?? '', permission: p, mine: true })
+    this.floor.surface()
+  }
 
   /** 이 방의 구독 요청 — READY · SUBSCRIBE_LAYER */
   request(op: 'READY' | 'SUBSCRIBE_LAYER', body: Record<string, unknown>): Promise<Reply> { return this.core.sig.request(op, body) }
@@ -456,7 +467,6 @@ export class RoomCore {
         this.emitParticipants()
         for (const c of changes) {
           this.events.emit('permission', c)
-          if (c.mine) this.core.media.permissionChanged(this)
         }
         if (changes.length) this.floor.surface()
         return

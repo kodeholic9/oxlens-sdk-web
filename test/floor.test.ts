@@ -30,6 +30,7 @@ function rig(): Rig {
     linkFor: () => ({ peer }),
     log: { debug: () => undefined, warn: () => undefined, error: () => undefined },
     media: { hasHalfMic: () => true, halfMicCold: () => false, floorClose: () => undefined, floorOpen: () => undefined },
+    rooms: { playback: {} },
   } as unknown as Core
   const room = new RoomCore(core, 'ch-3', {})
   const speakers: (string | null)[] = []

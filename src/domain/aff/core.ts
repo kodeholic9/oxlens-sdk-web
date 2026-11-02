@@ -7,6 +7,7 @@ import { Emitter } from '../../platform/emitter.js'
 import type { Logger } from '../../platform/log.js'
 import { Fault, fromFailure, closedFault, stateFault } from '../../platform/fault.js'
 import type { RoomTable } from '../room/table.js'
+import type { FloorCore } from '../floor.js'
 
 export interface AffEvents extends Record<string, unknown[]> {
   speakingRoom: [string | null]
@@ -19,6 +20,14 @@ type Args<K extends Entry> = (typeof AB.ENTRY)[K] extends (s: AFF.St, ...a: infe
 type Reply = Awaited<ReturnType<RoomTable['request']>>
 
 interface Waiter { resolve: () => void; reject: (f: Fault) => void }
+
+/** 발행(PUB)이 소속을 지나 읽는 발행 방 사실 — 그 방의 서버 · 내 발행 비트 · 방 미디어 코덱(SDK:RULE-ROOM-PERMISSION-BITS · SDK:RULE-SRC-PROFILE codec) */
+export interface PubRoom {
+  readonly id: string
+  readonly sfuId: string | null
+  readonly bits: { readonly publishAudio: boolean; readonly publishVideo: boolean; readonly publishScreen: boolean }
+  readonly codecs: { readonly audio?: string; readonly video?: string }
+}
 
 const NONE = 'NONE'
 
@@ -174,6 +183,24 @@ export class AffCore {
       }
     }
   }
+
+  // ── 발행(PUB)이 소속을 지나 쓰는 것 — 발행은 방 영역을 부르지 않는다(may_use = AFF · FLR · LINK) ─────
+
+  /** 발행 방 사실 — 들어가 있지 않은 방이면 null */
+  pubRoom(roomId: string): PubRoom | null {
+    const r = this.rooms.get(roomId)
+    if (!r) return null
+    const p = r.permission
+    return { id: r.id, sfuId: r.sfuId, bits: { publishAudio: p.publishAudio, publishVideo: p.publishVideo, publishScreen: p.publishScreen }, codecs: { ...r.store.mediaCodecs } }
+  }
+
+  /** 그 서버 방들의 발언권 — 발행 이음매 floor.reg_half(sameServer) · 게이트 · 해체가 닿는 곳 */
+  floorsOn(sfuId: string | null): FloorCore[] {
+    return sfuId === null ? [] : [...this.rooms.values()].filter((r) => r.sfuId === sfuId).map((r) => r.floor)
+  }
+
+  /** 발행 거절 2006 — 막힌 비트로 그 방의 내 권한을 맞춘다(SDK:RULE-PUB-DENIED) */
+  denied(roomId: string, bits: readonly string[]): void { this.rooms.get(roomId)?.denied(bits) }
 
   // ── 읽는 값 ──────────────────────────────────────────────────────────
 

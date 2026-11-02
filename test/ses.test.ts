@@ -737,7 +737,7 @@ test('SD-API-SESSION-QUALITY — getStats 로 4단 · 여러 서버면 최악값
   }
   const a = link('a'); const b = link('b')
   r.core.links.set('a', a as unknown as LinkCore); r.core.links.set('b', b as unknown as LinkCore)
-  const stats = (): Promise<void> => (r.core.media as unknown as { stats(): Promise<void> }).stats()
+  const stats = (): Promise<void> => r.core.diag.stats()
   const seen: string[] = []
   r.c.on('session', (s) => seen.push(s.quality))
   b.rtt = th.excellent.rttMs - 1; await stats()
@@ -837,7 +837,7 @@ test('K-sym-IMPL-SES-EVENTS-1 — 재구축 중 press 는 대기한다(arming ·
   const core = {
     cfg: { wakeDetectMs: 1000 },
     ses: { cs: 'ACTIVE' },
-    rooms: { aff: { speakingRoom: 'ch-1' } },
+    rooms: { aff: { speakingRoom: 'ch-1' }, playback: {} },
     record: () => undefined,
     impossible: () => undefined,
     linkFor: () => link,

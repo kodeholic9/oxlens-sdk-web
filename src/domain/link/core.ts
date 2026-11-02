@@ -5,6 +5,7 @@ import * as LB from '../gen/link_binding.js'
 import type { ServerConfig, MlineTable, IceRestartRes } from '../../internal/wire/ws.js'
 import { PeerLink, type LinkFact } from '../../internal/link/transport.js'
 import type { Creds } from '../../internal/link/sdp.js'
+import type { Reply } from '../../internal/ses/signaling.js'
 import * as Mbcp from '../../internal/mbcp.js'
 import { Timer, now, wall, type Fired } from '../../platform/clock.js'
 import { Fault, fromFailure } from '../../platform/fault.js'
@@ -266,6 +267,9 @@ export class LinkCore {
   sessionBack(): void {
     if (this.pendingCheck) { this.pendingCheck = false; this.wsCheck() }
   }
+
+  /** 발행(PUB)이 연결을 지나 보내는 요청 — 발행은 서버(Peer)마다고 세션 영역을 부르지 않는다(may_use = AFF · FLR · LINK) */
+  request(op: 'PUBLISH_TRACKS' | 'TRACK_SET', body: Record<string, unknown>): Promise<Reply> { return this.core.sig.request(op, body) }
 
   closeForApp(): void {
     this.closedForApp = true

@@ -1,9 +1,7 @@
 # 영역 거울 판정표(SDK:RULE-MOD-AREA-MIRROR · context 202611/20261102c) — 위반 · 갈래 · 사유. 갈래: 이행(영역을 지을 때 지운다 — 남으면 「이제 위반이 아니다」로 실패) · 가로지름(가로지르는 것은 층 자체가 자리 — 둔다)
 # 위반	갈래	사유
-domain/media-registry.ts: 영역 디렉터리 밖의 domain 파일	이행	발행(PUB) 상태기 · 보내는 트랙 → domain/pub/
 domain/floor.ts: 영역 디렉터리 밖의 domain 파일	이행	발언권(FLR) → domain/flr/
 domain/defaults.ts: 영역 디렉터리 밖의 domain 파일	가로지름	createClient 설정 해석(정책서 SDK 몫 · 영역 공통 — 가로지르는 것은 층 자체가 자리)
 internal/mbcp.ts: 영역 디렉터리 밖의 internal 파일	이행	MBCP 코덱(FLR) → internal/flr/
 internal/probe.ts: 영역 디렉터리 밖의 internal 파일	가로지름	진단 수집(DIAG — 가로지르는 것은 층 자체가 자리)
 domain/flr/: 디렉터리 없는 영역(FLR)	이행	FLR 을 지으면 생긴다
-domain/pub/: 디렉터리 없는 영역(PUB)	이행	PUB 를 지으면 생긴다

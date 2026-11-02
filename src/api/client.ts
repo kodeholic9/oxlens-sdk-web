@@ -6,7 +6,7 @@ import type { LinkInfo } from '../domain/link/core.js'
 import type { Participant } from '../domain/room/store.js'
 import type { RoomCore } from '../domain/room/core.js'
 import type { RemoteCore } from '../domain/trk/remote.js'
-import { LocalCore, type TrackOptions } from '../domain/media-registry.js'
+import type { TrackOptions } from '../domain/pub/local.js'
 import type { RoomSummary, GetRoomRes } from '../internal/wire/ws.js'
 import type { PermState } from '../platform/env.js'
 import type { Level, LogEntry } from '../platform/log.js'
@@ -59,7 +59,7 @@ export class Devices {
 /** 수신 오디오 재생 허용(autoplay 정책) */
 export class AudioPlayback {
   constructor(private readonly core: Core) {}
-  get playbackAllowed(): boolean { return this.core.media.playback.allowed }
+  get playbackAllowed(): boolean { return this.core.rooms.playback.allowed }
 }
 
 /** 로컬 발행 · 장치 · 재생 — client.media */
@@ -83,14 +83,14 @@ export class Media {
     await wrap(this.core.untilActive())
     const room = speakingRoomCore(this.core)
     if (t instanceof LocalTrack) {
-      await wrap(t.core.publish(room, 'full'))
+      await wrap(t.core.publish(room.id, 'full'))
       return t
     }
     const kind = t.kind === 'audio' ? 'audio' : 'video'
     const src = kind === 'video' && opts.source === 'screen' ? 'screen' : kind === 'video' ? 'camera' : 'external'
     const o: TrackOptions = opts.encoding ? { encoding: opts.encoding } : {}
-    const c = new LocalCore(this.core, kind, src, t, 'external', o)
-    await wrap(c.publish(room, 'full'))
+    const c = this.core.media.external(kind, src, t, o)
+    await wrap(c.publish(room.id, 'full'))
     return localOf(c)
   }
 
@@ -100,7 +100,7 @@ export class Media {
     const bit = kind === 'audio' ? room.permission.publishAudio : source === 'screen' ? room.permission.publishScreen : room.permission.publishVideo
     if (!bit) throw toError(stateFault('STATE_NO_PERMISSION', { denied: [kind === 'audio' ? 'publish_audio' : source === 'screen' ? 'publish_screen' : 'publish_video'] }))
     const c = await wrap(this.core.media.acquireOne(kind, source, o, 'sdk'))
-    try { await wrap(c.publish(room, 'full')) } catch (e) { c.track.stop(); throw e }
+    try { await wrap(c.publish(room.id, 'full')) } catch (e) { await c.stop(); throw e }
     return localOf(c)
   }
 
@@ -113,27 +113,27 @@ export class Media {
     const pref = this.core.media.preferred
     if (deviceId) pref[kind] = deviceId
     else delete pref[kind]
-    if (kind === 'audiooutput') { await wrap(this.core.media.playback.output(deviceId)); return }
+    if (kind === 'audiooutput') { await wrap(this.core.rooms.playback.output(deviceId)); return }
     const want = kind === 'audioinput' ? 'audio' : 'video'
     for (const t of [...this.core.media.tracks]) if (t.kind === want && t.owner === 'sdk' && t.source !== 'screen') await wrap(t.switchTo(deviceId))
   }
 
   audioOutput(deviceId: string | null): Promise<void> { return this.switchDevice('audiooutput', deviceId) }
   permissions(): Promise<{ microphone: PermState; camera: PermState }> { return this.core.media.permissions() }
-  startAudio(): Promise<void> { return this.core.media.playback.start() }
+  startAudio(): Promise<void> { return this.core.rooms.playback.start() }
 }
 
 /** 진단 — log · probe · stats · transition */
 export class Diagnostics {
   constructor(private readonly core: Core) {}
-  probe(): Promise<unknown> { return this.core.media.probe() }
+  probe(): Promise<unknown> { return this.core.diag.probe() }
   setLogLevel(l: Level): void { this.core.book.setLevel(l) }
   logs(): readonly LogEntry[] { return this.core.book.entries() }
   on(name: 'log', fn: Fn<[LogEntry]>): Off
   on(name: 'probe' | 'stats', fn: Fn<[unknown]>): Off
   on(name: 'transition', fn: Fn<[Transition]>): Off
   on(name: string, fn: Fn<never[]>): Off {
-    if (name === 'log') return this.core.book.events.on('log', fn as never)
+    if (name === 'log' || name === 'transition') return this.core.book.events.on(name, fn as never)
     return this.core.events.on(name, fn as never)
   }
 }
@@ -209,6 +209,8 @@ export class OxLensClient {
     const aff = this.core.rooms.aff.events
     if (name === 'speakingRoom') return aff.on('speakingRoom', (id) => { const r = id ? this.core.rooms.get(id) : undefined; f(r ? roomOf(r) : null) })
     if (name === 'speakingRoomFailed') return aff.on('speakingRoomFailed', (x) => f(toError(x)))
+    // 재생 허용은 재생(방 목록이 든 Playback)이 직접 낸다
+    if (name === 'audioPlayback') return this.core.rooms.playback.events.on('audioPlayback', f)
     return this.core.events.on(name, ((...a: unknown[]) => {
       if (name === 'track') f(roomOf(a[0] as RoomCore), remoteOf(a[1] as RemoteCore))
       else f(...a)
@@ -222,6 +224,7 @@ export class OxLensClient {
 
   off(name: string): void {
     if (name === 'speakingRoom' || name === 'speakingRoomFailed') this.core.rooms.aff.events.off(name)
+    else if (name === 'audioPlayback') this.core.rooms.playback.events.off(name)
     else this.core.events.off(name)
   }
 }

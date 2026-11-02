@@ -10,7 +10,7 @@ import { DC_OFFER } from './_fixtures.js'
 import * as LINK from '../src/domain/gen/link_client.js'
 import * as LB from '../src/domain/gen/link_binding.js'
 import { worstIce } from '../src/internal/link/transport.js'
-import { LocalCore } from '../src/domain/media-registry.js'
+import { LocalCore } from '../src/domain/pub/local.js'
 import { Op, type MlineEntry, type TrackEntry, type ServerConfig } from '../src/internal/wire/ws.js'
 import type { LinkCore, LinkInfo } from '../src/domain/link/core.js'
 import type { Room, RemoteTrack } from '../src/index.js'
@@ -633,7 +633,7 @@ test('SD-ENTRY-LINK-PUB-LOST — 이어받기 응답에 내 발행이 없으면(
     spy.reset()
     await barrage(x)
     assert.equal(spy.n('pubLost'), 0, 'SD-ENTRY-LINK-PUB-LOST — 브라우저 사실 · 통지로 넣는 곳 0')
-    const t = new LocalCore(x.r.core, 'audio', 'external', fakeTrack('audio') as unknown as MediaStreamTrack, 'external', {})
+    const t = new LocalCore(x.r.core.media, 'audio', 'external', fakeTrack('audio') as unknown as MediaStreamTrack, 'external', {})
     t.st = { ...t.st, ps: 'REGISTERED' }
     t.sfuId = 'sfu-a'
     t.resumeCheck(false)

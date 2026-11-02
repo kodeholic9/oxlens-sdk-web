@@ -139,7 +139,7 @@ export class FloorCore {
   private async arm(): Promise<void> {
     try {
       this.stage('register')
-      await this.core.media.ensureHalfMic(this.room)
+      await this.core.media.ensureHalfMic(this.room.id)
       if (this.stopIfCancelled()) return
       this.stage('select')
       if (this.core.rooms.aff.speakingRoom !== this.room.id) await this.core.rooms.aff.setSpeakingRoom(this.room.id)
@@ -154,7 +154,7 @@ export class FloorCore {
         if (this.stopIfCancelled()) return
       }
       if (this.stopIfCancelled()) return
-      await this.core.media.warmHalf(this.room)
+      await this.core.media.warmHalf(this.room.sfuId)
       this.arming = false
       this.armingStage = undefined
       if (!this.held && this.input === 'hold') { this.lastEnd = 'released'; this.surface('released'); return }
@@ -253,8 +253,8 @@ export class FloorCore {
     let extra: 'granted' | 'denied' | 'revoked' | 'queued' | 'released' | undefined
     for (const f of step.fx) {
       const e = PB.effect(f)
-      if (f === 'mic.open') { this.talkingSince = wall(); this.core.media.floorOpen(this.room) }
-      else if (f === 'mic.close') { this.talkingSince = undefined; this.core.media.floorClose(this.room) }
+      if (f === 'mic.open') { this.talkingSince = wall(); this.core.media.floorOpen(this.room.sfuId) }
+      else if (f === 'mic.close') { this.talkingSince = undefined; this.core.media.floorClose(this.room.sfuId) }
       else if (f === 'media.render') { for (const r of this.room.trk.remotes.values()) if (r.type === 'slot') r.applyPlayback() }
       else if (f === 'app.granted' || f === 'app.granted_queued') {
         this.remainingSec = this.st.grant

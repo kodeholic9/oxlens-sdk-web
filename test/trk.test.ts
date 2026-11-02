@@ -12,7 +12,7 @@ import * as SUB from '../src/domain/gen/sub_client.js'
 import * as UB from '../src/domain/gen/sub_binding.js'
 import { Op, type TrackEntry, type MlineEntry, type ServerConfig } from '../src/internal/wire/ws.js'
 import { OxLensError, RemoteTrack, type Room } from '../src/index.js'
-import type { LocalCore } from '../src/domain/media-registry.js'
+import type { LocalCore } from '../src/domain/pub/local.js'
 
 /** 위 결합 ENTRY 의 입구마다 불린 인자(상태 뒤) — SDK 사건이 결합 코드를 지났나를 잰다 */
 function spyOn(entry: object): { calls: Record<string, unknown[][]>; n(k: string): number; restore(): void } {

@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:RULE-DIAG-LOG · SDK:RULE-DIAG-EVENTS · 연:DEV-TRN-SESSION-SECRET · model: claude-opus-5-5
+// spec: v1.2 @d626fda · SDK:RULE-DIAG-LOG · SDK:RULE-DIAG-EVENTS · SDK:IMPL-LINK-PROJECTION 출입구 하나 · 연:DEV-TRN-SESSION-SECRET · model: claude-opus-5-5
 import { Emitter } from './emitter.js'
 import { wall } from './clock.js'
 
@@ -14,12 +14,25 @@ export interface LogEntry {
   readonly data?: unknown
 }
 
+/** 전이 기록 — 기록 없이 바뀌는 상태가 없다(SDK:IMPL-LINK-PROJECTION 출입구 하나 · SDK:RULE-DIAG-EVENTS transition) */
+export interface Transition {
+  readonly ts: number
+  readonly layer: string
+  readonly key: string
+  readonly from: string
+  readonly to: string
+  readonly cause: string
+  readonly label: string
+  readonly rung?: number
+  readonly attempt?: number
+}
+
 /** 링 버퍼 크기 — probe 에는 싣지 않는다(SDK:RULE-DIAG-LOG) */
 export const RING = 500
 
-/** 로그 원장 — 네임스페이스는 모듈 이름 · wire 를 쓸 때는 wire 어휘 그대로 */
+/** 로그 원장 — 네임스페이스는 모듈 이름 · wire 를 쓸 때는 wire 어휘 그대로 · 전이 기록의 출입구(진단은 층 자체가 자리 — 영역마다 원장을 받아 쓴다) */
 export class LogBook {
-  readonly events = new Emitter<{ log: [LogEntry] }>()
+  readonly events = new Emitter<{ log: [LogEntry]; transition: [Transition] }>()
   private readonly ring: LogEntry[] = []
   private floor: Level = 'info'
 
@@ -37,6 +50,18 @@ export class LogBook {
   }
 
   scope(ns: string): Logger { return new Logger(this, ns) }
+
+  /** 전이 하나 — transition 이벤트 · 로그(받지 않는 사건은 warn) */
+  record(layer: string, key: string, from: string, to: string, label: string, cause: string, extra?: { rung?: number; attempt?: number }): void {
+    const t: Transition = { ts: wall(), layer, key, from, to, cause, label, ...(extra ?? {}) }
+    this.events.emit('transition', t)
+    this.write(cause === 'impossible' ? 'warn' : 'debug', layer.toLowerCase(), `${key} ${from}→${to} ${label}`, cause === 'impossible' ? t : undefined)
+  }
+
+  /** 받지 않는 사건 — 조용히 무시하지 않는다(SDK:IMPL-LINK-PROJECTION 받지 않는 사건) */
+  impossible(layer: string, key: string, from: string, entry: string): void {
+    this.record(layer, key, from, from, entry, 'impossible')
+  }
 }
 
 export class Logger {

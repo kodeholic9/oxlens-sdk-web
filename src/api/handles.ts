@@ -2,7 +2,7 @@
 // spec: v1.2 @d626fda · SDK:RULE-API-HANDLES · SDK:RULE-API-ASYNC · SDK:IMPL-ROOM-API · SDK:IMPL-FLR-BUTTON · SDK:IMPL-PUB-API · SDK:IMPL-TRK-RECEIVE · model: claude-opus-5-5
 import type { RoomCore, RoomState } from '../domain/room/core.js'
 import type { RemoteCore, RemoteInfo } from '../domain/trk/remote.js'
-import { LocalCore, type LocalState, type Owner, type EndReason, type TrackOptions, type VideoEncoding, type AudioEncoding } from '../domain/media-registry.js'
+import type { LocalCore, LocalState, Owner, EndReason, TrackOptions, VideoEncoding, AudioEncoding } from '../domain/pub/local.js'
 import type { FloorCore, PttState as CorePttState, PressSource } from '../domain/floor.js'
 import type { Participant, Permission } from '../domain/room/store.js'
 import type { LinkState } from '../domain/link/core.js'
@@ -115,11 +115,11 @@ export class Ptt {
     const media = this.room.core.media
     await wrap(this.room.core.untilActive())
     if (o.track) {
-      const t = new LocalCore(this.room.core, 'audio', 'external', o.track, 'external', { ...o, profile: o.profile ?? 'ptt' })
-      await wrap(t.publish(this.room, 'half'))
+      const t = media.external('audio', 'external', o.track, { ...o, profile: o.profile ?? 'ptt' })
+      await wrap(t.publish(this.room.id, 'half'))
       return
     }
-    await wrap(media.ensureHalfMic(this.room, o))
+    await wrap(media.ensureHalfMic(this.room.id, o))
   }
 
   /** 반이중 영상 — 이 방의 미디어 코덱으로 · 송출은 발언권 게이트를 따른다 */
@@ -129,9 +129,9 @@ export class Ptt {
     const media = this.room.core.media
     let t: LocalCore
     if (o.track) {
-      t = new LocalCore(this.room.core, 'video', 'external', o.track, 'external', o)
+      t = media.external('video', 'external', o.track, o)
     } else t = await wrap(media.acquireOne('video', 'camera', { ...o, simulcast: false }, 'sdk'))
-    try { await wrap(t.publish(this.room, 'half')) } catch (e) { if (!o.track) t.track.stop(); throw e }
+    try { await wrap(t.publish(this.room.id, 'half')) } catch (e) { if (!o.track) await t.stop(); throw e }
     return localOf(t)
   }
 

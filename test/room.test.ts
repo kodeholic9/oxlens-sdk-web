@@ -13,7 +13,7 @@ import { Op, type MemberInfo, type Permission, type RoomSnapshot } from '../src/
 import type { Core } from '../src/domain/ses/core.js'
 import { createClient, OxLensError, Room } from '../src/index.js'
 import { localOf } from '../src/api/handles.js'
-import { LocalCore } from '../src/domain/media-registry.js'
+import { LocalCore } from '../src/domain/pub/local.js'
 
 const ALL: Permission = { publish_audio: true, publish_video: true, publish_screen: true, floor_request: true }
 const NO_FLOOR: Permission = { ...ALL, floor_request: false }
@@ -28,7 +28,8 @@ function fake(): { core: Core; sent: { op: string; body: unknown }[] } {
     impossible: (layer: string, key: string, from: string, entry: string) => { throw new Error(`받지 않는 사건 ${layer} ${key} ${from} ${entry}`) },
     linkFor: () => ({ sdpArev: 7, flushPendingTable: () => undefined }),
     log: { debug: () => undefined, warn: () => undefined, error: () => undefined },
-    media: { hasHalfMic: () => false, halfMicCold: () => true, ownsTrack: () => false, permissionChanged: () => undefined },
+    media: { hasHalfMic: () => false, halfMicCold: () => true, ownsTrack: () => false },
+    rooms: { playback: {} },
     sig: { request: (op: string, body: unknown) => { sent.push({ op, body }); return new Promise(() => undefined) } },
   } as unknown as Core
   return { core, sent }
@@ -653,8 +654,8 @@ test('SD-API-ROOM-SERVER — room.server = 그 방 입장 응답의 server_confi
   const ha = await enter(r, 'ra', { mode: 'talk', pub: 'ra' })
   const hb = await enter(r, 'rb', { sc: SB })
   assert.deepEqual([ha.server, hb.server], ['sfu-a', 'sfu-b'], 'SD-API-ROOM-SERVER — room.server = sfu_id')
-  const t = new LocalCore(r.core, 'audio', 'external', fakeTrack('audio'), 'external', {})
-  void t.publish(r.core.rooms.get('ra')!, 'full').catch(() => undefined)
+  const t = new LocalCore(r.core.media, 'audio', 'external', fakeTrack('audio'), 'external', {})
+  void t.publish('ra', 'full').catch(() => undefined)
   await tick()
   assert.equal(localOf(t).server, ha.server, 'SD-API-ROOM-SERVER — track.server 와 같은 값 공간')
   assert.equal(r.core.links.get(ha.server!)?.server, ha.server, 'PeerLink 를 고르는 축')
@@ -738,9 +739,8 @@ test('K-sym-RULE-ROOM-PERMISSION-BITS-1①② — 비트를 내린 뒤 장치 �
   try {
     const r = await up()
     await enter(r, 'r1', { mode: 'talk', pub: 'r1' })
-    const room = r.core.rooms.get('r1')!
-    const t = new LocalCore(r.core, 'audio', 'microphone', fakeTrack('audio'), 'sdk', {})
-    void t.publish(room, 'full').catch(() => undefined)
+    const t = new LocalCore(r.core.media, 'audio', 'microphone', fakeTrack('audio'), 'sdk', {})
+    void t.publish('r1', 'full').catch(() => undefined)
     await tick()
     await note(r, Op.PARTICIPANT_STATE, { type: 'permission', room_id: 'r1', user_id: 'u1', permission: NO_AUDIO, version: vers(2) })
     const adds = (): number => FakeWS.made.reduce((n, ws) => n + ws.requests(Op.PUBLISH_TRACKS).filter((f) => (f.body as { action?: string }).action === 'add').length, 0)
@@ -749,7 +749,7 @@ test('K-sym-RULE-ROOM-PERMISSION-BITS-1①② — 비트를 내린 뒤 장치 �
     r.c.diagnostics.on('transition', (x) => { if (x.layer === 'PUB') pub.push(`${x.label}|${x.cause}`) })
     // 장치 복구 — 이미 보내던 마이크(발행 단을 세운 자리)의 장치 트랙이 끝났다
     const dev2 = fakeTrack('audio')
-    const t2 = new LocalCore(r.core, 'audio', 'microphone', dev2, 'sdk', {})
+    const t2 = new LocalCore(r.core.media, 'audio', 'microphone', dev2, 'sdk', {})
     t2.roomId = 'r1'; t2.sfuId = 'sfu-a'; t2.st = { ...t2.st, ps: 'SENDING', want: true }
     r.core.media.register(t2)
     dev2.fire('ended'); await tick(5)
@@ -762,7 +762,8 @@ test('K-sym-RULE-ROOM-PERMISSION-BITS-1①② — 비트를 내린 뒤 장치 �
     assert.equal(adds(), base, 'K-sym-RULE-ROOM-PERMISSION-BITS-1① — 전면 재구축: 자동 재발행 0(2006 왕복 0)')
     assert.notEqual(t.state, 'staged', 'K-sym-RULE-ROOM-PERMISSION-BITS-1① — 막힌 비트의 트랙은 다시 싣지 않는다')
     assert.ok(pub.some((x) => x.endsWith('.off|permission')) && !pub.some((x) => x.startsWith('PUB.C.any.reregister|')), `K-sym-RULE-ROOM-PERMISSION-BITS-1① — 재발행 대신 비트가 끈다: ${pub.join(' · ')}`)
-    assert.ok(acquired >= 1, '장치 복구는 돌았다(재획득)')
+    assert.equal(acquired, 0, 'K-sym-RULE-ROOM-PERMISSION-BITS-1① — 장치 복구: 비트가 막는 트랙은 재획득(getUserMedia)도 하지 않는다(SDK:RULE-ROOM-PERMISSION-BITS)')
+    assert.equal(t2.state, 'idle', '대체를 다시 잡지 않으니 ended{device_lost}')
     linkOf(r, SA)
     ws2.answer(joinFrame(ws2, 'r1'), joinBody({ ...r, ws: ws2 }, 'r1', { mode: 'talk', pub: 'r1', me: NO_AUDIO } as JB))
     await tick(); await drain(r)

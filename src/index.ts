@@ -10,5 +10,5 @@ export type { SessionInfo, SessionState, Health, Quality, Transition } from './d
 export type { LinkInfo, LinkState } from './domain/link/core.js'
 export type { Participant, Permission, ParticipantType } from './domain/room/store.js'
 export type { RemoteInfo } from './domain/trk/remote.js'
-export type { TrackOptions, LocalState, Owner, EndReason, Profile } from './domain/media-registry.js'
+export type { TrackOptions, LocalState, Owner, EndReason, Profile } from './domain/pub/local.js'
 export type { Phase, LastEnd, ArmingStage, PressSource } from './domain/floor.js'
