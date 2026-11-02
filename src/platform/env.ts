@@ -128,6 +128,21 @@ export function documentTarget(): Document | null {
   return typeof document !== 'undefined' ? document : null
 }
 
+/** 화면 배율 — 타일의 물리 픽셀 폭을 잰다(SDK:IMPL-TRK-RECEIVE adaptiveStream) */
+export function pixelRatio(): number {
+  return typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+}
+
+/** 엘리먼트 가시성 관측 — 없으면 null(adaptiveStream 은 보이는 것으로 둔다) */
+export function intersectionObserver(cb: IntersectionObserverCallback): IntersectionObserver | null {
+  return typeof IntersectionObserver !== 'undefined' ? new IntersectionObserver(cb) : null
+}
+
+/** 엘리먼트 크기 관측 — 없으면 null */
+export function resizeObserver(cb: ResizeObserverCallback): ResizeObserver | null {
+  return typeof ResizeObserver !== 'undefined' ? new ResizeObserver(cb) : null
+}
+
 export function userAgent(): string {
   return typeof navigator !== 'undefined' ? navigator.userAgent : ''
 }

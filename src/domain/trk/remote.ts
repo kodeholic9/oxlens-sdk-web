@@ -1,16 +1,16 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-TRK-RECEIVE RemoteTrack · attach · adaptiveStream · room.audio · SDK:IMPL-SRC-BLOCKS Playback · SDK:RULE-MOD-AREA-MIRROR domain/trk · model: claude-opus-5-5
-// ★옛 domain/remote.ts 를 그대로 옮겼다(재설계 없음 — TRK 는 제 차례에 다시 짓는다).
+// spec: v1.2 @d626fda · SDK:IMPL-TRK-RECEIVE RemoteTrack · attach · adaptiveStream · room.audio · 연:RULE-SUB-LAYER-PROC · SDK:IMPL-SRC-BLOCKS Playback · SDK:RULE-MOD-TEST-SEAM · SDK:RULE-MOD-AREA-MIRROR domain/trk · model: claude-opus-5-5
 import type { TrackEntry, MlineEntry } from '../../internal/wire/ws.js'
 import { Emitter } from '../../platform/emitter.js'
-import { documentTarget } from '../../platform/env.js'
-import { setPlayoutDelay } from '../../platform/webrtc.js'
+import { documentTarget, pixelRatio, intersectionObserver, resizeObserver } from '../../platform/env.js'
+import { setPlayoutDelay, streamOf } from '../../platform/webrtc.js'
+import { Timer, nextTick } from '../../platform/clock.js'
 import { bugFault } from '../../platform/fault.js'
 import type { RoomCore } from '../room/core.js'
+import type { RoomTracks } from './tracks.js'
+import type { LayerTarget } from './sub.js'
 
-/** 클라이언트 객체 — 방이 든 것을 그대로 쓴다(TRK 는 SES 를 부르지 않는다 · tools/sdk_deps.json may_use) */
-type Core = RoomCore['core']
-
+/** 받는 트랙의 정체만 — trackUnreachable 의 페이로드(핸들이 아니다) */
 export interface RemoteInfo {
   readonly id: string
   readonly type: 'individual' | 'slot'
@@ -26,13 +26,28 @@ export interface RemoteEvents extends Record<string, unknown[]> {
   receiving: []
 }
 
+export interface LayerAsk { spatial?: number; temporal?: number; paused?: boolean; priority?: number }
+
 /** adaptiveStream — 보이는 트랙 200 · 안 보이는 트랙 1(SDK:IMPL-TRK-RECEIVE) */
 const PRIO_VISIBLE = 200
 const PRIO_HIDDEN = 1
 /** 작은 타일 문턱 — 물리 픽셀 폭 480 미만이면 가장 낮은 공간 단(정책:sdk.adaptiveStream) */
 const SMALL_TILE = 480
 
-/** 받는 트랙 하나 — 위 트랙 층 항목 + 배정표 줄 + 수신 트랜시버 */
+const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, Math.floor(v)))
+
+/** 받을 레이어 상한 — scalability(L{공간}T{시간}) 밖의 값은 보내지 않는다 · 없으면 레이어 칸은 싣지 않는다 · priority 1~255(연:RULE-SUB-LAYER-PROC) */
+export function layerTarget(trackId: string, scalability: string | undefined, v: LayerAsk): LayerTarget {
+  const m = /^L(\d+)T(\d+)/.exec(scalability ?? '')
+  const o: { track_id: string; spatial?: number; temporal?: number; paused?: boolean; priority?: number } = { track_id: trackId }
+  if (m && v.spatial !== undefined) o.spatial = clamp(v.spatial, 0, Number(m[1]) - 1)
+  if (m && v.temporal !== undefined) o.temporal = clamp(v.temporal, 0, Number(m[2]) - 1)
+  if (v.paused !== undefined) o.paused = v.paused
+  if (v.priority !== undefined) o.priority = clamp(v.priority, 1, 255)
+  return o
+}
+
+/** 받는 트랙 하나 — 트랙 층 항목 + 배정표 줄 + 수신 트랜시버 · 방(트랙 목록)이 소유한다 */
 export class RemoteCore {
   readonly events = new Emitter<RemoteEvents>()
   entry: TrackEntry
@@ -43,21 +58,30 @@ export class RemoteCore {
   ended = false
   private announced = false
   private unreachable = false
+  /** 복귀했는데 장착할 트랙이 아직 없다 — 줄이 오면(bind) active 를 낸다 */
+  private owed = false
+  private watched: MediaStreamTrack | null = null
   private audioEl: HTMLAudioElement | null = null
   private readonly attached = new Set<HTMLMediaElement>()
-  private observers: { io: IntersectionObserver | null; ro: ResizeObserver | null } = { io: null, ro: null }
-  private settle: ReturnType<typeof setTimeout> | null = null
-  private visible = new Map<HTMLMediaElement, { visible: boolean; width: number }>()
+  private io: IntersectionObserver | null = null
+  private ro: ResizeObserver | null = null
+  private readonly seenAt = new Map<HTMLMediaElement, { visible: boolean; width: number }>()
+  private readonly settle: Timer
   private lastLayer = ''
+  private docWatched = false
+  private readonly docSeen = (): void => this.adapt()
 
-  constructor(readonly core: Core, readonly room: RoomCore, entry: TrackEntry) {
+  constructor(readonly trk: RoomTracks, entry: TrackEntry) {
     this.entry = entry
+    this.settle = new Timer(trk.cfg.wakeDetectMs)
   }
 
+  get room(): RoomCore { return this.trk.room }
   get id(): string { return this.entry.track_id }
   get kind(): 'audio' | 'video' { return this.entry.kind }
+  /** 트랙 층 type 그대로 — track_id 를 파싱하지 않고 userId 로 추론하지 않는다 */
   get type(): 'individual' | 'slot' { return this.entry.type }
-  get userId(): string | undefined { return this.entry.user_id }
+  get userId(): string | undefined { return this.entry.type === 'individual' ? this.entry.user_id : undefined }
   get active(): boolean { return this.entry.active !== false }
   get muted(): boolean | undefined { return this.entry.type === 'individual' ? this.entry.muted ?? false : undefined }
   get scalability(): string | undefined { return this.entry.scalability }
@@ -70,22 +94,28 @@ export class RemoteCore {
     return o
   }
 
-  /** 같은 track_id 의 항목 교체 — 같은 핸들의 active */
+  /** 같은 track_id 의 항목 교체 — 같은 핸들의 active(쉼은 바로 · 복귀는 장착할 트랙이 있을 때) */
   update(t: TrackEntry): void {
-    const wasActive = this.active
+    const was = this.active
     this.entry = t
-    if (wasActive !== this.active) this.events.emit('active', { active: this.active, mediaStreamTrack: this.mediaStreamTrack })
+    if (was === this.active || !this.announced) return
+    if (this.active && !this.mediaStreamTrack) { this.owed = true; return }
+    this.owed = false
+    this.events.emit('active', { active: this.active, mediaStreamTrack: this.mediaStreamTrack })
   }
 
-  setMuted(m: boolean): void { this.events.emit('muted', m) }
+  /** 트랙 상태 통지의 muted(효과 app.track_state) */
+  setMuted(m: boolean): void {
+    this.entry = { ...this.entry, muted: m }
+    this.events.emit('muted', m)
+  }
 
-  /** 줄 · 수신 트랜시버를 잇는다 — 장착 가능한 순간에 track 이벤트(SDK:IMPL-TRK-RECEIVE) */
+  /** 줄 · 수신 트랜시버를 잇는다 — 장착 가능한 순간에 track(SDK:IMPL-TRK-RECEIVE) · 줄이 없으면 trackUnreachable 한 번 */
   bind(row: MlineEntry | null, receiver: RTCRtpReceiver | null): void {
     if (this.ended) return
-    const prevTrack = this.mediaStreamTrack
+    const prev = this.mediaStreamTrack
     this.row = row
     this.receiver = row ? receiver : null
-    const now = this.mediaStreamTrack
     if (!row) {
       if (!this.unreachable && this.active) {
         this.unreachable = true
@@ -94,29 +124,28 @@ export class RemoteCore {
       return
     }
     this.unreachable = false
+    const now = this.mediaStreamTrack
     if (!now) return
-    if (prevTrack !== now && this.announced) {
-      for (const el of this.attached) el.srcObject = new MediaStream([now])
+    if (this.announced && (prev !== now || this.owed)) {
+      this.owed = false
+      for (const el of this.attached) el.srcObject = streamOf(now)
       this.events.emit('active', { active: this.active, mediaStreamTrack: now })
     }
     this.watchReceiving(now)
     this.applyPlayback()
     if (!this.announced && !this.room.joinPending) {
       this.announced = true
-      this.room.events.emit('track', this)
-      this.core.events.emit('track', this.room, this)
+      this.room.announce(this)
     }
   }
 
-  private watched: MediaStreamTrack | null = null
-
-  /** 첫 디코딩 프레임(로컬 관측 · wire 아님) — 수신 트랙 unmute · requestVideoFrameCallback */
+  /** 첫 디코딩 프레임(로컬 관측 · wire 아님) — 수신 트랙 unmute */
   private watchReceiving(t: MediaStreamTrack): void {
     if (this.watched === t) return
     this.watched = t
     this.receiving = false
-    const fire = (): void => { if (!this.receiving && this.watched === t) { this.receiving = true; this.events.emit('receiving') } }
-    if (!t.muted) setTimeout(fire, 0)
+    const fire = (): void => { if (!this.receiving && this.watched === t && !this.ended) { this.receiving = true; this.events.emit('receiving') } }
+    if (!t.muted) void nextTick().then(fire)
     t.addEventListener('unmute', fire, { once: true })
   }
 
@@ -126,33 +155,35 @@ export class RemoteCore {
     const t = this.mediaStreamTrack
     const doc = documentTarget()
     if (!t || !doc || this.ended) return
+    const playback = this.trk.media.playback
     if (!this.audioEl) {
       const el = doc.createElement('audio')
       el.autoplay = true
       el.setAttribute('data-oxlens-room', this.room.id)
       el.setAttribute('data-oxlens-track', this.id)
       this.audioEl = el
-      this.core.media.playback.add(el)
+      playback.add(el)
     }
     const el = this.audioEl
     const cur = el.srcObject as MediaStream | null
-    if (!cur || cur.getAudioTracks()[0] !== t) el.srcObject = new MediaStream([t])
-    const a = this.room.trk.audio
+    if (!cur || cur.getAudioTracks()[0] !== t) el.srcObject = streamOf(t)
+    const a = this.trk.audio
     el.muted = a.muted
     el.volume = Math.max(0, Math.min(1, a.volume * this.volume))
-    this.core.media.playback.play(el)
+    playback.play(el)
   }
 
   setVolume(v: number): void { this.volume = Math.max(0, Math.min(1, v)); this.applyPlayback() }
 
-  setLayer(v: { spatial?: number; temporal?: number; paused?: boolean; priority?: number }): Promise<void> {
-    return this.room.trk.setLayer(this.id, v)
+  /** 받을 레이어 상한 — 범위는 scalability 로 자른다 · 입구 layer 는 구독이 넣는다 */
+  setLayer(v: LayerAsk): Promise<void> {
+    return this.trk.sub.setLayer(layerTarget(this.id, this.scalability, v))
   }
 
   setReceive(o: { playoutDelayMs: number | null }): boolean {
     if (!this.receiver) return false
     const ok = setPlayoutDelay(this.receiver, o.playoutDelayMs)
-    if (!ok) this.core.log.warn('수신 지연 손잡이가 없다 — 무시한다', { track: this.id })
+    if (!ok) this.trk.log.warn('수신 지연 손잡이가 없다 — 무시한다', { track: this.id })
     return ok
   }
 
@@ -164,12 +195,12 @@ export class RemoteCore {
   attach(el: HTMLMediaElement): void {
     if (this.kind === 'audio') throw bugFault('ATTACH_AUDIO')
     const t = this.mediaStreamTrack
-    if (t) el.srcObject = new MediaStream([t])
+    if (t) el.srcObject = streamOf(t)
     el.autoplay = true
     ;(el as HTMLVideoElement).playsInline = true
     el.muted = true
     this.attached.add(el)
-    if (this.core.cfg.adaptiveStream) this.observe(el)
+    if (this.trk.cfg.adaptiveStream) this.observe(el)
     void el.play?.().catch(() => undefined)
   }
 
@@ -177,65 +208,62 @@ export class RemoteCore {
     const list = el ? [el] : [...this.attached]
     for (const e of list) {
       this.attached.delete(e)
-      this.visible.delete(e)
-      this.observers.io?.unobserve(e)
-      this.observers.ro?.unobserve(e)
+      this.seenAt.delete(e)
+      this.io?.unobserve(e)
+      this.ro?.unobserve(e)
       if (e.srcObject) e.srcObject = null
     }
-    if (this.core.cfg.adaptiveStream) this.adapt()
+    if (this.trk.cfg.adaptiveStream) this.adapt()
   }
 
+  /** 가시성은 IntersectionObserver · 문서 visibilitychange, 크기는 ResizeObserver(SDK:IMPL-TRK-RECEIVE attach) */
   private observe(el: HTMLMediaElement): void {
-    if (typeof IntersectionObserver !== 'undefined') {
-      if (!this.observers.io) this.observers.io = new IntersectionObserver((es) => { for (const e of es) this.seen(e.target as HTMLMediaElement, { visible: e.isIntersecting }) })
-      this.observers.io.observe(el)
-    }
-    if (typeof ResizeObserver !== 'undefined') {
-      if (!this.observers.ro) this.observers.ro = new ResizeObserver((es) => { for (const e of es) this.seen(e.target as HTMLMediaElement, { width: e.contentRect.width }) })
-      this.observers.ro.observe(el)
-    }
-    this.visible.set(el, { visible: true, width: el.clientWidth || 640 })
+    if (!this.io) this.io = intersectionObserver((es) => { for (const e of es) this.seen(e.target as HTMLMediaElement, { visible: e.isIntersecting }) })
+    if (!this.ro) this.ro = resizeObserver((es) => { for (const e of es) this.seen(e.target as HTMLMediaElement, { width: e.contentRect.width }) })
+    this.io?.observe(el)
+    this.ro?.observe(el)
+    const doc = documentTarget()
+    if (doc && !this.docWatched) { this.docWatched = true; doc.addEventListener('visibilitychange', this.docSeen) }
+    this.seenAt.set(el, { visible: true, width: el.clientWidth || 640 })
     this.adapt()
   }
 
   private seen(el: HTMLMediaElement, v: { visible?: boolean; width?: number }): void {
-    const cur = this.visible.get(el) ?? { visible: true, width: 640 }
-    this.visible.set(el, { visible: v.visible ?? cur.visible, width: v.width ?? cur.width })
+    const cur = this.seenAt.get(el) ?? { visible: true, width: 640 }
+    this.seenAt.set(el, { visible: v.visible ?? cur.visible, width: v.width ?? cur.width })
     this.adapt()
   }
 
-  /** 바뀜은 adaptiveStreamSettleMs 동안 묶어 setLayer 를 한 번 낸다 */
+  /** 바뀜은 adaptiveStreamSettleMs 동안 묶어 setLayer 를 한 번 낸다 · 같은 값은 다시 내지 않는다 */
   private adapt(): void {
-    if (this.settle !== null) clearTimeout(this.settle)
-    this.settle = setTimeout(() => {
-      this.settle = null
+    this.settle.start(this.trk.cfg.adaptiveStreamSettleMs, () => {
+      if (this.ended) return
       const doc = documentTarget()
       const hiddenDoc = doc ? doc.visibilityState === 'hidden' : false
       let any = false
       let maxW = 0
-      for (const v of this.visible.values()) if (v.visible) { any = true; maxW = Math.max(maxW, v.width) }
-      const seen = any && !hiddenDoc
-      const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+      for (const v of this.seenAt.values()) if (v.visible) { any = true; maxW = Math.max(maxW, v.width) }
+      const shown = any && !hiddenDoc
       const L = /^L(\d+)/.exec(this.scalability ?? '')
-      const top = L ? Math.max(0, Number(L[1]) - 1) : undefined
-      const v: { spatial?: number; paused: boolean; priority: number } = { paused: !seen, priority: seen ? PRIO_VISIBLE : PRIO_HIDDEN }
-      if (top !== undefined) v.spatial = maxW * dpr < SMALL_TILE ? 0 : top
+      const v: LayerAsk = { paused: !shown, priority: shown ? PRIO_VISIBLE : PRIO_HIDDEN }
+      if (L) v.spatial = maxW * pixelRatio() < SMALL_TILE ? 0 : Number(L[1]) - 1
       const key = JSON.stringify(v)
       if (key === this.lastLayer) return
       this.lastLayer = key
-      void this.setLayer(v)
-    }, this.core.cfg.adaptiveStreamSettleMs)
+      this.setLayer(v).catch(() => undefined)
+    })
   }
 
   end(): void {
     if (this.ended) return
     this.ended = true
-    if (this.settle !== null) clearTimeout(this.settle)
-    this.observers.io?.disconnect()
-    this.observers.ro?.disconnect()
+    this.settle.stop()
+    this.io?.disconnect()
+    this.ro?.disconnect()
+    if (this.docWatched) documentTarget()?.removeEventListener('visibilitychange', this.docSeen)
     for (const el of this.attached) if (el.srcObject) el.srcObject = null
     this.attached.clear()
-    if (this.audioEl) { this.core.media.playback.remove(this.audioEl); this.audioEl.srcObject = null; this.audioEl = null }
+    if (this.audioEl) { this.trk.media.playback.remove(this.audioEl); this.audioEl.srcObject = null; this.audioEl = null }
     this.events.emit('ended')
   }
 }

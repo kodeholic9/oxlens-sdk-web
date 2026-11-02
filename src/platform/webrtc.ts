@@ -41,3 +41,8 @@ export function setPlayoutDelay(receiver: RTCRtpReceiver, ms: number | null): bo
   if ('playoutDelayHint' in h) { h.playoutDelayHint = ms === null ? null : ms / 1000; return true }
   return false
 }
+
+/** 트랙 하나를 엘리먼트에 붙일 스트림 — 수신 트랙 장착 · 수신 오디오 재생(SDK:IMPL-SRC-BLOCKS Playback) */
+export function streamOf(t: MediaStreamTrack): MediaStream {
+  return new MediaStream([t])
+}

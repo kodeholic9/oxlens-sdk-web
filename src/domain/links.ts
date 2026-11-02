@@ -228,16 +228,16 @@ export class LinkCore {
     const mid = TableStore.midOf(t) as unknown as LINK.St['mid']
     const rows = TableStore.materials(t.mlines)
     const step = entry(mid, rows)
-    const fresh = step.label !== 'LINK.C.any.table_old' && step.label !== 'LINK.C.any.table_carried_old'
+    // 받아들였는가 · SDP 재료가 그대로인가는 위가 돌려준 상태로 읽는다(라벨 글자로 가르지 않는다)
+    const fresh = step.s.arev !== this.st.arev
     if (fresh) {
       this.table.accept(t)
       this.peer?.setRows(this.table.mlines)
+      // 재료가 그대로면(같음 · 재배정) 이 표가 적용된 SDP 와 줄이 같은 가장 새 표 — 이음매 sub.table_rebound 의 READY 가 이 차례를 싣는다(연:RULE-SUB-TABLE-PROC 3 · 4)
+      if (!this.negotiating && step.s.rows === this.st.rows) this.sdpArev = t.arev
     }
     this.step(name, step, 'table')
-    if (fresh) {
-      if (!this.negotiating && (step.label.endsWith('_same') || step.label.endsWith('rebound'))) this.sdpArev = t.arev
-      for (const r of this.core.roomsOn(this.server)) r.trk.syncRemotes()
-    }
+    if (fresh) for (const r of this.core.roomsOn(this.server)) r.trk.syncRemotes()
   }
 
   linkEvent(ufrag: string): void {
@@ -305,7 +305,7 @@ export class LinkCore {
   private send(tx: LINK.Tx): void {
     if (tx.ws === 'READY') {
       for (const r of this.core.roomsOn(this.server)) {
-        r.trk.sendReady()
+        r.trk.sub.sendReady()
         if (r.floor.st.cs === 'QUEUED') r.floor.queuePosition()
       }
     } else if (tx.ws === 'HEARTBEAT') {
@@ -364,10 +364,10 @@ export class LinkCore {
       case 'pub.reregister_server': core.media.reregisterAll(this.server); break
       case 'rooms.rejoin_server': core.rejoinAll(rooms); break
       case 'store.drop_server': for (const r of rooms) r.downAll(); break
-      case 'sub.nego_ok': for (const r of rooms) r.trk.subStep('negoOk', SUBmod.negoOk(r.trk.sub), 'nego'); break
-      case 'sub.nego_fail': for (const r of rooms) r.trk.subStep('negoFail', SUBmod.negoFail(r.trk.sub), 'nego'); break
-      case 'sub.table_changed': for (const r of rooms) r.trk.subStep('tableChanged', SUBmod.tableChanged(r.trk.sub), 'table'); break
-      case 'sub.table_rebound': for (const r of rooms) r.trk.subStep('tableRebound', SUBmod.tableRebound(r.trk.sub), 'table'); break
+      case 'sub.nego_ok': for (const r of rooms) r.trk.sub.enter('negoOk', 'nego', []); break
+      case 'sub.nego_fail': for (const r of rooms) r.trk.sub.enter('negoFail', 'nego', []); break
+      case 'sub.table_changed': for (const r of rooms) r.trk.sub.enter('tableChanged', 'table', []); break
+      case 'sub.table_rebound': for (const r of rooms) r.trk.sub.enter('tableRebound', 'table', []); break
     }
   }
 
@@ -385,7 +385,8 @@ export class LinkCore {
     else if (r.fault) this.negoFault = r.fault
     this.step('negoRes', LINK.negoRes(this.st, r.ok), r.ok ? 'nego.ok' : 'nego.fail')
     for (const room of this.core.roomsOn(this.server)) {
-      if (!r.ok && room.joinPending) room.events.emit('error', this.negoFault ?? new Fault({ code: 0, name: 'NEGOTIATION_APPLY', category: 'negotiation' }))
+      // 재조립 협상 실패는 내 요청이 아니다 — 그 서버에 들어가 있는 방마다 room.error(SDK:IMPL-TRK-RECEIVE · 입장 중 방만이 아니다)
+      if (!r.ok && room.st.rs === 'JOINED') room.events.emit('error', this.negoFault ?? new Fault({ code: 0, name: 'NEGOTIATION_APPLY', category: 'negotiation' }))
       if (room.joinPending && !this.st.nego) room.finishJoin()
       else room.trk.syncRemotes()
     }
@@ -416,4 +417,3 @@ export class LinkCore {
   }
 }
 
-import * as SUBmod from './gen/sub_client.js'

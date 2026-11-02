@@ -5,17 +5,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { FakeWS, tick, type Frame } from './_ws.js'
+import { BIND_OK, SA, SB, up, linkOf, drain, joinBody, joinFrame, leaveFrame, FAIL, enter, vers, note, httpMock, getRoom, mem, type Rig, type JB } from './_rig.js'
 import * as ROOM from '../src/domain/gen/room_client.js'
 import * as RB from '../src/domain/gen/room_binding.js'
 import * as AFF from '../src/domain/gen/aff_client.js'
 import { RoomCore } from '../src/domain/room/core.js'
-import { Op, type MemberInfo, type Permission, type RoomSnapshot, type RoomJoinRes, type ServerConfig, type TrackEntry, type GetRoomRes } from '../src/internal/wire/ws.js'
+import { Op, type MemberInfo, type Permission, type RoomSnapshot } from '../src/internal/wire/ws.js'
 import type { Core } from '../src/domain/ses/core.js'
-import { createClient, OxLensError, Room, type OxLensClient, type ClientOptions } from '../src/index.js'
+import { createClient, OxLensError, Room } from '../src/index.js'
 import { localOf } from '../src/api/handles.js'
-import { LinkCore } from '../src/domain/links.js'
 import { LocalCore } from '../src/domain/media-registry.js'
-import { SC } from './_fixtures.js'
 
 const ALL: Permission = { publish_audio: true, publish_video: true, publish_screen: true, floor_request: true }
 const NO_FLOOR: Permission = { ...ALL, floor_request: false }
@@ -46,7 +45,7 @@ const member = (user_id: string, permission: Permission): MemberInfo => ({ user_
 
 test('연:SUB.op.READY — READY 는 room_id · arev 만 싣는다(camera 갈래 없음 · 대장 C-37 ③)', () => {
   const { core, sent } = fake()
-  joined(core).trk.sendReady()
+  joined(core).trk.sub.sendReady()
   assert.deepEqual(sent, [{ op: 'READY', body: { room_id: 'r1', arev: 7 } }])
 })
 
@@ -98,9 +97,6 @@ test('연:RULE-ROOM-VERSION-CLIENT-RULES — 트랙 통지는 방 상태기가 �
 
 // ══ ROOM 영역 1층 — 입구 표 · 효과 표 · 표면 ══════════════════════════════
 
-const BIND_OK = { user_id: 'u1', server_ver: 1, heartbeat_interval: 10_000, session_id: 's-1', resume_window_ms: 60_000, pc_mode: '2pc' }
-const SA: ServerConfig = { ...SC, sfu_id: 'sfu-a' }
-const SB: ServerConfig = { ...SC, sfu_id: 'sfu-b', ice: { ...SC.ice, publish_ufrag: 'pubUfB' } }
 const NO_AUDIO: Permission = { ...ALL, publish_audio: false }
 
 /** 위 결합 ENTRY 의 입구마다 불린 인자(상태 뒤) — SDK 사건이 결합 코드를 지났나를 잰다 */
@@ -115,105 +111,6 @@ function spyEntry(): { calls: Record<string, unknown[][]>; n(k: string): number;
   return { calls, n: (k) => calls[k]?.length ?? 0, restore: () => { Object.assign(E, saved) } }
 }
 
-/** PeerLink 자리 — 협상은 settle() 이 끝낸다 · 조립 횟수를 센다 */
-interface FakePeer { assembled: number; settle(ok?: boolean): void }
-function fakePeer(): FakePeer {
-  const waiting: ((r: { ok: boolean }) => void)[] = []
-  const p = {
-    assembled: 0, dcOpen: false, ice: 'new', sctpState: null,
-    negotiate: () => { p.assembled++; return new Promise<{ ok: boolean }>((r) => waiting.push(r)) },
-    settle: (ok = true) => { for (const w of waiting.splice(0)) w({ ok }) },
-    setRows: () => undefined, receiverOf: () => null, sendDc: () => false, close: () => undefined,
-    acquireSlot: (kind: string) => ({ kind, transceiver: null, mid: null }), releaseSlot: () => undefined, deactivate: () => undefined,
-    sendInfo: () => null, restartWith: () => undefined, reopenDc: () => undefined, stats: async () => [],
-  }
-  return p
-}
-
-interface Rig { c: OxLensClient; core: Core; ws: FakeWS; peers: Map<string, FakePeer>; labels: { key: string; label: string }[] }
-
-async function up(o: Partial<ClientOptions> = {}): Promise<Rig> {
-  FakeWS.made.length = 0
-  FakeWS.auto.set(Op.READY, {})
-  const c = createClient({ base: 'https://hub.example', token: 'tok', pcMode: '2pc', massJitterMs: 0, ...o })
-  const r: Rig = { c, core: c.core, ws: undefined as unknown as FakeWS, peers: new Map(), labels: [] }
-  c.diagnostics.on('transition', (t) => { if (t.layer === 'ROOM') r.labels.push({ key: t.key, label: t.label }) })
-  const p = c.connect()
-  await tick(); r.ws = FakeWS.made[0]!; r.ws.open(); await tick()
-  r.ws.reply(Op.BIND, BIND_OK)
-  await p
-  return r
-}
-
-/** 그 서버의 연결 — 진짜 연결 상태기 · 가짜 PeerLink(입장 응답이 이것을 고른다 — LinkCore.adopt) */
-function linkOf(r: Rig, sc: ServerConfig): LinkCore {
-  const have = r.core.links.get(sc.sfu_id)
-  if (have?.peer) return have
-  const peer = fakePeer()
-  r.peers.set(sc.sfu_id, peer)
-  if (have) { have.peer = peer as never; have.sc = sc; return have }
-  const Link = LinkCore as unknown as new (core: Core, sc: ServerConfig, peer: unknown) => LinkCore
-  const link = new Link(r.core, sc, peer)
-  r.core.links.set(sc.sfu_id, link)
-  return link
-}
-
-/** 그 서버의 협상을 끝까지 — 연달아 걸린 재협상까지 */
-async function drain(r: Rig, sc: ServerConfig = SA): Promise<void> {
-  for (let i = 0; i < 6; i++) { r.peers.get(sc.sfu_id)?.settle(); await tick() }
-}
-
-interface JB { sc?: ServerConfig; me?: Permission; meSelect?: boolean; hidden?: boolean; others?: MemberInfo[]; pub?: string | null; subs?: string[]; epoch?: string; seq?: number; tracks?: TrackEntry[] }
-
-const mem = (user_id: string, permission?: Permission, o: { select?: boolean; type?: 0 | 1 | 2 } = {}): MemberInfo => ({ user_id, select: o.select ?? false, participant_type: o.type ?? 0, ...(permission ? { permission } : {}) })
-
-/** 입장 응답 — sub_rooms 는 그 서버에 이미 들어간 방 + 이 방(서버가 보는 그대로) */
-function joinBody(r: Rig, id: string, o: JB = {}): RoomJoinRes {
-  const sc = o.sc ?? SA
-  const subs = o.subs ?? [...new Set([...[...r.core.rooms.values()].filter((x) => x.sfuId === sc.sfu_id && x.st.rs === 'JOINED').map((x) => x.id), id])]
-  const me = mem('u1', o.me, { select: o.meSelect ?? false })
-  return {
-    room_id: id, participants: [...(o.hidden ? [] : [me]), ...(o.others ?? [])], me, affiliation: { sub_rooms: subs, pub_room: o.pub ?? null },
-    server_config: sc, tracks: o.tracks ?? [], version: { epoch: o.epoch ?? 'e1', seq: o.seq ?? 1 }, media_codecs: { audio: 'opus', video: 'H264' },
-    mline_table: { sfu_id: sc.sfu_id, arev: 1, mlines: [] },
-  }
-}
-
-const joinFrame = (ws: FakeWS, id: string): Frame => ws.requests(Op.ROOM_JOIN).filter((f) => (f.body as { room_id: string }).room_id === id).at(-1)!
-const leaveFrame = (ws: FakeWS, id: string): Frame => ws.requests(Op.ROOM_LEAVE).filter((f) => (f.body as { room_id: string }).room_id === id).at(-1)!
-const FAIL = (code: number, name: string, details?: Record<string, unknown>): unknown => ({ code, name, permanent: false, ...(details ? { details } : {}) })
-
-/** client.join() 하나를 끝까지 — 입장 응답 · 첫 협상 */
-async function enter(r: Rig, id: string, o: JB & { mode?: 'listen' | 'talk' } = {}): Promise<Room> {
-  const sc = o.sc ?? SA
-  const p = r.c.join(id, o.mode ? { mode: o.mode } : {})
-  await tick()
-  linkOf(r, sc)
-  r.ws.answer(joinFrame(r.ws, id), joinBody(r, id, o))
-  await tick()
-  await drain(r, sc)
-  return p
-}
-
-const vers = (seq: number, epoch = 'e1'): { epoch: string; seq: number } => ({ epoch, seq })
-async function note(r: Rig, op: number, body: unknown): Promise<void> { r.ws.notify(op, body); await tick() }
-
-/** 재동기 · 미리보기 · 목록의 HTTP — 시험이 응답을 쥔다 */
-function httpMock(h: (url: string) => Promise<{ status: number; body: unknown }> | { status: number; body: unknown }): { calls: { url: string; headers: Record<string, string> }[]; restore(): void } {
-  const g = globalThis as unknown as { fetch: unknown }
-  const saved = g.fetch
-  const calls: { url: string; headers: Record<string, string> }[] = []
-  g.fetch = async (url: string, init: { headers: Record<string, string> }) => {
-    calls.push({ url, headers: init.headers })
-    const x = await h(url)
-    return { status: x.status, text: async () => JSON.stringify(x.body) }
-  }
-  return { calls, restore: () => { g.fetch = saved } }
-}
-
-function getRoom(id: string, seq: number, others: MemberInfo[] = [], epoch = 'e1'): GetRoomRes {
-  return { room_id: id, name: id, capacity: 10, user_count: others.length + 1, participants: [mem('u1'), ...others], me: mem('u1'), created_at: 0, media_codecs: {}, version: vers(seq, epoch), tracks: [] }
-}
 
 test('SD-ENTRY-ROOM-JOIN — client.join() 은 연결이 active 가 된 뒤 ENTRY.join 하나 · 위가 ROOM_JOIN 을 낸다', async () => {
   const spy = spyEntry()

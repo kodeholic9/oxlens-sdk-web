@@ -60,6 +60,7 @@ const JOIN_SETTLE_MS = 10_000
  * 방 하나 — 위가 지은 방 클라 상태기 하나(방마다).
  * 절차는 위가 정한다 — 여기는 입구 표(어느 SDK 사건이 어느 입구를) · 효과 표(위 효과를 어느 표면으로) · 이음매 집행만.
  * 받는 트랙(트랙 · 구독 상태기)은 domain/trk 의 RoomTracks 가 들고, 위 이음매대로 직접 부른다.
+ * TRK 는 세션 영역을 부르지 않는다(may_use) — 받는 쪽이 세션에서 쓰는 것(신원 · 기록 · 요청 · 클라이언트 track)은 방이 내준다.
  */
 export class RoomCore {
   st: ROOM.St = ROOM.initial()
@@ -102,7 +103,7 @@ export class RoomCore {
     this.mode = opts.mode ?? 'listen'
     this.role = opts.role ?? 255
     this.floor = new FloorCore(core, this)
-    this.trk = new RoomTracks(this)
+    this.trk = new RoomTracks(this, core.media, core.cfg, core.log)
     this.retryTimer = new Timer(core.cfg.wakeDetectMs)
     this.settleTimer = new Timer(core.cfg.wakeDetectMs)
   }
@@ -117,6 +118,26 @@ export class RoomCore {
   get link(): LinkCore | undefined { return this.core.linkFor(this.sfuId) }
 
   get permission(): Permission { return this.store.permission ?? ALL_TRUE }
+
+  // ── 받는 트랙(TRK)이 방을 지나 쓰는 것 ─────────────────────────────────
+
+  /** 내 user_id — 내 개인 트랙은 받을 트랙이 아니다 */
+  get selfId(): string | null { return this.core.userId }
+
+  record(layer: string, key: string, from: string, to: string, label: string, cause: string): void { this.core.record(layer, key, from, to, label, cause) }
+  impossible(layer: string, key: string, from: string, entry: string): void { this.core.impossible(layer, key, from, entry) }
+
+  /** 이 방의 구독 요청 — READY · SUBSCRIBE_LAYER */
+  request(op: 'READY' | 'SUBSCRIBE_LAYER', body: Record<string, unknown>): Promise<Reply> { return this.core.sig.request(op, body) }
+
+  /** 장착 가능한 받는 트랙 — room.track 과 client.track(SDK:IMPL-TRK-RECEIVE) */
+  announce(r: RemoteCore): void {
+    this.events.emit('track', r)
+    this.core.events.emit('track', this, r)
+  }
+
+  /** 받는 트랙 목록이 바뀌었다 — 슬롯 화자 표면(발언권)이 다시 잰다 */
+  tracksChanged(): void { this.floor.speakerTracks() }
 
   joined(): Promise<RoomCore> {
     if (this.st.rs === 'JOINED') return Promise.resolve(this)
@@ -367,16 +388,15 @@ export class RoomCore {
         if (c) {
           this.store.reset(c.participants, c.me)
           if (c.mediaCodecs) this.store.mediaCodecs = c.mediaCodecs
-          this.trk.reset(c.tracks)
           this.adopted = true
         }
-        this.trk.snapshot()
+        this.trk.snapshot(c ? c.tracks : null, label)
         break
       }
       case 'trk.delta': if (this.notice) this.trk.delta(this.notice.op, this.notice.body); break
       case 'store.drop': this.trk.storeDrop(label); break
-      case 'ready.tracks': this.trk.ready(label); break
-      case 'sub.drop': this.trk.dropSub(label); break
+      case 'ready.tracks': this.trk.sub.enter('ready', label, []); break
+      case 'sub.drop': this.trk.sub.enter('dropRoom', label, []); break
       case 'link.table': {
         const t = this.lastJoin?.mline_table
         if (t && link) link.tableCarried(t)

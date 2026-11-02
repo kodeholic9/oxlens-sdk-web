@@ -3,7 +3,7 @@
 //   ① import 방향은 api → domain → internal → platform 한 방향뿐이다.
 //   ② IoC 릴레이 금지 — 모듈 사이는 직접 호출·직접 소유로 잇는다.
 //   ③ 표면 오류형(OxLensError)은 api 층에서만 산다 — 아래는 사실만 올린다.
-//   ④ 층 아래는 규격 영역의 거울이다(SDK:RULE-MOD-AREA-MIRROR) — 영역 없는 디렉터리 · 디렉터리 없는 영역 · may_use 밖 import 를 센다.
+//   ④ 층 아래는 규격 영역의 거울이다(SDK:RULE-MOD-AREA-MIRROR) — 영역 없는 디렉터리 · 디렉터리 없는 영역 · may_use 밖 import · SES 를 필드(core)로 건너 부르기를 센다.
 //      영역 표는 SDK 정의서 짓기의 deps.json 사본(tools/sdk_deps.json — 손으로 고치지 않는다 · 생성본처럼 옮긴다).
 //      ★아직 거울이 아닌 곳은 판정표(tools/arch_known.tsv — 위반 · 사유)에 둔다. 표 밖 위반 · 표에만 남은 줄은 실패(줄어들기만 한다).
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -81,7 +81,10 @@ for (const file of walk(join(SRC, 'domain'))) {
   const from = AREAS[parts[0]]
   if (!from || parts.length < 2) continue
   const may = new Set([from, ...((DEPS.areas[from] || {}).may_use || [])])
-  for (const m of readFileSync(file, 'utf8').matchAll(/from\s+'(\.[^']*)'/g)) {
+  const text = readFileSync(file, 'utf8')
+  // 건너 부르기 — 세션 객체(Core)는 방 · 연결이 든 필드(core)로도 닿는다 · import 경로만 보면 못 잡는다
+  if (!may.has('SES') && /\.core\b|\['core'\]/.test(text)) mirror.push(`${relative(SRC, file)}: ${from} → SES 를 필드(core)로 건너 부른다 — may_use 밖`)
+  for (const m of text.matchAll(/from\s+'(\.[^']*)'/g)) {
     const to = relative(join(SRC, 'domain'), resolve(dirname(file), m[1])).split(sep)[0]
     const A = AREAS[to]
     if (A && !may.has(A)) mirror.push(`${relative(SRC, file)}: ${from} → ${A} 는 may_use 밖 (${m[1]})`)
