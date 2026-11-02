@@ -114,11 +114,14 @@ export class RemoteCore {
   bind(row: MlineEntry | null, receiver: RTCRtpReceiver | null): void {
     if (this.ended) return
     const prev = this.mediaStreamTrack
+    const lost = this.row !== null && !row
     this.row = row
     this.receiver = row ? receiver : null
     if (!row) {
       if (!this.unreachable && this.active) {
         this.unreachable = true
+        // 받던 트랙이 줄을 잃었다 — 핸들 수명 끝(SDK §10 정체성 표) · 서버가 줄을 다시 주면 새 핸들로 온다 · 쉬는 트랙은 같은 핸들
+        if (lost && this.announced) this.end()
         this.room.events.emit('trackUnreachable', this.info())
       }
       return

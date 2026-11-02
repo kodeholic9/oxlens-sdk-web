@@ -1,6 +1,6 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/sdp · 연:RULE-LINK-SDP-SESSION-HEADER · 연:RULE-LINK-SDP-COMMON · 연:RULE-LINK-SDP-PUB-MLINE · 연:RULE-LINK-SDP-SUB-MLINE · 연:RULE-LINK-SDP-DC-MLINE · 연:RULE-LINK-SDP-1PC-FILL · model: claude-opus-5-5
-import type { ServerConfig, MlineEntry, ExtMap } from './wire/ws.js'
+// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/sdp · SDK:RULE-MOD-AREA-MIRROR internal/link · 연:RULE-LINK-SDP-SESSION-HEADER · 연:RULE-LINK-SDP-COMMON · 연:RULE-LINK-SDP-PUB-MLINE · 연:RULE-LINK-SDP-SUB-MLINE · 연:RULE-LINK-SDP-DC-MLINE · 연:RULE-LINK-SDP-1PC-FILL · model: claude-opus-5-5
+import type { ServerConfig, MlineEntry, ExtMap } from '../wire/ws.js'
 
 export type Kind = 'audio' | 'video' | 'application'
 export type Dir = 'sendrecv' | 'sendonly' | 'recvonly' | 'inactive'

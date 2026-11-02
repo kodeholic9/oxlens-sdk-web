@@ -5,7 +5,7 @@ import { FakeWS, tick, type Frame } from './_ws.js'
 import { Op, type MemberInfo, type Permission, type RoomJoinRes, type ServerConfig, type TrackEntry, type GetRoomRes, type MlineEntry } from '../src/internal/wire/ws.js'
 import type { Core, Transition } from '../src/domain/ses/core.js'
 import { createClient, type OxLensClient, type ClientOptions, type Room } from '../src/index.js'
-import { LinkCore } from '../src/domain/links.js'
+import { LinkCore } from '../src/domain/link/core.js'
 import { SC } from './_fixtures.js'
 
 export const BIND_OK = { user_id: 'u1', server_ver: 1, heartbeat_interval: 10_000, session_id: 's-1', resume_window_ms: 60_000, pc_mode: '2pc' }

@@ -130,10 +130,12 @@ export class RoomTracks {
     }
     for (const t of this.entries.values()) {
       if (own(t, me)) continue
+      const row = link?.table.rowOf(t.track_id) ?? null
       let r = this.remotes.get(t.track_id)
+      // 줄을 잃어 끝난 핸들 — 줄이 다시 오면 새 핸들(SDK:IMPL-TRK-RECEIVE trackUnreachable)
+      if (r?.ended) { if (!row) continue; this.remotes.delete(t.track_id); r = undefined }
       if (!r) { r = new RemoteCore(this, t); this.remotes.set(t.track_id, r) }
       else r.update(t)
-      const row = link?.table.rowOf(t.track_id) ?? null
       r.bind(row, row ? link?.peer?.receiverOf(row.mid) ?? null : null)
     }
     this.room.tracksChanged()

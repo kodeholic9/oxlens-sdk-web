@@ -15,7 +15,7 @@ import { pageTarget } from '../../platform/env.js'
 import { settle, opusFmtpLine, type ClientOptions, type Settings } from '../defaults.js'
 import { RoomTable } from '../room/table.js'
 import type { RoomCore, RoomEvents } from '../room/core.js'
-import type { LinkCore, LinkInfo } from '../links.js'
+import type { LinkCore, LinkInfo } from '../link/core.js'
 import { MediaRegistry, type LocalCore } from '../media-registry.js'
 import { SesClock } from './clock.js'
 

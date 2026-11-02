@@ -1,11 +1,12 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/transport · PeerLink · 연:RULE-LINK-SDP-RENEGOTIATE · 연:RULE-LINK-SDP-1PC-PROC · 연:RULE-LINK-SDP-DC-OPENER · 연:RULE-LINK-SDP-COMMON 재시작 조립 · model: claude-opus-5-5
-import type { ServerConfig, MlineEntry, ExtMap, PublishTrack } from './wire/ws.js'
+// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/transport · PeerLink · SDK:RULE-MOD-AREA-MIRROR internal/link · SDK:RULE-LINK-LAYERS 2pc 합성 · 연:RULE-LINK-SDP-RENEGOTIATE · 연:RULE-LINK-SDP-1PC-PROC · 연:RULE-LINK-SDP-DC-OPENER · 연:RULE-LINK-SDP-COMMON 재시작 조립 · model: claude-opus-5-5
+import type { ServerConfig, MlineEntry, ExtMap, PublishTrack } from '../wire/ws.js'
 import * as Sdp from './sdp.js'
-import { createPeerConnection, udpCandidateOn, tcpCandidateOn } from '../platform/webrtc.js'
-import { negotiationFault, type Fault } from '../platform/fault.js'
-import { Queue } from '../platform/queue.js'
-import type { Logger } from '../platform/log.js'
+import { createPeerConnection, udpCandidateOn, tcpCandidateOn } from '../../platform/webrtc.js'
+import { negotiationFault, type Fault } from '../../platform/fault.js'
+import { Queue } from '../../platform/queue.js'
+import { wall } from '../../platform/clock.js'
+import type { Logger } from '../../platform/log.js'
 
 export type PcMode = '1pc' | '2pc'
 
@@ -56,6 +57,13 @@ type Entry = { readonly t: 'send'; readonly slot: SendSlot } | { readonly t: 're
 
 const RANK: Record<RTCIceConnectionState, number> = { failed: 5, disconnected: 4, closed: 6, new: 2, checking: 3, connected: 0, completed: 0 }
 
+/** 2pc 합성 — PC 별 ICE 사실을 나쁜 쪽으로 합친다(SDK:RULE-LINK-LAYERS) */
+export function worstIce(states: readonly RTCIceConnectionState[]): RTCIceConnectionState {
+  let worst: RTCIceConnectionState = 'connected'
+  for (const s of states) if (RANK[s] > RANK[worst]) worst = s
+  return worst
+}
+
 /**
  * 미디어 서버 하나에 대한 이 세션의 전송 묶음(SDK:IMPL-MOD-TABLE PeerLink) — 2pc 는 발행 PC(클라 answer · DC) + 구독 PC(클라 offer),
  * 1pc 는 하나에 둘 다 · 트랜시버 풀 · 협상 큐 · 그 서버 자격. ★negotiationneeded 를 듣지 않는다 — 협상은 큐가 시작한다.
@@ -71,7 +79,7 @@ export class PeerLink {
   private readonly book: Entry[] = []
   private firstAnswer: Sdp.Parsed | null = null
   private mine: ExtMap[] = []
-  private readonly sess = { id: String(Date.now()), version: 1 }
+  private readonly sess = { id: String(wall()), version: 1 }
   private pubCreds: Sdp.Creds
   private subCreds: Sdp.Creds
   private restartPending = false
@@ -103,8 +111,7 @@ export class PeerLink {
   }
 
   private iceChanged(): void {
-    let worst: RTCIceConnectionState = 'connected'
-    for (const pc of this.pcs) if (RANK[pc.iceConnectionState] > RANK[worst]) worst = pc.iceConnectionState
+    const worst = worstIce(this.pcs.map((pc) => pc.iceConnectionState))
     if (worst === this.lastIce) return
     this.lastIce = worst
     this.facts.push({ t: 'ice', state: worst })
@@ -275,16 +282,19 @@ export class PeerLink {
   negotiate(): Promise<Negotiated> {
     return this.queued(async () => {
       if (this.closed || !this.sc) return { ok: false, fault: negotiationFault('CLOSED') }
+      // 새 자격은 이 협상이 싣는다 — 진행 중에 온 자격은 다음 협상 몫이라 시작 때 떼어 낸다(연:PROP-LINK-RESTART-AFTER-NEGO)
+      const restart = this.restartPending
+      this.restartPending = false
       try {
         if (this.mode === '2pc') {
-          if (this.pubDirty || this.restartPending) await this.negotiatePub2pc()
-          if (this.subDirty || (this.restartPending && this.sub)) await this.negotiateSub2pc()
+          if (this.pubDirty || restart) await this.negotiatePub2pc(restart)
+          if (this.subDirty || (restart && this.sub)) await this.negotiateSub2pc()
         } else {
           await this.negotiate1pc()
         }
-        this.restartPending = false
         return { ok: true }
       } catch (e) {
+        if (restart) this.restartPending = true
         this.log.error('협상 실패', { err: String(e) })
         for (const pc of this.pcs) {
           if (pc.signalingState !== 'stable' && pc.signalingState !== 'closed') {
@@ -296,9 +306,9 @@ export class PeerLink {
     })
   }
 
-  private async negotiatePub2pc(): Promise<void> {
+  private async negotiatePub2pc(restart: boolean): Promise<void> {
     this.pubDirty = false
-    const offer = await this.pub.createOffer(this.restartPending ? { iceRestart: true } : {})
+    const offer = await this.pub.createOffer(restart ? { iceRestart: true } : {})
     await this.pub.setLocalDescription(offer)
     const parsed = Sdp.parse(offer.sdp ?? '')
     const bySection = (s: Sdp.Section): SendSlot | undefined => this.slots.find((x) => x.transceiver?.mid === s.mid)

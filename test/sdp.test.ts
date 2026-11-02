@@ -2,8 +2,8 @@
 // 연:RULE-LINK-SDP-* 조립 — 판정 근거는 연동규격서 완성 예시(연:EX-LINK-SDP-PUB-ANSWER · SUB-OFFER · LISTEN-ONLY)다.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import * as Sdp from '../src/internal/sdp.js'
-import { pickRoom } from '../src/internal/transport.js'
+import * as Sdp from '../src/internal/link/sdp.js'
+import { pickRoom } from '../src/internal/link/transport.js'
 import { ROOM_OPUS_FMTP } from '../src/domain/defaults.js'
 import { SC, ROWS, SUB_OFFER, PUB_OFFER, PUB_ANSWER, DC_OFFER, DC_ANSWER } from './_fixtures.js'
 

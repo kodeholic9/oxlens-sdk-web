@@ -9,7 +9,7 @@ import { Fault, fromFailure, closedFault, negotiationFault } from '../../platfor
 import { Timer, sleep } from '../../platform/clock.js'
 import type { Core } from '../ses/core.js'
 import { FloorCore } from '../floor.js'
-import { LinkCore } from '../links.js'
+import { LinkCore } from '../link/core.js'
 import { RoomTracks } from '../trk/tracks.js'
 import type { RemoteCore, RemoteInfo } from '../trk/remote.js'
 import { RoomStore, ALL_TRUE, type Participant, type Permission, type PermissionChange } from './store.js'

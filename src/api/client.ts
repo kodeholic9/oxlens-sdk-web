@@ -2,7 +2,7 @@
 // spec: v1.2 @d626fda · SDK:RULE-API-HANDLES OxLensClient · SDK:IMPL-SES-API · SDK:IMPL-AFF-SPEAKING-ROOM · SDK:IMPL-PUB-API media · SDK:RULE-SRC-DEVICES · SDK:RULE-DIAG-EVENTS · model: claude-opus-5-5
 import { Core, type SessionInfo, type SessionState, type Health, type Quality, type Transition } from '../domain/ses/core.js'
 import type { ClientOptions } from '../domain/defaults.js'
-import type { LinkInfo } from '../domain/links.js'
+import type { LinkInfo } from '../domain/link/core.js'
 import type { Participant } from '../domain/room/store.js'
 import type { RoomCore } from '../domain/room/core.js'
 import type { RemoteCore } from '../domain/trk/remote.js'

@@ -3,7 +3,7 @@
 import * as PUB from './gen/publish_client.js'
 import * as PBn from './gen/pub_binding.js'
 import type { Publication, ProbeResult, PublishTrack } from '../internal/wire/ws.js'
-import type { SendSlot, Encoding } from '../internal/transport.js'
+import type { SendSlot, Encoding } from '../internal/link/transport.js'
 import * as Probe from '../internal/probe.js'
 import { Emitter } from '../platform/emitter.js'
 import { Fault, fromFailure, stateFault, closedFault, negotiationFault } from '../platform/fault.js'
