@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/room/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 e96573301e30f7b8 · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 eb66aa3e1b598974 · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -217,7 +217,10 @@ export function downAll(s: St): Step {
   if (s.rs === 'LEAVING') {
     return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, ahead: 0, retry: false, rejoin: false }, 'ROOM.C.LEAVING.down', [], ['http.abandon', 'ws.abandon', 'app.left'], [{ fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'sub.drop', to: 'SUB', at: 'self' }], [])
   }
-  return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, ahead: 0, retry: false, rejoin: s.rs === 'JOINED' || (s.rs === 'JOINING' && !s.quit) }, 'ROOM.C.any.down', [], ['http.abandon', 'ws.abandon'], [{ fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'sub.drop', to: 'SUB', at: 'self' }], [])
+  if (s.rs === 'JOINING' && s.quit) {
+    return done(s, { ...s, rs: 'LEAVING', quit: false, cseq: 0, cepoch: 0, rsync: false, ahead: 0, retry: false, rejoin: false }, 'ROOM.C.JOINING.down_quit', [{ ws: 'ROOM_LEAVE', part: 'req' }], ['http.abandon', 'ws.abandon'], [{ fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'sub.drop', to: 'SUB', at: 'self' }], [])
+  }
+  return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, ahead: 0, retry: false, rejoin: s.rs === 'JOINED' || s.rs === 'JOINING' }, 'ROOM.C.any.down', [], ['http.abandon', 'ws.abandon'], [{ fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'sub.drop', to: 'SUB', at: 'self' }], [])
 }
 
 /** 세션이 끝났다 — 방을 전부 내리고 다시 들어갈 방 표시를 지운다(DEV-SES-FRESH-REJOIN · 앱이 다시 들어간다) */
