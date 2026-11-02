@@ -114,9 +114,9 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {
 } })
 
 /** 이벤트 대상 하나 — 예제가 거는 리스너를 시험이 쏜다 */
-function target(): { addEventListener(n: string, f: (e: unknown) => void): void; fire(n: string, e?: unknown): void } {
+function target(): { addEventListener(n: string, f: (e: unknown) => void): void; removeEventListener(n: string, f: (e: unknown) => void): void; fire(n: string, e?: unknown): void } {
   const ls = new Map<string, ((e: unknown) => void)[]>()
-  return { addEventListener: (n, f) => { ls.set(n, [...(ls.get(n) ?? []), f]) }, fire: (n, e = {}) => { for (const f of ls.get(n) ?? []) f(e) } }
+  return { addEventListener: (n, f) => { ls.set(n, [...(ls.get(n) ?? []), f]) }, removeEventListener: (n, f) => { ls.set(n, (ls.get(n) ?? []).filter((x) => x !== f)) }, fire: (n, e = {}) => { for (const f of ls.get(n) ?? []) f(e) } }
 }
 const win = target()
 ;(globalThis as unknown as { window: unknown }).window = win

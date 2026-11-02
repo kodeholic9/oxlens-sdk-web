@@ -455,6 +455,7 @@ test('SD-ENTRY-LINK-REBUILT — 재구축의 새 PeerLink 결과가 ENTRY.rebuil
       const x = await upLink()
       x.pc.sctp!.set('closed'); await tick()
       assert.equal(x.link.state, 'rebuilding')
+      const trustBefore = x.r.c.rooms.get('r1')?.ptt.state.trusted
       await until(() => x.r.ws.requests(Op.ROOM_JOIN).length === 2)
       spy.reset()
       const sc: ServerConfig = { ...SA, ice: { ...SA.ice, publish_ufrag: 'pubUf9' } }
@@ -468,6 +469,7 @@ test('SD-ENTRY-LINK-REBUILT — 재구축의 새 PeerLink 결과가 ENTRY.rebuil
       assert.equal(spy.n('rebuilt'), 1, `SD-ENTRY-LINK-REBUILT — 새 연결의 결과(stood=${stood})가 ENTRY.rebuilt 하나`)
       assert.deepEqual(spy.calls['rebuilt']![0], [x.r.core.epochs.id('ufrag:pubUf9'), stood], 'SD-ENTRY-LINK-REBUILT — g = 새 자격의 세대 · stood')
       assert.equal(x.link.state, stood ? 'up' : 'restarting')
+      if (stood) assert.deepEqual([trustBefore, x.r.c.rooms.get('r1')?.ptt.state.trusted], [false, true], 'K-sym-RULE-FLR-ROOM-SWITCH-2 — DC 소진 · 연관 소멸로 재구축되면 trusted 거짓 · 새 연결의 DC 가 서면 참(연:LINK.C.REBUILD.rebuilt 의 floor.dc_up — 거짓에 남으면 canRequest 가 막혀 PTT 를 못 누른다)')
       await x.r.c.close()
     }
   } finally { spy.restore() }
@@ -860,5 +862,19 @@ test('K-sym-IMPL-LINK-PROJECTION-1 — 위 상태기가 받지 않는 칸(OK 에
   assert.deepEqual(trace.map((t) => [t.cause, t.label]), [['impossible', 'iceBack']], 'K-sym-IMPL-LINK-PROJECTION-1 — 전이 기록 cause:impossible 하나')
   assert.equal(warns.length, 1, 'K-sym-IMPL-LINK-PROJECTION-1 — diagnostics 경고 하나(조용한 무시 0)')
   assert.equal(x.link.state, 'up', '상태는 그대로')
+  await x.r.c.close()
+})
+
+test('K-sym-IMPL-LINK-PROJECTION-2 — wobbly(DC 다시 열기) 중 ICE failed 면 다시 열기를 멈추고 restarting 하나 · 재구축 0(연:LINK.C.REOPEN.wait_over)', async () => {
+  const x = await upLink()
+  x.pc.dcs[0]!.drop(); await tick()
+  await until(() => x.pc.dcs.length === 2)
+  assert.equal(x.link.state, 'wobbly')
+  const n = x.links.length
+  x.pc.ice('failed'); await tick()
+  const dcs = x.pc.dcs.length
+  await tick(1200)
+  assert.deepEqual(x.links.slice(n).map((i) => i.state), ['restarting'], 'K-sym-IMPL-LINK-PROJECTION-2 — restarting 하나(다시 열기 소진 → 재구축으로 가지 않는다)')
+  assert.deepEqual([x.pc.dcs.length, x.link.st.ls === 'REBUILD'], [dcs, false], 'K-sym-IMPL-LINK-PROJECTION-2 — 다시 열기 중단(새 DC 0) · 재구축 0')
   await x.r.c.close()
 })

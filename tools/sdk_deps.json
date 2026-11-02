@@ -31,10 +31,12 @@
     "ROOM"
    ],
    "seam": [
-    "FLR"
+    "FLR",
+    "PUB"
    ],
    "may_use": [
     "FLR",
+    "PUB",
     "ROOM"
    ],
    "known_area": true
@@ -77,7 +79,8 @@
   "PUB": {
    "relation": [
     "AFF",
-    "LINK"
+    "LINK",
+    "ROOM"
    ],
    "seam": [
     "FLR",
@@ -86,7 +89,8 @@
    "may_use": [
     "AFF",
     "FLR",
-    "LINK"
+    "LINK",
+    "ROOM"
    ],
    "known_area": true
   },

@@ -46,6 +46,23 @@ export class Timer {
   }
 }
 
+/** 주기 시계 — 같은 간격으로 되풀이한다(요청 시한 검사 · getStats 주기) · 접점은 이 파일 하나(SDK:RULE-MOD-TEST-SEAM) */
+export class Every {
+  private handle: ReturnType<typeof setInterval> | null = null
+
+  get armed(): boolean { return this.handle !== null }
+
+  start(ms: number, fire: () => void): void {
+    this.stop()
+    this.handle = setInterval(fire, Math.max(1, ms))
+  }
+
+  stop(): void {
+    if (this.handle !== null) clearInterval(this.handle)
+    this.handle = null
+  }
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, Math.max(0, ms)))
 }

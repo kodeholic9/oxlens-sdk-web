@@ -97,6 +97,8 @@ export class Core {
   private failure: Fault | null = null
   private connectWaiters: Waiter[] = []
   private activeWaiters: Waiter[] = []
+  /** 앱의 다음 setToken() 을 기다리는 것 — HTTP 401 로 멈춘 재동기(연:RULE-TRN-HTTP-AUTH-TWO) */
+  private tokenWaiters: Waiter[] = []
   private appClosed = false
   /** 재접속 중 토큰 요구로 멈췄다 — 새 토큰이 오면 SDK 가 이어서 접속을 넣는다 */
   private resumeOnToken = false
@@ -112,13 +114,19 @@ export class Core {
     this.log = this.book.scope('session')
     this.sig = new Signaling({ base: this.cfg.base, reqTimeoutMs: SES.TIMER_MS.TReq ?? 30000 }, this.book.scope('signaling'))
     this.rooms = new RoomTable(this)
-    this.media = new MediaRegistry(this.cfg, this.book, this.links, this.rooms.aff)
+    this.media = new MediaRegistry(this.cfg, this.book, this.links, this.rooms)
     this.diag = new Diag(this)
     this.clock = new SesClock(this, this.cfg.wakeDetectMs)
-    if (this.cfg.disconnectOnPageLeave) {
-      const w = pageTarget()
-      if (w) w.addEventListener('pagehide', () => { if (this.ses.cs !== 'DISCONNECTED') this.close() })
-    }
+  }
+
+  /** 클라이언트를 붙잡는 전역 리스너(pagehide · 재생 visibilitychange · 핫플러그 devicechange)는 connect() 에 달고 close() 에 뗀다 — 닫힌 클라이언트가 남지 않는다(SDK:RULE-API-HANDLES) */
+  private readonly onPageHide = (): void => { if (this.ses.cs !== 'DISCONNECTED') void this.close() }
+  private watchPage(on: boolean): void {
+    const w = this.cfg.disconnectOnPageLeave ? pageTarget() : null
+    if (on) w?.addEventListener('pagehide', this.onPageHide)
+    else w?.removeEventListener('pagehide', this.onPageHide)
+    this.rooms.playback.watch(on)
+    this.media.watchDevices(on)
   }
 
   get opusLine(): string { return opusFmtpLine(this.cfg.opusFmtpDefault) }
@@ -139,6 +147,7 @@ export class Core {
   connect(): Promise<void> {
     if (this.ses.cs === 'ACTIVE') return Promise.resolve()
     this.appClosed = false
+    this.watchPage(true)
     const p = new Promise<void>((resolve, reject) => this.connectWaiters.push({ resolve, reject }))
     if (this.ses.cs === 'DISCONNECTED') {
       this.failure = null
@@ -157,12 +166,19 @@ export class Core {
   /** 새 토큰 — 위가 받는 때(토큰 요구로 멈춘 뒤)만 입구 newToken · 그 밖은 다음 BIND 에 실릴 뿐이다 */
   setToken(token: string): void {
     this.token = token
+    for (const w of this.tokenWaiters.splice(0)) w.resolve()
     if (!this.enter('newToken', 'app', [], true)) return
     if (this.resumeOnToken && this.ses.cs === 'DISCONNECTED' && !this.appClosed) {
       this.resumeOnToken = false
       this.startPump()
       this.enter('connect', 'token', [])
     }
+  }
+
+  /** 앱의 다음 setToken() — close() 면 closed 로 끝난다 */
+  untilToken(): Promise<void> {
+    if (this.appClosed) return Promise.reject(closedFault('CLOSED'))
+    return new Promise((resolve, reject) => this.tokenWaiters.push({ resolve, reject }))
   }
 
   /** 끊기 — 입구 disconnect 하나(방마다 나가지 않는다) · 응답을 기다리지 않는다 · 클라 주도 종료라 사유는 없다 */
@@ -175,7 +191,9 @@ export class Core {
     this.enter('disconnect', 'app', [], true)
     this.diag.stop()
     this.media.closeForApp()
+    this.watchPage(false)
     for (const w of this.connectWaiters.splice(0)) w.reject(closedFault('CLOSED'))
+    for (const w of this.tokenWaiters.splice(0)) w.reject(closedFault('CLOSED'))
     for (const w of this.activeWaiters.splice(0)) w.reject(closedFault('CLOSED'))
     return Promise.resolve()
   }
@@ -404,6 +422,11 @@ export class Core {
       return
     } else if (f === 'app.need_token') {
       this.resumeOnToken = true
+    } else if (f === 'app.disconnected' && entry === 'bindRes' && this.connectWaiters.length) {
+      // 최초 접속의 BIND 거절(위조 · 손상 토큰) — 이벤트 대신 기다리던 connect() 를 reject(auth · SDK:IMPL-SES-EVENTS 효과 표 app.disconnected)
+      const fault = this.failure ?? new Fault({ code: Code.TOKEN_INVALID.code, name: 'TOKEN_INVALID', permanent: true })
+      for (const w of this.connectWaiters.splice(0)) w.reject(fault)
+      return
     } else if (f === 'app.bug') {
       const fault = this.failure ?? new Fault({ code: 1002, name: 'INVALID_PAYLOAD' })
       for (const w of this.connectWaiters.splice(0)) w.reject(fault)
@@ -469,7 +492,8 @@ export class Core {
   }
 
   get health(): Health {
-    if (this.ses.cs !== 'ACTIVE' && this.ses.cs !== 'DISCONNECTED') return 'offline'
+    // 세션이 끝났거나(DISCONNECTED — 토큰 기다림 · close() 뒤 · 백오프 소진) 끊겨 다시 붙는 중이면 offline(SDK:IMPL-SES-API client.health)
+    if (this.ses.cs !== 'ACTIVE') return 'offline'
     let h: Health = 'ok'
     for (const r of this.rooms.values()) if (r.rebuilding) h = 'recovering'
     for (const l of this.links.values()) {

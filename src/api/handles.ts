@@ -8,7 +8,9 @@ import type { Participant, Permission } from '../domain/room/store.js'
 import type { LinkState } from '../domain/link/core.js'
 import type { Core } from '../domain/ses/core.js'
 import { Fault, fromFailure, stateFault, closedFault } from '../platform/fault.js'
-import { OxLensError, toError, wrap } from './errors.js'
+import { OxLensError, toError, wrap, act } from './errors.js'
+import { inHandler } from '../platform/emitter.js'
+import { nextTick } from '../platform/clock.js'
 
 type Fn<A extends unknown[]> = (...a: A) => void
 type Off = () => void
@@ -55,11 +57,12 @@ export class Room {
   get tracks(): RemoteTrack[] { return [...this.core.trk.remotes.values()].filter((r) => r.mediaStreamTrack !== null).map(remoteOf) }
   get mediaCodecs(): { audio?: string; video?: string } { return { ...this.core.store.mediaCodecs } }
 
-  leave(): Promise<void> { return wrap(this.core.leave()) }
+  leave(): Promise<void> { return act(() => this.core.leave()) }
 
   async sendMessage(content: string): Promise<{ msgId: string }> {
     // 닫힌 방 핸들은 wire 에 닿지 않는다 — closed · CLOSED(SDK:IMPL-ERR-TYPE 닫힌 핸들에 API)
     if (this.core.closed) throw toError(closedFault())
+    if (inHandler()) await nextTick()
     const r = await wrap(this.core.core.sig.request('MESSAGE', { room_id: this.id, content }))
     if (!r.ok) throw toError(fromFailure(r.body))
     return { msgId: String((r.body as { msg_id?: string }).msg_id ?? '') }
@@ -109,17 +112,21 @@ export class Ptt {
   get priority(): number { return this.core.priority }
   set priority(v: number) { this.core.priority = Math.max(0, Math.min(255, Math.floor(v))) }
 
-  press(o?: { source?: PressSource }): Promise<void> { return wrap(this.core.press(o)) }
-  release(): Promise<void> { return wrap(this.core.release()) }
+  press(o?: { source?: PressSource }): Promise<void> { return act(() => this.core.press(o)) }
+  release(): Promise<void> { return act(() => this.core.release()) }
 
   /** 반이중 마이크 미리 발행(미리 데우기) — 부르지 않아도 press 의 첫 단계가 한다 */
   async enable(o: TrackOptions & { track?: MediaStreamTrack } = {}): Promise<void> {
+    if (this.room.closed) throw toError(closedFault('CLOSED'))
+    if (inHandler()) await nextTick()
     await wrap(this.room.core.untilActive())
     await wrap(this.room.core.media.ensureHalfMic(this.room.id, o))
   }
 
   /** 반이중 영상 — 이 방의 미디어 코덱으로 · 송출은 발언권 게이트를 따른다 */
   async enableVideo(o: TrackOptions & { track?: MediaStreamTrack } = {}): Promise<LocalTrack> {
+    if (this.room.closed) throw toError(closedFault('CLOSED'))
+    if (inHandler()) await nextTick()
     await wrap(this.room.core.untilActive())
     if (!this.room.permission.publishVideo) throw toError(stateFault('STATE_NO_PERMISSION', { denied: ['publish_video'] }))
     const media = this.room.core.media
@@ -160,11 +167,11 @@ export class LocalTrack {
   get mediaStreamTrack(): MediaStreamTrack { return this.core.mediaStreamTrack }
   get simulcast(): boolean { return this.core.simulcast }
 
-  stop(): Promise<void> { return wrap(this.core.stop()) }
-  setMuted(m: boolean): Promise<void> { return wrap(this.core.setMuted(m)) }
-  setDuplex(d: 'full' | 'half'): Promise<void> { return wrap(this.core.setDuplex(d)) }
-  setEncoding(e: VideoEncoding & AudioEncoding): Promise<void> { return wrap(this.core.setEncoding(e)) }
-  replaceSource(t: MediaStreamTrack | null): Promise<void> { return wrap(this.core.replaceSource(t)) }
+  stop(): Promise<void> { return act(() => this.core.stop()) }
+  setMuted(m: boolean): Promise<void> { return act(() => this.core.setMuted(m)) }
+  setDuplex(d: 'full' | 'half'): Promise<void> { return act(() => this.core.setDuplex(d)) }
+  setEncoding(e: VideoEncoding & AudioEncoding): Promise<void> { return act(() => this.core.setEncoding(e)) }
+  replaceSource(t: MediaStreamTrack | null): Promise<void> { return act(() => this.core.replaceSource(t)) }
   getStats(): Promise<RTCStatsReport> { return this.core.getStats() }
 
   on(name: 'ended', fn: Fn<[{ reason: EndReason }]>): Off
@@ -198,7 +205,7 @@ export class RemoteTrack {
 
   attach(el: HTMLMediaElement): void { try { this.core.attach(el) } catch (e) { throw toError(e) } }
   detach(el?: HTMLMediaElement): void { this.core.detach(el) }
-  setLayer(v: { spatial?: number; temporal?: number; paused?: boolean; priority?: number }): Promise<void> { return wrap(this.core.setLayer(v)) }
+  setLayer(v: { spatial?: number; temporal?: number; paused?: boolean; priority?: number }): Promise<void> { return act(() => this.core.setLayer(v)) }
   setReceive(o: { playoutDelayMs: number | null }): void { this.core.setReceive(o) }
   getStats(): Promise<RTCStatsReport> { return this.core.getStats() }
 

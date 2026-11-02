@@ -41,6 +41,8 @@ export class LinkCore {
   blocked = false
   negoFault: Fault | null = null
   private negotiating = false
+  /** 재구축 끝(rebuilt)이 지운 협상 큐 — 새 연결은 지금 보관본으로 짓는다(연:LINK.C.REBUILD.rebuilt) · 떠 있는 협상이 끝나면 한 번 더 */
+  private rebuildOwed = false
   private buildArev = 0
   private readonly grace: Timer
   private readonly applyTimer: Timer
@@ -324,6 +326,8 @@ export class LinkCore {
     if (ls !== 'CHECK') this.checkTimer.stop()
     if (ls === 'OK' && this.st.everUp && this.blocked) { this.blocked = false; this.blockedSeen = 0 }
     if (plan.events.length || prev.ls !== ls || this.lastState !== this.state) this.surface()
+    if (prev.ls === 'REBUILD' && ls === 'OK' && prev.dirty) this.rebuildOwed = true
+    if (this.rebuildOwed && !this.negotiating && !this.st.nego) { this.rebuildOwed = false; this.renego() }
     if (this.st.nego && !this.negotiating) void this.negotiate()
     if (ls === 'APPLY' && !this.st.nego && prev.nego && this.peer && (this.peer.ice === 'connected' || this.peer.ice === 'completed')) this.enter('applied', 'nego', [])
     if (ls === 'NONE' && prev.ls !== 'NONE') this.core.links.delete(this.server)
@@ -464,9 +468,13 @@ export class LinkCore {
     this.enter('negoRes', r.ok ? 'nego.ok' : 'nego.fail', [r.ok])
     for (const room of this.core.roomsOn(this.server)) {
       // 재조립 협상 실패는 내 요청이 아니다 — 그 서버에 들어가 있는 방마다 room.error(SDK:IMPL-TRK-RECEIVE · 입장 중 방만이 아니다)
-      if (!r.ok && room.st.rs === 'JOINED') room.events.emit('error', this.negoFault ?? new Fault({ code: 0, name: 'NEGOTIATION_APPLY', category: 'negotiation' }))
-      if (room.joinPending && !this.st.nego) room.finishJoin()
-      else room.trk.syncRemotes()
+      const fault = r.ok ? null : this.negoFault ?? new Fault({ code: 0, name: 'NEGOTIATION_APPLY', category: 'negotiation' })
+      // 첫 협상을 기다리는 입장은 그 결과를 join() 이 받는다(SDK:IMPL-ROOM-API app.joined) — 그 밖 방은 room.error
+      if (room.joinPending && !this.st.nego) room.finishJoin(fault)
+      else {
+        if (fault && room.st.rs === 'JOINED') room.events.emit('error', fault)
+        room.trk.syncRemotes()
+      }
     }
   }
 

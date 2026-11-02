@@ -153,7 +153,8 @@ export class FloorCore {
     this.held = true
     this.source = o.source ?? 'user'
     if (this.acceptPending && this.input === 'toggle') { this.enter('intent', 'press', []); return }
-    if (this.arming) return
+    // arming 중 다시 누름 — 앞의 release 가 건 취소를 되살린다(버튼은 눌려 있다 · 연:RULE-FLR-PROC-PRESS)
+    if (this.arming) { this.cancel = false; return }
     if (this.st.cs !== 'NOPERM') { this.enter('press', 'press', [this.priority]); return }
     this.arming = true
     this.cancel = false

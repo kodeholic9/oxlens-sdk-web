@@ -7,7 +7,6 @@ import { Emitter } from '../../platform/emitter.js'
 import type { Logger } from '../../platform/log.js'
 import { Fault, fromFailure, closedFault, stateFault } from '../../platform/fault.js'
 import type { RoomTable } from '../room/table.js'
-import type { FloorCore } from '../flr/core.js'
 
 export interface AffEvents extends Record<string, unknown[]> {
   speakingRoom: [string | null]
@@ -21,20 +20,12 @@ type Reply = Awaited<ReturnType<RoomTable['request']>>
 
 interface Waiter { resolve: () => void; reject: (f: Fault) => void }
 
-/** 발행(PUB)이 소속을 지나 읽는 발행 방 사실 — 그 방의 서버 · 내 발행 비트 · 방 미디어 코덱(SDK:RULE-ROOM-PERMISSION-BITS · SDK:RULE-SRC-PROFILE codec) */
-export interface PubRoom {
-  readonly id: string
-  readonly sfuId: string | null
-  readonly bits: { readonly publishAudio: boolean; readonly publishVideo: boolean; readonly publishScreen: boolean }
-  readonly codecs: { readonly audio?: string; readonly video?: string }
-}
-
 const NONE = 'NONE'
 
 /**
  * 클라이언트 객체 하나의 소속(발언 방) — 위가 지은 소속 클라 상태기 하나.
  * 절차는 위가 정한다 — 여기는 입구 표(어느 SDK 사건 · 어느 이음매가 어느 입구를) · 효과 표(위 효과를 어느 표면으로) · 이음매 집행만.
- * 소속은 세션 영역을 부르지 않는다(may_use = FLR · ROOM) — 요청 · 기록 · 접속 기다림은 소속을 든 방 목록(RoomTable)이 내주고, 이벤트는 소속이 직접 낸다.
+ * 소속은 세션 영역을 부르지 않는다(may_use = FLR · PUB · ROOM) — 요청 · 기록 · 접속 기다림 · 발행 무리는 소속을 든 방 목록(RoomTable)이 내주고, 이벤트는 소속이 직접 낸다.
  */
 export class AffCore {
   st: AFF.St = AFF.initial()
@@ -43,12 +34,13 @@ export class AffCore {
   private waiter: Waiter | null = null
   /** 떠 있는 전환이 끝나기를 기다리는 setSpeakingRoom() 들 */
   private idlers: (() => void)[] = []
-  /** 지금 넣는 사건이 실어 온 실패 — 위가 app.aff_failed 를 내면 이것으로 알린다 */
+  /** 지금 넣는 사건이 실어 온 실패 응답 — 위가 app.aff_failed 를 내면 이것으로 알린다 · 없으면 STATE_AFF_ABANDONED(SDK:IMPL-AFF-SPEAKING-ROOM 효과 표 — 사유는 입구로 정한다) */
   private carried: Fault | null = null
 
   constructor(private readonly rooms: RoomTable, private readonly log: Logger) {}
 
-  get speakingRoom(): string | null { return this.st.pub === NONE ? null : this.st.pub }
+  /** 지금 발언 방 — 재구축이 내린 방을 되찾는 동안(위 상태 back)은 그 방을 그대로 보인다(SDK:IMPL-AFF-SPEAKING-ROOM 입구 down) */
+  get speakingRoom(): string | null { return this.st.pub !== NONE ? this.st.pub : this.st.back !== NONE ? this.st.back : null }
 
   // ── 앱 조작 ──────────────────────────────────────────────────────────
 
@@ -76,15 +68,18 @@ export class AffCore {
   }
 
   /** 이음매 aff.leave — 듣던 방을 떠났다 */
-  left(roomId: string, cause: string): void { this.enter('left', cause, [roomId], false, closedFault('LEFT')) }
+  left(roomId: string, cause: string): void { this.enter('left', cause, [roomId]) }
+
+  /** 이음매 aff.down — 재구축이 그 방을 내렸다(다시 들어간다) */
+  down(roomId: string, cause: string): void { this.enter('down', cause, [roomId]) }
 
   /** 이음매 aff.join_failed — 그 방 입장이 실패했다 */
   joinFailed(roomId: string, fault: Fault | null, cause: string): void { this.enter('joinFailed', cause, [roomId], false, fault) }
 
-  /** 이음매 aff.implicit — 입장 응답의 affiliation · p 는 그 방이 응답의 sub_rooms 에 있을 때만 · onPub = 지금 발언 방이 그 응답을 낸 서버의 방 */
+  /** 이음매 aff.implicit — 입장 응답의 affiliation · p 는 그 방이 응답의 sub_rooms 에 있을 때만 · onPub = 지금 발언 방이 그 응답을 낸 서버의 방 · 읽는 값 pIn */
   implicit(roomId: string, sel: boolean, a: Affiliation | undefined, sfuId: string | null, cause: string): void {
     const p = a && a.pub_room !== null && a.sub_rooms.includes(a.pub_room) ? a.pub_room : NONE
-    this.enter('implicit', cause, [roomId, sel, p, this.onServer(this.st.pub, sfuId)])
+    this.enter('implicit', cause, [roomId, sel, p, this.onServer(this.st.pub, sfuId), this.joined(p)])
   }
 
   // ── 입구 표 — 위 결합 ENTRY 를 지나 한 걸음 ─────────────────────────────
@@ -131,7 +126,7 @@ export class AffCore {
     // 응답할 서버 — 고르는 방의 서버(같은 서버 전환이면 빼는 방과 같다) · 빼기만이면 빼는 방의 서버
     const server = this.rooms.get(tx.pub_select ?? tx.pub_deselect ?? '')?.sfuId ?? null
     this.rooms.request('AFFILIATION', body).then((r) => this.reply(r, server), () => {
-      this.enter('res', 'AFFILIATION.closed', [false, NONE, false, false], false, closedFault('TRANSPORT'))
+      this.enter('res', 'AFFILIATION.closed', [false, NONE, false, false, false], false, closedFault('TRANSPORT'))
     })
   }
 
@@ -139,24 +134,29 @@ export class AffCore {
   private reply(r: Reply, server: string | null): void {
     if (!r.ok) {
       const f = fromFailure(r.body)
-      this.enter('res', `AFFILIATION.${f.code}`, [false, NONE, false, false], false, f)
+      this.enter('res', `AFFILIATION.${f.code}`, [false, NONE, false, false, false], false, f)
       return
     }
     const b = r.body as AffiliationRes
     if (b.pub_room !== null && !b.sub_rooms.includes(b.pub_room)) {
       this.log.error('pub_room ⊄ sub_rooms 응답 — 반영하지 않는다(서버 결함)', { pub_room: b.pub_room, sub_rooms: b.sub_rooms })
-      this.enter('res', 'AFFILIATION.bad', [false, NONE, false, false], false, new Fault({ code: 5003, name: 'AFFILIATION_INCONSISTENT', category: 'server' }))
+      this.enter('res', 'AFFILIATION.bad', [false, NONE, false, false, false], false, new Fault({ code: 5003, name: 'AFFILIATION_INCONSISTENT', category: 'server' }))
       return
     }
-    this.enter('res', 'AFFILIATION.res', [true, b.pub_room ?? NONE, this.onServer(this.st.pub, server), this.onServer(this.st.want, server)])
+    const p = b.pub_room ?? NONE
+    this.enter('res', 'AFFILIATION.res', [true, p, this.onServer(this.st.pub, server), this.onServer(this.st.want, server), this.joined(p)])
   }
 
-  // ── 이음매 — 받는 곳은 위가 정했다(발언권: 옛 발언 방 · 새 발언 방) ─────────
+  // ── 이음매 — 받는 곳은 위가 정했다(발언권: 옛 발언 방 · 새 발언 방 · 발행: 내 트랙 전부) ─────────
 
   private seam(fx: AFF.SeamFx, prev: AFF.St): void {
     switch (fx) {
       case 'floor.pub_away': if (prev.pub !== NONE) this.rooms.get(prev.pub)?.floor.pubAway(); break
       case 'floor.pub_select': if (this.st.pub !== NONE) this.rooms.get(this.st.pub)?.floor.pubSelect(); break
+      // 서버를 건너는 전환 ① — 읽는 값 here = 트랙의 서버가 떠나는 발행 방(옛 상태 pub)의 서버다(연:RULE-AFF-SWITCH-TRACKS)
+      case 'pub.move_out': this.rooms.media.moveOut(prev.pub === NONE ? null : this.rooms.get(prev.pub)?.sfuId ?? null); break
+      // ② · ③ — 발행 방이 섰다(새 방 · 되돌린 옛 방) · 서버를 그 방의 서버로 다시 읽는 것은 발행 몫(SDK:IMPL-PUB-API LocalTrack.server)
+      case 'pub.move_in': this.rooms.media.moveIn(this.st.pub === NONE ? null : this.st.pub); break
       default: {
         const missing: never = fx
         throw new Error(`이음매 표에 없는 위 이음매: ${String(missing)}`)
@@ -170,8 +170,8 @@ export class AffCore {
     switch (e) {
       case 'speakingRoom': this.events.emit('speakingRoom', this.speakingRoom); return
       case 'speakingRoomFailed': {
-        // 입장(joinSelect)이 건 기다림이면 기다리는 setSpeakingRoom() 이 없다 — 이벤트만
-        const f = this.carried ?? new Fault({ code: 5003, name: 'INTERNAL_ERROR' })
+        // 입장(joinSelect)이 건 기다림이면 기다리는 setSpeakingRoom() 이 없다 — 이벤트만 · 실패 응답이 아니면(떠남 · 재구축 · 건너뜀 · 떠난 방) STATE_AFF_ABANDONED
+        const f = this.carried ?? stateFault('STATE_AFF_ABANDONED')
         const w = this.waiter; this.waiter = null
         this.events.emit('speakingRoomFailed', f)
         w?.reject(f)
@@ -184,25 +184,10 @@ export class AffCore {
     }
   }
 
-  // ── 발행(PUB)이 소속을 지나 쓰는 것 — 발행은 방 영역을 부르지 않는다(may_use = AFF · FLR · LINK) ─────
-
-  /** 발행 방 사실 — 들어가 있지 않은 방이면 null */
-  pubRoom(roomId: string): PubRoom | null {
-    const r = this.rooms.get(roomId)
-    if (!r) return null
-    const p = r.permission
-    return { id: r.id, sfuId: r.sfuId, bits: { publishAudio: p.publishAudio, publishVideo: p.publishVideo, publishScreen: p.publishScreen }, codecs: { ...r.store.mediaCodecs } }
-  }
-
-  /** 그 서버 방들의 발언권 — 발행 이음매 floor.reg_half(sameServer) · 게이트 · 해체가 닿는 곳 */
-  floorsOn(sfuId: string | null): FloorCore[] {
-    return sfuId === null ? [] : [...this.rooms.values()].filter((r) => r.sfuId === sfuId).map((r) => r.floor)
-  }
-
-  /** 발행 거절 2006 — 막힌 비트로 그 방의 내 권한을 맞춘다(SDK:RULE-PUB-DENIED) */
-  denied(roomId: string, bits: readonly string[]): void { this.rooms.get(roomId)?.denied(bits) }
-
   // ── 읽는 값 ──────────────────────────────────────────────────────────
+
+  /** 읽는 값 pIn — 방 r 에 지금 들어가 있다(그 방 핸들 state:'joined' · 연:AFF READS ROOM.rs) */
+  private joined(r: string): boolean { return r !== NONE && this.rooms.get(r)?.st.rs === 'JOINED' }
 
   /** 방 a 와 방 b 가 같은 서버다(a 가 없으면 아니다) */
   private sameServer(a: string, b: string): boolean {
@@ -215,4 +200,4 @@ export class AffCore {
   }
 }
 
-const show = (s: AFF.St): string => `${s.wait}:${s.pub}`
+const show = (s: AFF.St): string => `${s.wait}:${s.pub}${s.from !== NONE ? `<${s.from}` : ''}${s.back !== NONE ? `^${s.back}` : ''}`

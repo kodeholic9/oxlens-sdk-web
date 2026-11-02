@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/trk/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 eb66aa3e1b598974 · 영역 TRK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 e30bf098a8fb402e · 영역 TRK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -46,7 +46,7 @@ export const READS = {
 /** 원장 — 타이머(ms) · 횟수 */
 export const TIMER_MS: Partial<Record<TimerName, number>> = {  }
 export const COUNTS = {  } as const
-const recEq = <K extends string, V>(a: Readonly<Record<K, V>>, b: Readonly<Record<K, V>>): boolean => (Object.keys(a) as K[]).every((k) => a[k] === b[k])
+const recEq = <K extends string, V>(a: Readonly<Record<K, V>>, b: Readonly<Record<K, V>>): boolean => Object.keys(a).length === Object.keys(b).length && (Object.keys(a) as K[]).every((k) => k in b && a[k] === b[k])
 
 const done = (prev: St, s: St, label: string, out: Tx[], fx: Fx[], seams: Seam[], start: TimerName[]): Step => {
   for (const t of armed(s)) if (!armed(prev).includes(t) && !start.includes(t)) start.push(t)
@@ -90,5 +90,5 @@ export function snapshot(s: St, sLay: Readonly<Record<TrackId, Layer>>, sMuted: 
 
 /** 그 방을 떠났다 · 내렸다 — 그 방 트랙 목록 보관본을 버린다(RULE-ROOM-LEAVE-RES) · 배정표는 연결의 것이라 서버가 새 표(MLINE_EVENT)로 고친다 */
 export function storeDrop(s: St): Step {
-  return done(s, { ...s, lay: { A: 'NONE', B: 'NONE', S: 'NONE' }, muted: { A: false, B: false, S: false } }, 'TRK.C.any.store_drop', [], [], [], [])
+  return done(s, { ...s, lay: { A: 'NONE', B: 'NONE', S: 'NONE' }, muted: { A: false, B: false, S: false } }, 'TRK.C.any.store_drop', [], ['app.tracks'], [], [])
 }

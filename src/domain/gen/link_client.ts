@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/link/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 eb66aa3e1b598974 · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 e30bf098a8fb402e · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -98,7 +98,7 @@ export const READS = {
 /** 원장 — 타이머(ms) · 횟수 */
 export const TIMER_MS: Partial<Record<TimerName, number>> = {  }
 export const COUNTS = {  } as const
-const recEq = <K extends string, V>(a: Readonly<Record<K, V>>, b: Readonly<Record<K, V>>): boolean => (Object.keys(a) as K[]).every((k) => a[k] === b[k])
+const recEq = <K extends string, V>(a: Readonly<Record<K, V>>, b: Readonly<Record<K, V>>): boolean => Object.keys(a).length === Object.keys(b).length && (Object.keys(a) as K[]).every((k) => k in b && a[k] === b[k])
 
 const done = (prev: St, s: St, label: string, out: Tx[], fx: Fx[], seams: Seam[], start: TimerName[]): Step => {
   for (const t of armed(s)) if (!armed(prev).includes(t) && !start.includes(t)) start.push(t)
@@ -125,6 +125,9 @@ export function iceDisc(s: St, leaving: boolean): Step {
 /** ICE 가 스스로 회복했다(기다리는 동안) (바깥: 브라우저 ICE 가 스스로 회복했다) — 받는 상태 밖이면 null(사건이 없던 것) */
 export function iceBack(s: St): Step | null {
   if (!(s.ls === 'WAIT' && s.ice === 'DISC')) return null
+  if (!s.dc) {
+    return done(s, { ...s, ls: 'REOPEN', ice: 'OK' }, 'LINK.C.WAIT.ice_back_dc', [], ['dc.reopen'], [], [])
+  }
   return done(s, { ...s, ls: 'OK', sync: true, ice: 'OK' }, 'LINK.C.WAIT.ice_back', [{ ws: 'READY', part: 'req' }], ['app.link_ok'], [], [])
 }
 
@@ -138,6 +141,9 @@ export function waitOver(s: St, failed: boolean, leaving: boolean): Step {
   }
   if (s.ls === 'OK') {
     return done(s, { ...s, ls: 'CHECK', sync: false, ice: failed ? 'FAILED' : s.ice }, 'LINK.C.OK.wait_over', [{ ws: 'HEARTBEAT', part: 'req' }], [], [], [])
+  }
+  if (s.ls === 'REOPEN') {
+    return done(s, { ...s, ls: 'CHECK', sync: false, ice: failed ? 'FAILED' : s.ice }, 'LINK.C.REOPEN.wait_over', [{ ws: 'HEARTBEAT', part: 'req' }], [], [], [])
   }
   return done(s, { ...s, ice: failed ? 'FAILED' : s.ice }, 'LINK.C.any.wait_over_absorbed', [], [], [], [])
 }
@@ -173,7 +179,7 @@ export function restartRes(s: St, m: { readonly code: number; readonly part: Par
     return done(s, { ...s, ls: 'APPLY', pgen: m.publish.ufrag, req: 0, nego: true }, 'LINK.C.RESTART.restart_ok', [], ['sdp.restart'], [], [])
   }
   if (m.code >= 3000 && m.code < 4000) {
-    return done(s, { ...s, ls: 'REBUILD', cause: 'RESTART_3XXX', req: 0 }, 'LINK.C.RESTART.restart_3xxx', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
+    return done(s, { ...s, ls: 'REBUILD', cause: 'RESTART_3XXX', req: 0 }, 'LINK.C.RESTART.restart_3xxx', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.dc_down', to: 'FLR', at: 'sameServer' }, { fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
   }
   return done(s, { ...s, ls: 'CHECK', req: 0 }, 'LINK.C.RESTART.restart_5xxx', [{ ws: 'HEARTBEAT', part: 'req' }], [], [], [])
 }
@@ -190,6 +196,9 @@ export function applyTimeout(s: St): Step | null {
 /** 새 자격의 재협상이 끝나 ICE 가 섰다 — 새 자격을 실은 협상이 끝난 뒤다(협상 큐 — RULE-LINK-SDP-RENEGOTIATE) (바깥: 새 자격의 재협상이 끝나 ICE 가 섰다) — 받는 상태 밖이면 null(사건이 없던 것) */
 export function applied(s: St): Step | null {
   if (!(s.ls === 'APPLY' && !s.nego)) return null
+  if (!s.dc) {
+    return done(s, { ...s, ls: 'REOPEN', ice: 'OK', gen: s.pgen, pgen: 0, everUp: true }, 'LINK.C.APPLY.applied_dc', [], ['dc.reopen'], [], [])
+  }
   return done(s, { ...s, ls: 'OK', ice: 'OK', gen: s.pgen, pgen: 0, sync: true, everUp: true }, 'LINK.C.APPLY.applied', [{ ws: 'READY', part: 'req' }], ['app.link_ok'], [], [])
 }
 
@@ -201,7 +210,7 @@ export function assocLost(s: St, leaving: boolean): Step {
   if (s.ls === 'REBUILD') {
     return done(s, { ...s, assoc: false, dc: false }, 'LINK.C.REBUILD.assoc_lost_absorbed', [], [], [], [])
   }
-  return done(s, { ...s, ls: 'REBUILD', cause: 'ASSOC', assoc: false, dc: false, sync: false, pgen: 0, req: 0 }, 'LINK.C.any.assoc_lost', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
+  return done(s, { ...s, ls: 'REBUILD', cause: 'ASSOC', assoc: false, dc: false, sync: false, pgen: 0, req: 0 }, 'LINK.C.any.assoc_lost', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.dc_down', to: 'FLR', at: 'sameServer' }, { fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
 }
 
 /** DC 채널만 닫혔다(연관은 산다) (바깥: DC 채널만 닫혔다) · 읽는 것: leaving = ROOM.rs */
@@ -224,7 +233,7 @@ export function reopened(s: St, r: Reopen): Step | null {
   if (r === 'fail') {
     return done(s, s, 'LINK.C.REOPEN.reopen_retry', [], ['dc.reopen'], [], [])
   }
-  return done(s, { ...s, ls: 'REBUILD', cause: 'DC_EXHAUST' }, 'LINK.C.REOPEN.reopen_exhaust', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
+  return done(s, { ...s, ls: 'REBUILD', cause: 'DC_EXHAUST' }, 'LINK.C.REOPEN.reopen_exhaust', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.dc_down', to: 'FLR', at: 'sameServer' }, { fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
 }
 
 /** 그 서버 재구축이 끝났다 — 새 연결 · 다시 입장 · 다시 발행(g = 새 연결의 세대 · stood = 새 연결의 ICE 가 열렸다) (받음: ROOM_JOIN) — 받는 상태 밖이면 null(사건이 없던 것) */
@@ -233,7 +242,7 @@ export function rebuilt(s: St, g: number, stood: boolean): Step | null {
   if (!stood) {
     return done(s, { ...s, ls: 'CHECK', ice: 'FAILED', everUp: false, assoc: true, gen: g, pgen: 0, sync: false, cause: 'NONE', nego: false, dirty: false }, 'LINK.C.REBUILD.rebuilt_unstood', [{ ws: 'HEARTBEAT', part: 'req' }], [], [], [])
   }
-  return done(s, { ...s, ls: 'OK', ice: 'OK', assoc: true, dc: true, gen: g, pgen: 0, sync: true, cause: 'NONE', nego: false, dirty: false, everUp: true }, 'LINK.C.REBUILD.rebuilt', [], ['app.link_ok'], [], [])
+  return done(s, { ...s, ls: 'OK', ice: 'OK', assoc: true, dc: true, gen: g, pgen: 0, sync: true, cause: 'NONE', nego: false, dirty: false, everUp: true }, 'LINK.C.REBUILD.rebuilt', [], ['app.link_ok'], [{ fx: 'floor.dc_up', to: 'FLR', at: 'sameServer' }], [])
 }
 
 /** 세션이 미디어 연결을 전부 닫는다(RULE-SES-REBUILD 2 · RULE-SES-ON-DROP 2·3) */
@@ -252,10 +261,13 @@ export function roomLeft(s: St, last: boolean): Step {
 /** RESUME 뒤 죽은 연결을 층별 판정대로 되살린다(RULE-SES-RES-RESUME-OK 4 · RULE-LINK-RECOVERY-UNIT — 처음부터 다시 판정) */
 export function repair(s: St): Step {
   if (!s.assoc) {
-    return done(s, { ...s, ls: 'REBUILD', cause: 'ASSOC', dc: false, sync: false, pgen: 0, req: 0 }, 'LINK.C.any.repair_rebuild', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
+    return done(s, { ...s, ls: 'REBUILD', cause: 'ASSOC', dc: false, sync: false, pgen: 0, req: 0 }, 'LINK.C.any.repair_rebuild', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.dc_down', to: 'FLR', at: 'sameServer' }, { fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
   }
   if (s.ice !== 'OK') {
     return done(s, { ...s, ls: 'RESTART', rid: s.rid + 1, req: s.rid + 1 }, 'LINK.C.any.repair_restart', [{ ws: 'ICE_RESTART', part: 'req' }], ['app.link_reviving'], [], [])
+  }
+  if (s.ls === 'CHECK' || s.ls === 'RESTART') {
+    return done(s, { ...s, ls: 'RESTART', rid: s.rid + 1, req: s.rid + 1 }, 'LINK.C.any.repair_recheck', [{ ws: 'ICE_RESTART', part: 'req' }], ['app.link_reviving'], [], [])
   }
   return done(s, s, 'LINK.C.any.repair_ok', [], [], [], [])
 }
@@ -265,7 +277,7 @@ export function epochChanged(s: St): Step {
   if (s.ls === 'REBUILD') {
     return done(s, s, 'LINK.C.REBUILD.epoch_absorbed', [], [], [], [])
   }
-  return done(s, { ...s, ls: 'REBUILD', cause: 'EPOCH', dc: false, sync: false, pgen: 0, req: 0 }, 'LINK.C.any.epoch_rebuild', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
+  return done(s, { ...s, ls: 'REBUILD', cause: 'EPOCH', dc: false, sync: false, pgen: 0, req: 0 }, 'LINK.C.any.epoch_rebuild', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.dc_down', to: 'FLR', at: 'sameServer' }, { fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
 }
 
 /** RESUME 응답에 내 발행이 없다 — 서버가 그 연결을 모른다 · 그 서버만 재구축한다(RULE-SES-RES-RESUME-OK 2 ③ · 4) */
@@ -273,7 +285,7 @@ export function pubLost(s: St): Step {
   if (s.ls === 'REBUILD') {
     return done(s, s, 'LINK.C.REBUILD.publost_absorbed', [], [], [], [])
   }
-  return done(s, { ...s, ls: 'REBUILD', cause: 'PUB_LOST', dc: false, sync: false, pgen: 0, req: 0 }, 'LINK.C.any.publost_rebuild', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
+  return done(s, { ...s, ls: 'REBUILD', cause: 'PUB_LOST', dc: false, sync: false, pgen: 0, req: 0 }, 'LINK.C.any.publost_rebuild', [], ['conn.close', 'app.link_rebuilding'], [{ fx: 'floor.dc_down', to: 'FLR', at: 'sameServer' }, { fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'store.drop_server', to: 'ROOM', at: 'sameServer' }, { fx: 'rooms.rejoin_server', to: 'ROOM', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }], [])
 }
 
 /** 구독 · 발행 SDP 를 다시 조립해 협상한다(RULE-LINK-SDP-RENEGOTIATE · 그 서버 전체 — RULE-TRK-TRACK-EVENT-PROC) */

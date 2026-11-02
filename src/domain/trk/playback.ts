@@ -11,10 +11,18 @@ export class Playback {
   sink: string | null = null
   readonly events = new Emitter<{ audioPlayback: [boolean] }>()
   private readonly els = new Set<HTMLAudioElement>()
+  /** 탭이 다시 보이면 막혔던 재생을 다시 — 세션 동안만 단다(close() 뒤 클라이언트를 붙잡지 않는다 · SDK:RULE-API-HANDLES) */
+  private readonly onVisible = (): void => { if (documentTarget()?.visibilityState === 'visible' && !this.allowed) void this.start() }
+  private watching = false
 
-  constructor(private readonly log: Logger) {
+  constructor(private readonly log: Logger) {}
+
+  watch(on: boolean): void {
     const doc = documentTarget()
-    if (doc) doc.addEventListener('visibilitychange', () => { if (doc.visibilityState === 'visible' && !this.allowed) void this.start() })
+    if (!doc || on === this.watching) return
+    this.watching = on
+    if (on) doc.addEventListener('visibilitychange', this.onVisible)
+    else doc.removeEventListener('visibilitychange', this.onVisible)
   }
 
   /** 재생 요소는 문서에 붙인다(숨김) — 떼어 낸 요소는 탭 정책에 따라 재생이 멎는다 */

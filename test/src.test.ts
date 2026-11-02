@@ -144,9 +144,10 @@ test('SD-KNOB-SET-DUPLEX — setDuplex 의 손잡이는 wire 만(TRACK_SET{duple
   const dev0 = t.mediaStreamTrack as unknown as FT
   const before = { sent: x.r.ws.sent.length, replaced: s.replaced.length, params: s.params.length, applied: dev0.applied.length, enabled: dev0.enabled, assembled: x.peer.assembled }
   const d = t.setDuplex('half'); await tick()
-  assert.deepEqual(x.r.ws.frames().slice(before.sent).filter((f) => f.kind === 'request').map((f) => [f.op, f.body]), [[Op.TRACK_SET, { room_id: 'r1', track_id: 't-mic', duplex: 'half' }]], 'SD-KNOB-SET-DUPLEX — wire 는 TRACK_SET{duplex} 하나')
-  assert.deepEqual([s.replaced.length, s.params.length, dev0.applied.length, dev0.enabled, x.peer.assembled], [before.replaced, before.params, before.applied, before.enabled, before.assembled], 'SD-KNOB-SET-DUPLEX — 브라우저 손잡이 0(replaceTrack · setParameters · applyConstraints · enabled · 재협상)')
-  answerLast(x, Op.TRACK_SET); await d
+  assert.deepEqual(x.r.ws.frames().slice(before.sent).filter((f) => f.kind === 'request').map((f) => [f.op, f.body]), [[Op.TRACK_SET, { room_id: 'r1', track_id: 't-mic', duplex: 'half' }]], 'SD-KNOB-SET-DUPLEX① — 응답 전 wire 는 TRACK_SET{duplex} 하나')
+  assert.deepEqual([s.replaced.length, s.params.length, dev0.applied.length, dev0.enabled, x.peer.assembled], [before.replaced, before.params, before.applied, before.enabled, before.assembled], 'SD-KNOB-SET-DUPLEX① — 응답 전 브라우저 손잡이 0(replaceTrack · setParameters · applyConstraints · enabled · 재협상)')
+  answerLast(x, Op.TRACK_SET, { ssrc: 1000, duplex: 'half' }); await d
+  assert.deepEqual([s.replaced.at(-1), dev0.enabled, t.core.gateOpen, x.peer.assembled], [null, true, false, before.assembled], 'SD-KNOB-SET-DUPLEX② — 응답 뒤(위 입구 setDuplexRes) SDK:RULE-PUB-DUPLEX-SWITCH — 게이트 닫힘(replaceTrack(null)) · enabled=true · 재협상 0')
   assert.equal(pubReqs(x).length, 1, '재발행 0')
 })
 

@@ -111,12 +111,11 @@ export class RoomTracks {
     if (plan) this.run(plan)
   }
 
-  /** store.drop — 그 방을 떠났다 · 내렸다: 보관본을 버린다 · 그 보관본으로 지은 핸들도 끝난다 */
+  /** store.drop — 그 방을 떠났다 · 내렸다: 보관본을 버린다 · 그 보관본으로 지은 핸들은 위 효과 app.tracks 가 끝낸다(연:TRK.C.any.store_drop) */
   storeDrop(cause: string): void {
     const plan = this.enter('storeDrop', cause, [])
     this.entries.clear()
     if (plan) this.run(plan)
-    this.syncRemotes()
   }
 
   // ── 받는 트랙 핸들 ─────────────────────────────────────────────────────

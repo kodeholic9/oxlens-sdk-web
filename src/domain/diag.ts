@@ -7,10 +7,11 @@ import * as Probe from '../internal/probe.js'
 import { describe, listDevices, permission } from '../platform/env.js'
 import type { Core } from './ses/core.js'
 import type { LinkCore } from './link/core.js'
+import { Every } from '../platform/clock.js'
 
 /** 진단 수집 — probe(TASK) · diagnostics.stats 주기 · 서버별 품질의 최악값 */
 export class Diag {
-  private statsTimer: ReturnType<typeof setInterval> | null = null
+  private readonly statsTimer = new Every()
   private prevNet = new Map<string, Probe.NetSample>()
 
   constructor(private readonly core: Core) {}
@@ -18,12 +19,12 @@ export class Diag {
   /** getStats 주기는 세션이 active 인 동안만 돈다 */
   sessionActive(on: boolean): void {
     const ms = this.core.cfg.statsIntervalMs
-    if (on && this.statsTimer === null && ms > 0) this.statsTimer = setInterval(() => void this.stats(), ms)
+    if (on && !this.statsTimer.armed && ms > 0) this.statsTimer.start(ms, () => void this.stats())
     if (!on) this.stop()
   }
 
   stop(): void {
-    if (this.statsTimer !== null) { clearInterval(this.statsTimer); this.statsTimer = null }
+    this.statsTimer.stop()
   }
 
   /** probe — TASK{request} 를 ACK 한 뒤 조립해 report 로 보낸다 · 모르는 값은 null 로 채우지 않는다 */

@@ -6,13 +6,16 @@ import type { RoomJoinRes, MemberInfo, TrackEntry, MediaCodecs, GetRoomRes, Room
 import type { Reply } from '../../internal/ses/signaling.js'
 import { Emitter } from '../../platform/emitter.js'
 import { Fault, fromFailure, closedFault, negotiationFault } from '../../platform/fault.js'
-import { Timer, sleep } from '../../platform/clock.js'
+import { Timer, sleep, nextTick } from '../../platform/clock.js'
 import type { Core } from '../ses/core.js'
 import { FloorCore } from '../flr/core.js'
 import { LinkCore } from '../link/core.js'
 import { RoomTracks } from '../trk/tracks.js'
 import type { RemoteCore, RemoteInfo } from '../trk/remote.js'
 import { RoomStore, ALL_TRUE, type Participant, type Permission, type PermissionChange } from './store.js'
+
+/** 방 통지의 종류 — 입구 delta 가 받는 wire(위 CDelta from.wire) */
+type DeltaKind = Parameters<typeof ROOM.delta>[1]['t']
 
 export interface JoinOptions {
   readonly mode?: 'listen' | 'talk'
@@ -276,7 +279,8 @@ export class RoomCore {
       }
     }
     // select:true 는 발언 방이 없고 전환이 안 떠 있을 때만 — 소속 상태기가 정한다(연:RULE-ROOM-JOIN-START 2 · 입구 joinSelect)
-    this.joinSel = this.core.rooms.aff.joinSelect(this.id, this.mode === 'talk')
+    // ★재구축의 다시 들어감은 앱의 join() 이 아니다 — select:false 로 들어가고 발언 방은 위가 되찾는다(연:AFF.C.any.implicit_back · SDK:IMPL-AFF-SPEAKING-ROOM 입구 down)
+    this.joinSel = this.rebuilding ? false : this.core.rooms.aff.joinSelect(this.id, this.mode === 'talk')
     body['select'] = this.joinSel
     let r: Reply
     try { r = await this.core.sig.request('ROOM_JOIN', body) } catch {
@@ -328,7 +332,10 @@ export class RoomCore {
     this.enter('leaveRes', r.ok ? 'ROOM_LEAVE.res' : 'ROOM_LEAVE.fail', [{ part: r.ok ? 'res' : 'fail' }])
   }
 
-  /** 재동기 — HTTP(세션 헤더) · 실패는 사다리 칸 간격으로 다시(던지는 개수 · 간격은 구현 몫 — SDK:RULE-ROOM-RESYNC) */
+  /**
+   * 재동기 — HTTP(세션 헤더) · 실패는 사다리 칸 간격으로 다시(던지는 개수 · 간격은 구현 몫 — SDK:RULE-ROOM-RESYNC).
+   * ★HTTP 401(auth)이면 되풀이하지 않는다 — tokenRequired 는 한 번 났다 · 앱의 setToken() 뒤에 다시 받는다(연:RULE-TRN-HTTP-AUTH-TWO).
+   */
   private async resync(): Promise<void> {
     const ep = this.syncEpoch
     for (let i = 0; ; i++) {
@@ -340,6 +347,12 @@ export class RoomCore {
       } catch (e) {
         if (ep !== this.syncEpoch || this.closed) return
         const f = e instanceof Fault ? e : new Fault({ code: 5003, name: 'RESYNC_FAILED', cause: e })
+        if (f.category === 'auth') {
+          try { await this.core.untilToken() } catch { return }
+          if (ep !== this.syncEpoch || this.closed) return
+          i = -1
+          continue
+        }
         if (i === 2) this.events.emit('error', f)
         await sleep(RETRY[Math.min(i, RETRY.length - 1)]!)
         if (ep !== this.syncEpoch || this.closed) return
@@ -353,7 +366,6 @@ export class RoomCore {
     this.enter('snapshot', 'GET_ROOM.res', [{ version: { epoch: this.core.epochs.id(res.version.epoch), seq: res.version.seq } }])
     this.carried = null
     if (!this.takeAdopted()) return
-    this.emitParticipants()
     this.events.emit('resync')
     if (this.floor.st.cs === 'QUEUED') this.floor.queuePosition()
   }
@@ -364,7 +376,7 @@ export class RoomCore {
   delta(op: string, body: Record<string, unknown>): void {
     const v = body['version'] as Version | undefined
     const bare = op === 'PARTICIPANT_STATE' && v === undefined
-    const m = { version: { epoch: v ? this.core.epochs.id(v.epoch) : this.st.cepoch, seq: v?.seq ?? 0 } }
+    const m = { t: op as DeltaKind, version: { epoch: v ? this.core.epochs.id(v.epoch) : this.st.cepoch, seq: v?.seq ?? 0 } }
     this.notice = { op, body }
     this.enter('delta', op, [m, bare])
     this.notice = null
@@ -397,7 +409,7 @@ export class RoomCore {
     this.carried = s ? { participants: s.participants, me: s.me, tracks: s.tracks } : null
     this.enter('resumeSnap', 'RESUME.snapshot', [s !== null, s?.version.seq ?? 0, s ? this.core.epochs.id(s.version.epoch) : 0], true)
     this.carried = null
-    if (this.takeAdopted()) this.emitParticipants()
+    this.takeAdopted()
   }
 
   private takeAdopted(): boolean {
@@ -445,6 +457,7 @@ export class RoomCore {
         break
       }
       case 'aff.leave': core.rooms.aff.left(this.id, label); break
+      case 'aff.down': core.rooms.aff.down(this.id, label); break
       case 'aff.implicit': core.rooms.aff.implicit(this.id, this.joinSel, this.lastJoin?.affiliation, this.sfuId, label); break
       case 'aff.join_failed': core.rooms.aff.joinFailed(this.id, this.lastFault, label); break
       case 'floor.join': this.floor.join(); break
@@ -508,14 +521,24 @@ export class RoomCore {
     }
   }
 
-  /** 그 입장의 첫 협상이 끝났다 — join() resolve · 초기 track 이벤트는 다음 tick */
-  finishJoin(): void {
+  /**
+   * 그 입장의 첫 협상이 끝났다 — join() resolve · 초기 track 이벤트는 다음 tick.
+   * ★협상이 실패했으면(fault) 기다리던 join() 은 그 방을 나가고 negotiation 으로 reject 한다 — 서버는 이미 받아들였다(SDK:IMPL-ROOM-API 효과 표 app.joined).
+   * 재구축의 다시 들어감처럼 기다리는 join() 이 없으면 방은 그대로 둔다(그 실패는 room.error 다).
+   */
+  finishJoin(fault: Fault | null = null): void {
     if (!this.joinPending) return
     this.joinPending = false
     this.settleTimer.stop()
     const w = this.joinWaiter; this.joinWaiter = null
+    if (fault && w && this.st.rs === 'JOINED') {
+      w.reject(fault)
+      void this.leave()
+      return
+    }
+    if (fault && this.st.rs === 'JOINED') this.events.emit('error', fault)
     if (this.st.rs === 'JOINED') w?.resolve(this)
-    setTimeout(() => this.trk.syncRemotes(), 0)
+    void nextTick().then(() => this.trk.syncRemotes())
   }
 
   private finishClose(): void {

@@ -11,7 +11,9 @@ import type { RoomSummary, GetRoomRes } from '../internal/wire/ws.js'
 import type { PermState } from '../platform/env.js'
 import type { Level, LogEntry } from '../platform/log.js'
 import { stateFault } from '../platform/fault.js'
-import { OxLensError, toError, wrap } from './errors.js'
+import { OxLensError, toError, wrap, act } from './errors.js'
+import { inHandler } from '../platform/emitter.js'
+import { nextTick } from '../platform/clock.js'
 import { Room, LocalTrack, RemoteTrack, roomOf, remoteOf, localOf, speakingRoomCore } from './handles.js'
 
 type Fn<A extends unknown[]> = (...a: A) => void
@@ -75,11 +77,13 @@ export class Media {
 
   /** 획득만 — 접속 · 방 · 발언 방이 없어도 된다 · 전부 아니면 전무 · owner 'app' */
   async acquire(req: { microphone?: TrackOptions | boolean; camera?: TrackOptions | boolean; screen?: TrackOptions | boolean }): Promise<LocalTrack[]> {
+    if (inHandler()) await nextTick()
     return (await wrap(this.core.media.acquire(req))).map(localOf)
   }
 
   /** 발행 — LocalTrack 이면 owner 가 resolve 때 sdk · MediaStreamTrack 이면 예외 경로(external · 전이중) */
   async publish(t: LocalTrack | MediaStreamTrack, opts: { source?: 'camera' | 'screen'; encoding?: TrackOptions['encoding'] } = {}): Promise<LocalTrack> {
+    if (inHandler()) await nextTick()
     await wrap(this.core.untilActive())
     const room = speakingRoomCore(this.core)
     if (t instanceof LocalTrack) {
@@ -95,6 +99,7 @@ export class Media {
   }
 
   private async enable(kind: 'audio' | 'video', source: 'microphone' | 'camera' | 'screen', o: TrackOptions): Promise<LocalTrack> {
+    if (inHandler()) await nextTick()
     await wrap(this.core.untilActive())
     const room = speakingRoomCore(this.core)
     const bit = kind === 'audio' ? room.permission.publishAudio : source === 'screen' ? room.permission.publishScreen : room.permission.publishVideo
@@ -110,6 +115,7 @@ export class Media {
 
   /** 산 트랙에 즉시 적용 — owner:'sdk' 만 · id 를 주면 명시 선택 · null 이면 자동 */
   async switchDevice(kind: 'audioinput' | 'videoinput' | 'audiooutput', deviceId: string | null): Promise<void> {
+    if (inHandler()) await nextTick()
     const pref = this.core.media.preferred
     if (deviceId) pref[kind] = deviceId
     else delete pref[kind]
@@ -168,15 +174,16 @@ export class OxLensClient {
 
   get health(): Health { return this.core.health }
 
-  connect(): Promise<void> { return wrap(this.core.connect()) }
-  close(): Promise<void> { return wrap(this.core.close()) }
+  connect(): Promise<void> { return act(() => this.core.connect()) }
+  close(): Promise<void> { return act(() => this.core.close()) }
   setToken(token: string): void { this.core.setToken(token) }
 
   async join(roomId: string, opts: { mode?: 'listen' | 'talk'; role?: number } = {}): Promise<Room> {
+    if (inHandler()) await nextTick()
     return roomOf(await wrap(this.core.rooms.join(roomId, opts)))
   }
 
-  setSpeakingRoom(roomId: string | null): Promise<void> { return wrap(this.core.rooms.aff.setSpeakingRoom(roomId)) }
+  setSpeakingRoom(roomId: string | null): Promise<void> { return act(() => this.core.rooms.aff.setSpeakingRoom(roomId)) }
 
   /** 입장 전 미리보기 — 401 은 auth reject + tokenRequired */
   async preview(roomId: string): Promise<RoomPreview> {

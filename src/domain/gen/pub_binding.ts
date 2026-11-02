@@ -4,7 +4,7 @@
 import * as F from './publish_client.js'
 
 /** SDK 가 앱에 내는 이벤트(효과 표의 app.* 행) */
-export type PubEvent = 'ended' | 'publishFailed' | 'published'
+export type PubEvent = 'duplexApplied' | 'duplexFailed' | 'ended' | 'publishFailed' | 'published'
 /** SDK 가 하는 동작(효과 표의 그 밖 행) */
 export type PubAction = 'gate.close' | 'gate.open' | 'transceiver.inactive'
 
@@ -22,11 +22,15 @@ export const ENTRY = {
   resumeCheck: F.resumeCheck,
   dropServer: F.dropServer,
   roomGone: F.roomGone,
+  moveOut: F.moveOut,
+  moveIn: F.moveIn,
+  setDuplex: F.setDuplex,
+  setDuplexRes: F.setDuplexRes,
 } as const
 
 /** 위 코드가 내놓는 입구 전부(Step 을 돌려주는 함수) — 입구 표가 하나라도 빠지거나 남으면 여기서 깨진다 · false = 넣지 않는다(판정표에 사유) */
 type EntryName = { [K in keyof typeof F]: (typeof F)[K] extends (s: F.St, ...a: never[]) => F.Step | null ? K : never }[keyof typeof F]
-export const ENTRY_ALL: Record<EntryName, boolean> = { on: true, nego: true, pubRes: true, attach: true, off: true, revoked: true, reregister: true, floorOpen: true, floorClose: true, resumeCheck: true, dropServer: true, roomGone: true }
+export const ENTRY_ALL: Record<EntryName, boolean> = { on: true, nego: true, pubRes: true, attach: true, off: true, revoked: true, reregister: true, floorOpen: true, floorClose: true, resumeCheck: true, dropServer: true, roomGone: true, moveOut: true, moveIn: true, setDuplex: true, setDuplexRes: true }
 
 /** 위 효과 하나 → SDK 가 낼 이벤트 · 할 동작(효과 표) — 위 효과가 늘거나 줄면 여기서 깨진다 */
 export function effect(f: F.Fx): { readonly event?: PubEvent; readonly action?: PubAction } {
@@ -34,6 +38,8 @@ export function effect(f: F.Fx): { readonly event?: PubEvent; readonly action?: 
     case 'app.publishing': return { event: 'published' }
     case 'app.publish_failed': return { event: 'publishFailed' }
     case 'app.revoked': return { event: 'ended' }
+    case 'app.duplex': return { event: 'duplexApplied' }
+    case 'app.duplex_failed': return { event: 'duplexFailed' }
     case 'track.attach': return { action: 'gate.open' }
     case 'track.detach': return { action: 'gate.close' }
     case 'transceiver.inactive': return { action: 'transceiver.inactive' }

@@ -4,7 +4,7 @@ import { Op, Lane, type OpName, type LeaveBody } from '../wire/ws.js'
 import { openSocket, wsUrl } from '../../platform/net.js'
 import { closedFault, type Fault } from '../../platform/fault.js'
 import { Queue } from '../../platform/queue.js'
-import { now } from '../../platform/clock.js'
+import { now, sleep, Every } from '../../platform/clock.js'
 import type { Logger } from '../../platform/log.js'
 
 const NAME_OF = new Map<number, OpName>(Object.entries(Op).map(([k, v]) => [v, k as OpName]))
@@ -106,7 +106,7 @@ export class Signaling {
   private readonly inflight = new Map<number, Pending>()
   private leave: LeaveBody | null = null
   private lastRx = 0
-  private reqTimer: ReturnType<typeof setInterval> | null = null
+  private readonly reqTimer = new Every()
 
   constructor(private readonly opts: SignalingOpts, private readonly log: Logger) {
     this.window = Math.min(10, Math.max(1, opts.window ?? 1))
@@ -131,7 +131,7 @@ export class Signaling {
       return
     }
     this.ws = ws
-    if (this.reqTimer === null) this.reqTimer = setInterval(() => this.checkTimeouts(), 1000)
+    if (!this.reqTimer.armed) this.reqTimer.start(1000, () => this.checkTimeouts())
     ws.onopen = () => { if (g === this.gen) { this.lastRx = now(); this.inbox.push({ t: 'open', gen: g }) } }
     ws.onmessage = (ev) => { if (g === this.gen) this.receive(ev.data) }
     ws.onclose = () => { if (g === this.gen) this.dropped() }
@@ -176,7 +176,7 @@ export class Signaling {
     while (now() < until) {
       if (this.lastRx >= since) return true
       if (!this.open) return false
-      await new Promise((r) => setTimeout(r, 50))
+      await sleep(50)
     }
     return this.lastRx >= since
   }
@@ -266,13 +266,13 @@ export class Signaling {
     for (const p of this.waiting) p.reject(fault)
     this.inflight.clear()
     this.waiting.length = 0
-    if (this.reqTimer !== null) { clearInterval(this.reqTimer); this.reqTimer = null }
+    this.reqTimer.stop()
   }
 
   /** 소켓이 아예 끝났다 — 통을 닫는다 */
   dispose(): void {
     this.detach(closedFault('CLOSED'))
-    if (this.reqTimer !== null) { clearInterval(this.reqTimer); this.reqTimer = null }
+    this.reqTimer.stop()
     this.inbox.end()
   }
 }

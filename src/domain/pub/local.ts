@@ -2,7 +2,7 @@
 // spec: v1.2 @d626fda · SDK:IMPL-PUB-API · SDK:RULE-PUB-DUPLEX-SWITCH · SDK:RULE-PUB-DENIED · SDK:RULE-PUB-FMTP · SDK:RULE-SRC-PROFILE · SDK:IMPL-SRC-BLOCKS Source · Encoder · SDK:RULE-FLR-MIC-POWER · SDK:RULE-MOD-TEARDOWN · SDK:RULE-MOD-AREA-MIRROR domain/pub · model: claude-opus-5-5
 import * as PUB from '../gen/publish_client.js'
 import * as PBn from '../gen/pub_binding.js'
-import type { PublishTrack } from '../../internal/wire/ws.js'
+import type { PublishTrack, TrackSetRes } from '../../internal/wire/ws.js'
 import type { SendSlot, Encoding } from '../../internal/link/transport.js'
 import * as Probe from '../../internal/probe.js'
 import { Emitter } from '../../platform/emitter.js'
@@ -11,8 +11,7 @@ import { capture } from '../../platform/env.js'
 import { Timer, sleep } from '../../platform/clock.js'
 import type { Layer } from '../defaults.js'
 import type { LinkCore } from '../link/core.js'
-import type { PubRoom } from '../aff/core.js'
-import type { MediaRegistry } from './registry.js'
+import type { MediaRegistry, PubRoom } from './registry.js'
 
 export type Owner = 'app' | 'sdk' | 'external'
 export type LocalState = 'idle' | 'acquired' | 'staged' | 'registered' | 'sending'
@@ -71,6 +70,7 @@ export interface LocalEvents extends Record<string, unknown[]> {
 /** 입구 표의 입구 — 위 결합(pub_binding)의 ENTRY 열쇠 그대로 */
 export type Entry = keyof typeof PBn.ENTRY
 type Args<K extends Entry> = (typeof PBn.ENTRY)[K] extends (s: PUB.St, ...a: infer A) => unknown ? A : never
+interface Waiter { resolve: () => void; reject: (f: Fault) => void }
 
 const PRESET: Record<'telephone' | 'speech' | 'music', number> = { telephone: 12000, speech: 24000, music: 48000 }
 const H264_FMTP = 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f'
@@ -87,7 +87,7 @@ function bitIn(r: PubRoom, kind: 'audio' | 'video', source: Source): boolean {
 /**
  * 로컬 트랙 하나 — 위가 지은 발행 클라 상태기 하나(트랙마다) · Source(장치 트랙 · owner · 전원) · Encoder(sender · 게이트 · 인코딩) · 변경 락.
  * 절차는 위가 정한다 — 여기는 입구 표(어느 SDK 사건 · 어느 이음매가 어느 입구를) · 효과 표(위 효과를 무엇으로) · 이음매 집행 · wire 에 안 보이는 것(획득 · 소유권 · 처리기 · 장치)만.
- * 발행은 세션 · 방 · 트랙 영역을 부르지 않는다(may_use = AFF · FLR · LINK) — 요청 · 트랜시버는 그 서버의 연결(LINK)이, 방 사실 · 발언권은 소속(AFF)이, 기록은 원장(DIAG)이 내준다.
+ * 발행은 세션 · 트랙 영역을 부르지 않는다(may_use = AFF · FLR · LINK · ROOM) — 요청 · 트랜시버는 그 서버의 연결(LINK)이, 방 사실 · 발언권은 방 목록(registry 가 읽는다)이, 발언 방은 소속(AFF)이, 기록은 원장(DIAG)이 내준다.
  */
 export class LocalCore {
   st: PUB.St = PUB.initial()
@@ -95,7 +95,6 @@ export class LocalCore {
   readonly kind: 'audio' | 'video'
   source: Source
   owner: Owner
-  duplex: 'full' | 'half' = 'full'
   track: MediaStreamTrack
   sfuId: string | null = null
   roomId: string | null = null
@@ -111,7 +110,10 @@ export class LocalCore {
   /** Encoder 게이트 — 열렸을 때만 sender 에 source 를 얹는다(SDK:IMPL-SRC-BLOCKS 셋째 축) */
   private gate = false
   private chain: Promise<unknown> = Promise.resolve()
-  private waiter: { resolve: () => void; reject: (f: Fault) => void } | null = null
+  private waiter: Waiter | null = null
+  /** 기다리는 setDuplex() 하나 · 그 요청의 기준 방(발언 방 — SDK:IMPL-PUB-API setDuplex) */
+  private duplexWaiter: Waiter | null = null
+  private duplexBase: string | null = null
   private retried3008 = false
   /** 다음 트랜시버 확보는 새 트랜시버로(3008 재시도 한 번) */
   private freshSlot = false
@@ -148,6 +150,9 @@ export class LocalCore {
 
   get mediaStreamTrack(): MediaStreamTrack { return this.track }
 
+  /** 반이중 여부 — 위 상태 half 하나가 정한다(응답 뒤에만 바뀐다 · SDK:RULE-PUB-DUPLEX-SWITCH) */
+  get duplex(): 'full' | 'half' { return this.st.half ? 'half' : 'full' }
+
   get profile(): Profile { return this.opts.profile ?? (this.duplex === 'half' ? 'ptt' : 'conference') }
 
   get gateOpen(): boolean { return this.gate }
@@ -166,7 +171,7 @@ export class LocalCore {
 
   /** 지금 이 트랙의 비트가 발행을 허락하나 — 들어가 있지 않은 방이면 막지 않는다(2006 을 칠 서버가 없다) */
   allowedNow(): boolean {
-    const r = this.roomId === null ? null : this.media.aff.pubRoom(this.roomId)
+    const r = this.roomId === null ? null : this.media.pubRoom(this.roomId)
     return r === null || bitIn(r, this.kind, this.source)
   }
 
@@ -241,7 +246,16 @@ export class LocalCore {
         this.settle(f)
         return
       }
-      case 'ended': this.finish('revoked', false); return
+      // 권한 회수 — 게이트 닫기 → inactive 는 동작이 했다 · Source 를 멈춘다(핸들이 끝나 아무도 못 놓는다 — SDK:RULE-MOD-TEARDOWN 권한 회수 행)
+      case 'ended': this.finish('revoked', this.owner !== 'app'); return
+      case 'duplexApplied': this.duplexApplied(); return
+      case 'duplexFailed': {
+        // 그 사이 발행이 끝났으면 closed · 아니면 실패 응답의 분류(SDK:IMPL-PUB-API 효과 표 app.duplex_failed)
+        const live = this.st.ps === 'REGISTERED' || this.st.ps === 'SENDING'
+        const f = live ? this.lastFault ?? closedFault() : closedFault()
+        this.settleDuplex(f)
+        return
+      }
       default: {
         const missing: never = e
         throw new Error(`효과 표에 없는 이벤트: ${String(missing)}`)
@@ -254,7 +268,7 @@ export class LocalCore {
     switch (fx) {
       case 'sdp.rebuild': this.link?.renego(); return
       case 'link.pub_lost': this.link?.pubLost(); return
-      case 'floor.reg_half': for (const f of this.media.aff.floorsOn(this.sfuId)) f.registerHalf(); return
+      case 'floor.reg_half': for (const f of this.media.floorsOn(this.sfuId)) f.registerHalf(); return
       default: {
         const missing: never = fx
         throw new Error(`이음매 표에 없는 위 이음매: ${String(missing)}`)
@@ -269,9 +283,30 @@ export class LocalCore {
     if (f) w.reject(f); else w.resolve()
   }
 
+  private settleDuplex(f: Fault | null): void {
+    const w = this.duplexWaiter
+    this.duplexWaiter = null
+    this.duplexBase = null
+    if (!w) return
+    if (f) w.reject(f); else w.resolve()
+  }
+
+  /** duplex 전환 응답이 적용됐다(효과 app.duplex → duplexApplied = 기다리던 setDuplex() resolve · 앱 이벤트는 없다 — 속성 state 만, SDK:IMPL-API-EVENT-MAP) — 게이트는 동작이 했다 · 나머지 손잡이(enabled · 프로필 · 전원 · 발언권 표면)는 SDK:RULE-PUB-DUPLEX-SWITCH 표대로 */
+  private duplexApplied(): void {
+    this.muted = false
+    this.track.enabled = true
+    if (this.st.half) this.armCold()
+    else this.coldTimer.stop()
+    const sender = this.sender
+    if (sender) void this.applyEncoding(sender)
+    for (const f of this.media.floorsOn(this.sfuId)) f.surface()
+    this.settleDuplex(null)
+  }
+
   // ── 보낼 것 · 받은 응답 ───────────────────────────────────────────────
 
   private send(tx: PUB.Tx): void {
+    if (tx.ws === 'TRACK_SET') { this.sendDuplex(tx.duplex); return }
     const link = this.link
     const room = this.roomId ?? ''
     if (tx.action === 'add') {
@@ -280,7 +315,7 @@ export class LocalCore {
         this.enter('pubRes', 'PUBLISH_TRACKS.local', [{ action: 'add', code: 1003, part: 'fail' }], negotiationFault('NO_SDP'))
         return
       }
-      const t: Record<string, unknown> = { ...info.track, duplex: this.duplex, simulcast: this.simulcast }
+      const t: Record<string, unknown> = { ...info.track, duplex: tx.duplex ?? this.duplex, simulcast: this.simulcast }
       if (this.kind === 'video') t['source'] = this.source === 'screen' ? 'screen' : 'camera'
       const body = { action: 'add', room_id: room, tracks: [t as unknown as PublishTrack], ...info.ext }
       link.request('PUBLISH_TRACKS', body).then((r) => this.reply(r.ok, r.body, 'add'), () => undefined)
@@ -288,6 +323,19 @@ export class LocalCore {
       if (!this.trackId || !link) return
       link.request('PUBLISH_TRACKS', { action: 'remove', room_id: room, track_ids: [this.trackId] }).then((r) => this.reply(r.ok, r.body, 'remove'), () => undefined)
     }
+  }
+
+  /** duplex 전환 요청 — 기준 방은 발언 방(TRACK_SET{duplex}) · 응답은 입구 setDuplexRes */
+  private sendDuplex(d: PUB.Duplex): void {
+    const link = this.link
+    const base = this.duplexBase
+    const fail = (cause: string, f: Fault): void => { this.enter('setDuplexRes', cause, [{ duplex: d, noop: false, part: 'fail' }], f) }
+    if (!link || !this.trackId || base === null) { fail('TRACK_SET.local', stateFault('STATE_NOT_PUBLISHED')); return }
+    link.request('TRACK_SET', { room_id: base, track_id: this.trackId, duplex: d }).then((r) => {
+      if (!r.ok) { const f = fromFailure(r.body); fail(`TRACK_SET.${f.code}`, f); return }
+      const b = r.body as TrackSetRes
+      this.enter('setDuplexRes', 'TRACK_SET.res', [{ duplex: b.duplex ?? d, noop: b.noop === true, part: 'res' }])
+    }, () => fail('TRACK_SET.closed', closedFault('TRANSPORT')))
   }
 
   /** 발행 응답 — 입구 pubRes · 2006 이면 막힌 비트로 방 권한을 맞춘다(재시도 없음 — SDK:RULE-PUB-DENIED) */
@@ -301,7 +349,7 @@ export class LocalCore {
     const f = fromFailure(body)
     if (f.code === 2006 && this.roomId !== null) {
       const denied = (f.details ?? {})['denied']
-      if (Array.isArray(denied)) this.media.aff.denied(this.roomId, denied.map(String))
+      if (Array.isArray(denied)) this.media.denied(this.roomId, denied.map(String))
     }
     this.enter('pubRes', `PUBLISH_TRACKS.${f.code}`, [{ action, code: f.code, part: 'fail' }], f)
   }
@@ -312,7 +360,7 @@ export class LocalCore {
   acquireSlot(): void {
     const peer = this.link?.peer
     if (!peer || this.slot) return
-    const r = this.roomId === null ? null : this.media.aff.pubRoom(this.roomId)
+    const r = this.roomId === null ? null : this.media.pubRoom(this.roomId)
     const codec = this.kind === 'audio' ? r?.codecs.audio ?? 'opus' : r?.codecs.video ?? 'H264'
     const encs: Encoding[] = this.simulcast ? this.layers().map((l) => ({ ...l })) : []
     const roomCodec = codec.toLowerCase() === 'h264' ? { name: codec, fmtp: H264_FMTP } : { name: codec }
@@ -401,7 +449,7 @@ export class LocalCore {
       if (!this.gate) return
       void sender.replaceTrack(this.track).catch((e) => this.media.log.warn('replaceTrack 실패', { err: String(e) }))
       if (this.st.half) {
-        for (const f of this.media.aff.floorsOn(this.sfuId)) if (f.st.cs === 'PERM') f.rtpTx()
+        for (const f of this.media.floorsOn(this.sfuId)) if (f.st.cs === 'PERM') f.rtpTx()
         this.checkSilence()
       }
     }
@@ -427,19 +475,50 @@ export class LocalCore {
   floorOpen(): void { this.enter('floorOpen', 'mic.open', []); this.coldTimer.stop() }
   /** FLR mic.close */
   floorClose(): void { this.enter('floorClose', 'mic.close', []); this.armCold() }
-  /** LINK pub.drop_server — 그 서버 연결이 닫혔다 */
-  dropServer(): void { this.enter('dropServer', 'link', []); this.slot = null; this.gate = false }
+  /** LINK pub.drop_server — 그 서버 연결이 닫혔다 · 협상 · 발행을 기다리던 발행은 closed 로 reject(SDK:IMPL-PUB-API 효과 표 app.publish_failed) */
+  dropServer(): void { this.enter('dropServer', 'link', [], closedFault('TRANSPORT')); this.slot = null; this.gate = false }
   /** ROOM pub.room_gone — 발행한 방을 잃었다 */
   roomGone(): void { this.enter('roomGone', 'room', []) }
   /** SES pub.resume_check — 이어받기 응답의 발행 목록 대조 */
   resumeCheck(listed: boolean): void { this.enter('resumeCheck', 'RESUME', [listed]) }
 
-  /** LINK pub.reregister_server · SES pub.reregister_all — 재구축의 다시 발행 · 비트가 막는 것은 다시 싣지 않고 끈다(SDK:RULE-ROOM-PERMISSION-BITS 자동 발행을 멈춘다) */
+  /** AFF pub.move_out — 서버를 건너는 발언 방 전환 ① · 읽는 값 here = 이 트랙의 서버가 떠나는 발행 방의 서버다 */
+  moveOut(here: boolean): void { if (!this.ended) this.enter('moveOut', 'aff.move_out', [here]) }
+
+  /** AFF pub.move_in — 발행 방이 섰다 · ★넣기 전에 내린 트랙의 서버를 그 발행 방의 서버로 바꾼다(SDK:IMPL-PUB-API LocalTrack.server) */
+  moveIn(room: PubRoom | null): void {
+    if (this.ended) return
+    if (this.st.mv && room) this.rebind(room)
+    this.enter('moveIn', 'aff.move_in', [])
+  }
+
+  /**
+   * LINK pub.reregister_server · SES pub.reregister_all — 재구축의 다시 발행.
+   * 발행 방이 지금 붙은 서버를 다시 읽는다(다른 서버에 다시 배치됐으면 새 서버로 — SDK:IMPL-PUB-API LocalTrack.server).
+   * 비트가 막는 것은 다시 싣지 않고 권한 회수와 같이 끝낸다(SDK:RULE-ROOM-PERMISSION-BITS 자동 발행을 멈춘다 · SDK:RULE-MOD-TEARDOWN 권한 회수 행).
+   */
   reregister(): void {
     if (this.ended) return
-    if (!this.allowedNow()) { this.enter('off', 'permission', []); return }
     this.slot = null
+    this.gate = false
+    if (!this.allowedNow()) {
+      this.enter('off', 'permission', [])
+      // 기다리던 앱 발행이 있었으면 그 비트로 거절한다(앱이 명시로 부른 것 — SDK:RULE-ROOM-PERMISSION-BITS)
+      this.settle(stateFault('STATE_NO_PERMISSION', { denied: [bitOf(this.kind, this.source)] }))
+      this.finish('revoked', this.owner !== 'app')
+      return
+    }
+    const room = this.roomId === null ? null : this.media.pubRoom(this.roomId)
+    if (room && room.sfuId !== this.sfuId) this.rebind(room)
     this.enter('reregister', 'rebuild', [])
+  }
+
+  /** 개체 신원(서버 · 방)을 그 발행 방으로 — 옛 서버의 트랜시버는 놓는다 · 새 서버의 발행은 새 track_id(SDK:RULE-MOD-BINDING-VALUES) */
+  private rebind(room: PubRoom): void {
+    if (room.sfuId !== this.sfuId) { this.releaseSlot(); this.gate = false; this.trackId = null }
+    this.sfuId = room.sfuId
+    this.roomId = room.id
+    this.st = { ...this.st, sfu: this.media.ids.id(`sfu:${room.sfuId ?? ''}`), room: this.media.ids.id(`room:${room.id}`) }
   }
 
   // ── 앱 조작 ──────────────────────────────────────────────────────────
@@ -448,14 +527,13 @@ export class LocalCore {
   publish(roomId: string, duplex: 'full' | 'half'): Promise<void> {
     return this.locked(async () => {
       if (this.ended) throw closedFault()
-      const room = this.media.aff.pubRoom(roomId)
+      const room = this.media.pubRoom(roomId)
       if (!room) throw stateFault('STATE_NOT_JOINED', { room: roomId })
       if (!bitIn(room, this.kind, this.source)) throw stateFault('STATE_NO_PERMISSION', { denied: [bitOf(this.kind, this.source)] })
       if (this.st.ps !== 'IDLE') return
-      this.duplex = duplex
+      // 개체 신원 — 이 트랙이 붙은 서버 · 방 · 반이중(위 모형의 자리 · SDK:RULE-MOD-BINDING-VALUES)
       this.sfuId = room.sfuId
       this.roomId = room.id
-      // 개체 신원 — 이 트랙이 붙은 서버 · 방 · 반이중(위 모형의 자리 · SDK:RULE-MOD-BINDING-VALUES)
       this.st = { ...this.st, half: duplex === 'half', sfu: this.media.ids.id(`sfu:${room.sfuId ?? ''}`), room: this.media.ids.id(`room:${room.id}`) }
       this.media.register(this)
       if (this.kind === 'audio' && this.owner !== 'external') this.applyCapture()
@@ -476,7 +554,7 @@ export class LocalCore {
   stop(reason: EndReason = 'stopped'): Promise<void> {
     return this.locked(async () => {
       if (this.ended) return
-      if (this.duplex === 'half') for (const f of this.media.aff.floorsOn(this.sfuId)) if (f.st.cs === 'PERM') await f.release()
+      if (this.duplex === 'half') for (const f of this.media.floorsOn(this.sfuId)) if (f.st.cs === 'PERM') await f.release()
       if (this.st.ps !== 'IDLE') this.enter('off', 'app', [])
       const sender = this.sender
       if (sender) { try { await sender.replaceTrack(null) } catch { /* 닫혔다 */ } }
@@ -489,11 +567,14 @@ export class LocalCore {
   private finish(reason: EndReason, stopSource: boolean): void {
     if (this.ended) return
     this.ended = true
+    // 끝난 트랙에 걸린 발행 · duplex 전환을 남기지 않는다(SDK:IMPL-ERR-TYPE 끝난 핸들 = closed)
+    this.settle(closedFault())
+    this.settleDuplex(closedFault())
     this.coldTimer.stop()
     if (stopSource) { this.track.stop(); this.deviceTrack?.stop() }
     this.media.unregister(this)
     this.events.emit('ended', { reason })
-    for (const f of this.media.aff.floorsOn(this.sfuId)) f.surface()
+    for (const f of this.media.floorsOn(this.sfuId)) f.surface()
   }
 
   // ── 트랙 설정(연:PUB.op.TRACK_SET) — 끝난 트랙(닫힌 핸들)의 조작은 closed · CLOSED(SDK:IMPL-ERR-TYPE) ──
@@ -512,40 +593,18 @@ export class LocalCore {
     })
   }
 
-  /**
-   * duplex 전환 — 응답 뒤에만 바꾼다 · 재발행 · 재협상 없음(SDK:RULE-PUB-DUPLEX-SWITCH).
-   * ★위 발행 상태기는 half 를 개체 신원으로 두고(모형에서 안 바뀐다) 전환 입구가 없다 — 표의 손잡이(게이트 · enabled · 프로필 · 전원 · 발언권 표면)를 SDK 가 밟고 기록을 남긴다.
-   */
+  /** duplex 전환 — 입구 setDuplex(TRACK_SET{duplex}) · 응답 뒤에만 바꾼다 · 재발행 · 재협상 없음(SDK:RULE-PUB-DUPLEX-SWITCH · 위 PUB.C.any.set_duplex) */
   setDuplex(d: 'full' | 'half'): Promise<void> {
     return this.locked(async () => {
       if (this.ended) throw closedFault()
       if (d === this.duplex) return
       const base = this.media.aff.speakingRoom
       if (!base) throw stateFault('STATE_NO_SPEAKING_ROOM')
-      const link = this.link
-      if (!this.trackId || !link) throw stateFault('STATE_NOT_PUBLISHED')
-      const r = await link.request('TRACK_SET', { room_id: base, track_id: this.trackId, duplex: d })
-      if (!r.ok) throw fromFailure(r.body)
-      const prev = this.st
-      this.duplex = d
-      this.muted = false
-      this.track.enabled = true
-      if (d === 'half') {
-        this.st = { ...this.st, half: true, ps: this.st.ps === 'SENDING' ? 'REGISTERED' : this.st.ps }
-        this.media.book.record('PUB', this.key, prev.ps, this.st.ps, 'SDK.duplex_half', 'TRACK_SET.res')
-        this.closeGate()
-        for (const f of this.media.aff.floorsOn(this.sfuId)) f.registerHalf()
-        this.armCold()
-      } else {
-        this.st = { ...this.st, half: false, ps: this.st.ps === 'REGISTERED' ? 'SENDING' : this.st.ps }
-        this.media.book.record('PUB', this.key, prev.ps, this.st.ps, 'SDK.duplex_full', 'TRACK_SET.res')
-        this.coldTimer.stop()
-        if (this.cold) await this.warm()
-        if (this.st.ps === 'SENDING') this.openGate()
-      }
-      const sender = this.sender
-      if (sender) await this.applyEncoding(sender)
-      for (const f of this.media.aff.floorsOn(this.sfuId)) f.surface()
+      if (!this.trackId || !this.link) throw stateFault('STATE_NOT_PUBLISHED')
+      const p = new Promise<void>((resolve, reject) => { this.duplexWaiter = { resolve, reject } })
+      this.duplexBase = base
+      if (!this.enter('setDuplex', 'app', [d])) { this.settleDuplex(null); throw stateFault('STATE_NOT_PUBLISHED') }
+      await p
     })
   }
 
@@ -617,7 +676,7 @@ export class LocalCore {
     this.cold = true
     this.track.stop()
     this.media.book.record('PUB', this.key, this.st.ps, this.st.ps, 'SDK.cold', 'mic_power')
-    for (const f of this.media.aff.floorsOn(this.sfuId)) f.surface()
+    for (const f of this.media.floorsOn(this.sfuId)) f.surface()
   }
 
   /** 데우기 — 저장 제약으로 다시 획득 · source 만 보관(게이트가 열려 있을 때만 sender) */
@@ -648,10 +707,12 @@ export class LocalCore {
     })()
   }
 
-  /** 통보 없이 로컬만 내린다 — 세션 끝 · 백오프 소진 */
+  /** 통보 없이 로컬만 내린다 — 세션 끝 · 백오프 소진 · 기다리던 발행 · duplex 전환은 closed 로 reject(SDK:IMPL-PUB-API 효과 표 app.publish_failed) */
   dispose(stopSource: boolean): void {
     this.gate = false
     this.slot = null
+    this.settle(closedFault())
+    this.settleDuplex(closedFault())
     if (stopSource) this.finish('stopped', true)
     else { this.st = PUB.initial(); this.coldTimer.stop(); this.media.unregister(this) }
   }

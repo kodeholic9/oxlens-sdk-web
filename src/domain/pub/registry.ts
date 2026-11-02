@@ -9,6 +9,8 @@ import type { LogBook, Logger } from '../../platform/log.js'
 import { opusFmtpLine, type Settings } from '../defaults.js'
 import type { LinkCore } from '../link/core.js'
 import type { AffCore } from '../aff/core.js'
+import type { RoomTable } from '../room/table.js'
+import type { FloorCore } from '../flr/core.js'
 import { LocalCore, type Owner, type Source, type Profile, type TrackOptions } from './local.js'
 
 /** 발행이 읽는 createClient 설정(정책:sdk) */
@@ -41,9 +43,18 @@ export function normalizeDevices(list: readonly MediaDeviceInfo[]): MediaDeviceI
 
 export interface DeviceChange { added: MediaDeviceInfo[]; removed: MediaDeviceInfo[]; list: MediaDeviceInfo[] }
 
+/** 발행이 읽는 발행 방 사실 — 그 방의 서버 · 내 발행 비트 · 방 미디어 코덱(SDK:RULE-ROOM-PERMISSION-BITS · SDK:RULE-SRC-PROFILE codec) */
+export interface PubRoom {
+  readonly id: string
+  readonly sfuId: string | null
+  readonly bits: { readonly publishAudio: boolean; readonly publishVideo: boolean; readonly publishScreen: boolean }
+  readonly codecs: { readonly audio?: string; readonly video?: string }
+}
+
 /**
  * 클라이언트 객체 하나의 발행 — 로컬 트랙 목록 · 획득(Source) · 장치 선택 정책 · 이음매가 부르는 무리 입구.
- * 발행은 세션 · 방 · 트랙 영역을 부르지 않는다(may_use = AFF · FLR · LINK) — 세션이 설정 · 원장 · 연결 표 · 소속을 쥐여 만든다.
+ * 발행은 세션 · 트랙 영역을 부르지 않는다(may_use = AFF · FLR · LINK · ROOM) — 세션이 설정 · 원장 · 연결 표 · 방 목록을 쥐여 만든다.
+ * 방 사실(서버 · 비트 · 코덱)은 방 목록에서 직접 읽는다(영역 관계 PUB → ROOM · SDK:RULE-MOD-AREA-MIRROR — 소속 창으로 건너 읽지 않는다).
  */
 export class MediaRegistry {
   readonly tracks = new Set<LocalCore>()
@@ -56,15 +67,47 @@ export class MediaRegistry {
   private lastDevices: MediaDeviceInfo[] = []
   /** 핫플러그 견줌의 기준선 — 만들 때 한 번 센다(안 세면 첫 devicechange 가 있던 장치까지 added 로 낸다) */
   private readonly seeded: Promise<void>
+  /** 핫플러그 — 만들 때(로비) · connect() 에 달고 close() 에 뗀다(클라이언트를 붙잡지 않는다 · SDK:RULE-API-HANDLES) */
+  private readonly onDevices = (): void => void this.devicesChanged()
+  private watching = false
 
-  constructor(readonly cfg: PubSettings, readonly book: LogBook, readonly links: ReadonlyMap<string, LinkCore>, readonly aff: AffCore) {
+  constructor(readonly cfg: PubSettings, readonly book: LogBook, readonly links: ReadonlyMap<string, LinkCore>, private readonly rooms: RoomTable) {
     this.log = book.scope('pub')
     this.opusLine = opusFmtpLine(cfg.opusFmtpDefault)
     this.coldAfter = cfg.micColdAfterMs
     const md = deviceChanges()
     this.seeded = md ? enumerate().then((l) => { this.lastDevices = l }) : Promise.resolve()
-    if (md) md.addEventListener('devicechange', () => void this.devicesChanged())
+    this.watchDevices(true)
   }
+
+  watchDevices(on: boolean): void {
+    const md = deviceChanges()
+    if (!md || on === this.watching) return
+    this.watching = on
+    if (on) md.addEventListener('devicechange', this.onDevices)
+    else md.removeEventListener('devicechange', this.onDevices)
+  }
+
+  /** 소속 — 발언 방(enable* · setDuplex 의 기준 방) */
+  get aff(): AffCore { return this.rooms.aff }
+
+  // ── 방 사실 — 방 목록에서 직접(PUB → ROOM) ───────────────────────────
+
+  /** 발행 방 사실 — 들어가 있지 않은 방이면 null */
+  pubRoom(roomId: string): PubRoom | null {
+    const r = this.rooms.get(roomId)
+    if (!r) return null
+    const p = r.permission
+    return { id: r.id, sfuId: r.sfuId, bits: { publishAudio: p.publishAudio, publishVideo: p.publishVideo, publishScreen: p.publishScreen }, codecs: { ...r.store.mediaCodecs } }
+  }
+
+  /** 그 서버 방들의 발언권 — 발행 이음매 floor.reg_half(sameServer) · 게이트 · 해체가 닿는 곳 */
+  floorsOn(sfuId: string | null): FloorCore[] {
+    return sfuId === null ? [] : [...this.rooms.values()].filter((r) => r.sfuId === sfuId).map((r) => r.floor)
+  }
+
+  /** 발행 거절 2006 — 막힌 비트로 그 방의 내 권한을 맞춘다(SDK:RULE-PUB-DENIED) */
+  denied(roomId: string, bits: readonly string[]): void { this.rooms.get(roomId)?.denied(bits) }
 
   register(t: LocalCore): void { this.tracks.add(t) }
   unregister(t: LocalCore): void { this.tracks.delete(t) }
@@ -84,7 +127,7 @@ export class MediaRegistry {
   /** press 의 첫 단계 · ptt.enable — 그 방 서버에 반이중 마이크가 없으면 획득해(track 이면 그 외부 트랙으로) 발행한다(기준 방 = 그 방).
    *  서버당 하나 — 옵션은 서버당 첫 것이 이긴다(뒤 것은 로그) · 자기가 만든 트랙이 실패하면 정지 */
   async ensureHalfMic(roomId: string, o: TrackOptions & { track?: MediaStreamTrack } = {}): Promise<LocalCore> {
-    const room = this.aff.pubRoom(roomId)
+    const room = this.pubRoom(roomId)
     if (!room) throw stateFault('STATE_NOT_JOINED', { room: roomId })
     const have = this.halfMic(room.sfuId)
     if (have && have.st.ps !== 'IDLE') {
@@ -108,6 +151,17 @@ export class MediaRegistry {
   /** 재구축의 다시 발행 — 그 서버(null = 전부) */
   reregisterAll(sfuId: string | null): void {
     for (const t of [...this.tracks]) if (sfuId === null || t.sfuId === sfuId) t.reregister()
+  }
+
+  /** AFF pub.move_out — 서버를 건너는 발언 방 전환 ① · 읽는 값 here = 트랙의 서버가 떠나는 발행 방의 서버(sfuId)다 */
+  moveOut(sfuId: string | null): void {
+    for (const t of [...this.tracks]) t.moveOut(sfuId !== null && t.sfuId === sfuId)
+  }
+
+  /** AFF pub.move_in — 발행 방이 섰다(② 새 방 · ③ 되돌린 옛 방) · 내린 트랙은 그 방의 서버를 다시 읽고 켠다 */
+  moveIn(roomId: string | null): void {
+    const room = roomId === null ? null : this.pubRoom(roomId)
+    for (const t of [...this.tracks]) t.moveIn(room)
   }
 
   /** 이어받기 응답 대조 — 읽는 값 listed = 응답의 발행 목록에 내 트랙이 있다 */
@@ -158,6 +212,7 @@ export class MediaRegistry {
 
   /** 전부 아니면 전무 — 하나가 실패하면 획득한 것은 정지하고 그 kind 로 reject · owner app */
   async acquire(req: { microphone?: TrackOptions | boolean; camera?: TrackOptions | boolean; screen?: TrackOptions | boolean }): Promise<LocalCore[]> {
+    this.watchDevices(true)
     const out: LocalCore[] = []
     const items: ['audio' | 'video', Source, TrackOptions | boolean | undefined][] = [['audio', 'microphone', req.microphone], ['video', 'camera', req.camera], ['video', 'screen', req.screen]]
     try {
@@ -211,6 +266,7 @@ export class MediaRegistry {
   }
 
   async devices(kind?: MediaDeviceKind, requestPermissions = false): Promise<MediaDeviceInfo[]> {
+    this.watchDevices(true)
     if (requestPermissions) {
       try {
         const t = await capture({ kind: kind === 'videoinput' ? 'video' : 'audio', timeoutMs: this.cfg.deviceAcquireTimeoutMs })
@@ -230,5 +286,6 @@ export class MediaRegistry {
   /** client.close() — 통보는 LEAVE 하나(이미 나갔다) · 로컬만 내린다 · 앱 소유 획득 트랙은 남긴다(SDK:RULE-MOD-TEARDOWN) */
   closeForApp(): void {
     for (const t of [...this.tracks]) t.dispose(t.owner !== 'app')
+    this.watchDevices(false)
   }
 }

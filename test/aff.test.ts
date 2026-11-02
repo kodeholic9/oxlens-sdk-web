@@ -129,24 +129,27 @@ test('SD-ENTRY-AFF-RES — 소속 응답마다 ENTRY.res 하나 · ok · p · on
     await affReply(r, res(['r1', 'r2'], 'r1'))
     await p1
     assert.equal(spy.n('res'), 1, 'SD-ENTRY-AFF-RES — 응답 하나에 ENTRY.res 하나')
-    assert.deepEqual(spy.calls['res']![0], [true, 'r1', false, true], 'SD-ENTRY-AFF-RES — 성공 · p = 응답의 pub_room · 발언 방 없음(onPub 거짓) · 옮겨 갈 방의 서버(onWant 참)')
+    assert.deepEqual(spy.calls['res']![0], [true, 'r1', false, true, true], 'SD-ENTRY-AFF-RES — 성공 · p = 응답의 pub_room · 발언 방 없음(onPub 거짓) · 옮겨 갈 방의 서버(onWant 참) · 읽는 값 pIn = p 에 들어가 있다')
     // 서버를 건너는 전환 — 옛 서버 해제 응답 · 새 서버 선택 응답
     const p3 = r.c.setSpeakingRoom('r3')
     await affReply(r, res(['r1', 'r2'], null))
-    assert.deepEqual(spy.calls['res']![1], [true, 'NONE', true, false], 'SD-ENTRY-AFF-RES — 옛 서버 응답: p 없음 · onPub 참 · onWant 거짓')
+    assert.deepEqual(spy.calls['res']![1], [true, 'NONE', true, false, false], 'SD-ENTRY-AFF-RES — 옛 서버 응답: p 없음 · onPub 참 · onWant 거짓 · pIn 거짓(p 없음)')
     await affReply(r, res(['r3'], 'r3'))
     await p3
-    assert.deepEqual(spy.calls['res']![2], [true, 'r3', false, true], 'SD-ENTRY-AFF-RES — 새 서버 응답: p = r3 · onWant 참')
+    assert.deepEqual(spy.calls['res']![2], [true, 'r3', false, true, true], 'SD-ENTRY-AFF-RES — 새 서버 응답: p = r3 · onWant 참 · pIn 참')
     // 실패 응답 · pub_room ⊄ sub_rooms 응답 — 둘 다 ok 거짓
     const p4 = r.c.setSpeakingRoom('r1').catch(() => undefined)
     await affReply(r, res(['r3'], null))
     await affReply(r, { code: 2006, name: 'NOT_AUTHORIZED', permanent: false }, false)
     await p4
-    assert.deepEqual(spy.calls['res']![4], [false, 'NONE', false, false], 'SD-ENTRY-AFF-RES — 실패 응답은 ok 거짓')
+    assert.deepEqual(spy.calls['res']![4], [false, 'NONE', false, false, false], 'SD-ENTRY-AFF-RES — 실패 응답은 ok 거짓')
+    // 새 서버 선택 실패 — 위가 옛 방으로 되돌린다(연:AFF.C.PUB.switch_back) · 그 응답도 입구 res 하나
+    await affReply(r, res(['r3'], 'r3'))
+    assert.deepEqual([spy.calls['res']![5], r.c.speakingRoom?.id], [[true, 'r3', false, true, true], 'r3'], 'SD-ENTRY-AFF-RES — 되돌림 응답: p = 옛 방 · onWant 참 · pIn 참')
     const p5 = r.c.setSpeakingRoom('r2').catch((x: unknown) => x)
     await affReply(r, res(['r1'], 'r2'))
     const e = await p5
-    assert.deepEqual(spy.calls['res']![5], [false, 'NONE', false, false], 'SD-ENTRY-AFF-RES — pub_room ⊄ sub_rooms 응답은 반영하지 않는다(ok 거짓)')
+    assert.deepEqual(spy.calls['res']![6], [false, 'NONE', false, false, false], 'SD-ENTRY-AFF-RES — pub_room ⊄ sub_rooms 응답은 반영하지 않는다(ok 거짓)')
     assert.ok(e instanceof OxLensError && e.category === 'server', 'SD-ENTRY-AFF-RES — 그 응답은 server 로 던진다(negotiation 아님)')
     assert.equal(spy.n('res'), affs(r), 'SD-ENTRY-AFF-RES — 요청 하나에 응답 입구 하나')
     await r.c.close()
@@ -213,18 +216,18 @@ test('SD-ENTRY-AFF-IMPLICIT①② — 입장 응답(위 이음매 aff.implicit)�
     // select:true 입장 — 옛 발언 방 없음
     await enter(r, 'r1', { mode: 'talk', pub: 'r1' })
     assert.equal(spy.n('implicit'), 1, 'SD-ENTRY-AFF-IMPLICIT① — 입장 응답 하나에 ENTRY.implicit 하나')
-    assert.deepEqual(spy.calls['implicit']![0], ['r1', true, 'r1', false], 'SD-ENTRY-AFF-IMPLICIT① — r · sel 참 · p = 응답 pub_room · onPub 거짓(발언 방 없음)')
+    assert.deepEqual(spy.calls['implicit']![0], ['r1', true, 'r1', false, true], 'SD-ENTRY-AFF-IMPLICIT① — r · sel 참 · p = 응답 pub_room · onPub 거짓(발언 방 없음) · 읽는 값 pIn = p 에 들어가 있다')
     // 다른 서버 방 select:false 입장 — 그 서버는 발언 방을 모른다
     await enter(r, 'r3', { sc: SB })
-    assert.deepEqual(spy.calls['implicit']![1], ['r3', false, 'NONE', false], 'SD-ENTRY-AFF-IMPLICIT① — 다른 서버: p 없음 · onPub 거짓')
+    assert.deepEqual(spy.calls['implicit']![1], ['r3', false, 'NONE', false, false], 'SD-ENTRY-AFF-IMPLICIT① — 다른 서버: p 없음 · onPub 거짓')
     assert.equal(r.c.speakingRoom?.id, 'r1', 'SD-ENTRY-AFF-IMPLICIT② — 다른 서버의 응답은 발언 방을 안 지운다')
     // 같은 서버 select:false 입장 — 응답이 옛 발언 방을 그대로 말한다
     await enter(r, 'r2', { pub: 'r1' })
-    assert.deepEqual(spy.calls['implicit']![2], ['r2', false, 'r1', true], 'SD-ENTRY-AFF-IMPLICIT① — 같은 서버의 옛 발언 방 있음: p = r1 · onPub 참')
+    assert.deepEqual(spy.calls['implicit']![2], ['r2', false, 'r1', true, true], 'SD-ENTRY-AFF-IMPLICIT① — 같은 서버의 옛 발언 방 있음: p = r1 · onPub 참 · pIn 참')
     assert.equal(r.c.speakingRoom?.id, 'r1', 'SD-ENTRY-AFF-IMPLICIT② — 같은 값이면 그대로')
     // sub_rooms 밖의 pub_room 은 p 가 아니다 · 같은 서버가 발언 방 없음을 말하면 지운다
     await enter(r, 'r4', { pub: 'r9' })
-    assert.deepEqual(spy.calls['implicit']![3], ['r4', false, 'NONE', true], 'SD-ENTRY-AFF-IMPLICIT① — pub_room 이 sub_rooms 에 없으면 p 없음')
+    assert.deepEqual(spy.calls['implicit']![3], ['r4', false, 'NONE', true, false], 'SD-ENTRY-AFF-IMPLICIT① — pub_room 이 sub_rooms 에 없으면 p 없음')
     assert.equal(r.c.speakingRoom, null, 'SD-ENTRY-AFF-IMPLICIT② — 같은 서버가 발언 방이 없다고 하면 응답만큼 바뀐다')
     // 같은 서버 응답이 다른 방을 발언 방으로 말한다
     await enter(r, 'r5', { pub: 'r2' })
@@ -273,7 +276,7 @@ test('SD-ENTRY-AFF-JOIN-FAILED①② — 입장 실패(위 이음매 aff.join_fa
     await tick()
     await pb.catch(() => undefined)
     assert.equal(spy.n('joinFailed'), n + 1, 'SD-ENTRY-AFF-JOIN-FAILED② — select:false 입장 실패도 입구 joinFailed 하나')
-    assert.deepEqual([r.core.rooms.aff.st, failed.length], [{ pub: 'r1', wait: 'NONE', want: 'NONE' }, 2], 'SD-ENTRY-AFF-JOIN-FAILED② — 소속 그대로 · speakingRoomFailed 0')
+    assert.deepEqual([r.core.rooms.aff.st, failed.length], [{ ...AFF.initial(), pub: 'r1' }, 2], 'SD-ENTRY-AFF-JOIN-FAILED② — 소속 그대로 · speakingRoomFailed 0')
     await r.c.close()
   } finally { spy.restore() }
 })
@@ -312,11 +315,38 @@ test('SD-ENTRY-AFF-LEFT — 듣던 방 떠남(위 이음매 aff.leave)이 ENTRY.
   } finally { spy.restore() }
 })
 
+test('SD-ENTRY-AFF-DOWN — 재구축이 방을 내림(위 이음매 aff.down)이 ENTRY.down 하나 · 발언 방이었으면 앱 이벤트 0 · speakingRoom 그대로 · 다시 들어간 뒤 pub_select 하나', async () => {
+  const spy = spyOn(AB.ENTRY)
+  try {
+    assert.deepEqual([AFF.REACTS.down, AB.ENTRY_ALL.down], [['ROOM:aff.down'], true], 'SD-ENTRY-AFF-DOWN① — 위가 정한 부르는 곳 하나(ROOM aff.down) · SDK 사건으로 넣는 곳 0')
+    const r = await up()
+    await enter(r, 'r1', { mode: 'talk', pub: 'r1' })
+    await enter(r, 'r3', { sc: SB })
+    const seen: (string | null)[] = []
+    r.c.on('speakingRoom', (x) => seen.push(x?.id ?? null))
+    const joins = r.ws.requests(Op.ROOM_JOIN).length
+    linkOf(r, SA).fact({ t: 'sctp', state: 'closed' })
+    await tick()
+    assert.deepEqual(spy.calls['down'], [['r1']], 'SD-ENTRY-AFF-DOWN① — 그 서버 재구축이 내린 방마다 ENTRY.down 하나(다른 서버 방은 0)')
+    assert.equal(spy.took['down']!.every(Boolean), true, 'SD-ENTRY-AFF-DOWN① — 결합 코드 ENTRY 를 지난다')
+    assert.deepEqual([seen, speakingId(r), affs(r)], [[], 'r1', 0], 'SD-ENTRY-AFF-DOWN② — 앱 이벤트 0 · client.speakingRoom 은 그 방 그대로 · 소속 요청 0')
+    for (let i = 0; i < 50 && r.ws.requests(Op.ROOM_JOIN).length === joins; i++) await tick()
+    assert.equal((joinFrame(r.ws, 'r1').body as { select: boolean }).select, false, '다시 들어감은 select:false')
+    linkOf(r, SA)
+    r.ws.answer(joinFrame(r.ws, 'r1'), joinBody(r, 'r1', { pub: null }))
+    await tick(); await tick()
+    assert.deepEqual([affs(r), r.ws.last(Op.AFFILIATION).body], [1, { pub_select: 'r1' }], 'SD-ENTRY-AFF-DOWN③ — 다시 들어간 뒤 AFFILIATION{pub_select} 하나(위 경우 AFF.C.any.implicit_back)')
+    await affReply(r, res(['r1'], 'r1'))
+    assert.deepEqual([speakingId(r), r.core.rooms.aff.st.back], ['r1', 'NONE'], 'SD-ENTRY-AFF-DOWN③ — 발언 방을 되찾는다')
+    await r.c.close()
+  } finally { spy.restore() }
+})
+
 // ══ 효과 표 ════════════════════════════════════════════════════════════
 
 test('SD-EFFECT-AFF-APP-AFFILIATION — 위 효과 app.affiliation 은 speakingRoom 이벤트 · client.speakingRoom 갱신 · 기다리던 setSpeakingRoom() resolve(전환이 끝났을 때)', async () => {
   assert.equal(AB.effect('app.affiliation').event, 'speakingRoom', 'SD-EFFECT-AFF-APP-AFFILIATION — 효과 표: app.affiliation → speakingRoom')
-  assert.deepEqual(AB.plan(AFF.res({ pub: 'NONE', wait: 'SELECT', want: 'r1' }, true, 'r1', false, true)).events, ['speakingRoom'], 'SD-EFFECT-AFF-APP-AFFILIATION — 결합 코드 plan() 이 낸다')
+  assert.deepEqual(AB.plan(AFF.res({ ...AFF.initial(), wait: 'SELECT', want: 'r1' }, true, 'r1', false, true, true)).events, ['speakingRoom'], 'SD-EFFECT-AFF-APP-AFFILIATION — 결합 코드 plan() 이 낸다')
   const r = await up()
   await enter(r, 'r1')
   await enter(r, 'r3', { sc: SB })
@@ -340,7 +370,7 @@ test('SD-EFFECT-AFF-APP-AFFILIATION — 위 효과 app.affiliation 은 speakingR
 
 test('SD-EFFECT-AFF-APP-AFF-FAILED — 위 효과 app.aff_failed 는 speakingRoomFailed · 기다리던 setSpeakingRoom() reject · speakingRoom 은 응답이 바꾼 만큼만 · 입장이 건 기다림이면 이벤트만', async () => {
   assert.equal(AB.effect('app.aff_failed').event, 'speakingRoomFailed', 'SD-EFFECT-AFF-APP-AFF-FAILED — 효과 표: app.aff_failed → speakingRoomFailed')
-  assert.deepEqual(AB.plan(AFF.res({ pub: 'NONE', wait: 'SELECT', want: 'r1' }, false, 'NONE', false, false)).events, ['speakingRoomFailed'], 'SD-EFFECT-AFF-APP-AFF-FAILED — 결합 코드 plan() 이 낸다')
+  assert.deepEqual(AB.plan(AFF.res({ ...AFF.initial(), wait: 'SELECT', want: 'r1' }, false, 'NONE', false, false, false)).events, ['speakingRoomFailed'], 'SD-EFFECT-AFF-APP-AFF-FAILED — 결합 코드 plan() 이 낸다')
   const r = await up()
   await enter(r, 'r1', { mode: 'talk', pub: 'r1' })
   await enter(r, 'r2', { pub: 'r1' })
@@ -360,12 +390,18 @@ test('SD-EFFECT-AFF-APP-AFF-FAILED — 위 효과 app.aff_failed 는 speakingRoo
   await affReply(r, res(['r1', 'r2'], 'r1'))
   await q
   assert.deepEqual([failed.length, r.c.speakingRoom?.id], [2, 'r1'], 'SD-EFFECT-AFF-APP-AFF-FAILED — 옛 서버 해제에서 멈춤: reject · 발언 방 그대로')
-  // 옛 서버 해제는 됐고 새 서버 선택이 실패 — 해제만큼 바뀐다
-  const w = r.c.setSpeakingRoom('r3').catch(() => undefined)
+  // 옛 서버 해제는 됐고 새 서버 선택이 실패 — reject 는 그 실패로 · 위가 옛 방으로 되돌린다(연:AFF.C.PUB.switch_back · 연:RULE-AFF-SWITCH-TRACKS ③)
+  const w = r.c.setSpeakingRoom('r3').catch((x: unknown) => x)
   await affReply(r, res(['r1', 'r2'], null))
   await affReply(r, { code: 2006, name: 'NOT_AUTHORIZED', permanent: true }, false)
-  await w
+  const e2 = await w
+  assert.ok(e2 instanceof OxLensError && e2.code === 2006, 'SD-EFFECT-AFF-APP-AFF-FAILED — 실패 응답이면 그 응답 코드의 분류로 reject')
   assert.deepEqual([failed.length, r.c.speakingRoom, seen], [3, null, [null]], 'SD-EFFECT-AFF-APP-AFF-FAILED — 응답이 바꾼 만큼만(해제는 반영)')
+  const back = await affReply(r, res(['r1', 'r2'], 'r1'))
+  assert.deepEqual([back.body, r.c.speakingRoom?.id, seen], [{ pub_select: 'r1' }, 'r1', [null, 'r1']], 'SD-EFFECT-AFF-APP-AFF-FAILED — 되돌림(옛 방 pub_select)이 서면 발언 방이 돌아온다')
+  const d = r.c.setSpeakingRoom(null)
+  await affReply(r, res(['r1', 'r2'], null))
+  await d
   // 입장(joinSelect)이 건 기다림 — 이벤트만 · join() 은 입장 결과대로 resolve
   const pj = r.c.join('r4', { mode: 'talk' })
   await tick()
@@ -420,9 +456,9 @@ test('SD-API-CLIENT-SET-SPEAKING-ROOM — 전환은 AFFILIATION 만(발언권 RE
   await p
   assert.deepEqual(f.body, { pub_deselect: 'r1', pub_select: 'r2' }, 'SD-API-CLIENT-SET-SPEAKING-ROOM — 같은 서버면 소속 요청 하나')
   const sent = r.ws.frames().filter((x) => x.kind === 'request').slice(before).map((x) => x.op)
-  assert.deepEqual(sent, [Op.AFFILIATION], 'SD-API-CLIENT-SET-SPEAKING-ROOM — WS 요청은 AFFILIATION 만(재발행 · 재협상 0)')
-  assert.ok(!dc.includes(C.Type.REQUEST) && !dc.includes(C.Type.RELEASE), 'SD-API-CLIENT-SET-SPEAKING-ROOM — 발언권 REQUEST 0 · 클라 RELEASE 0')
-  assert.deepEqual([h1.ptt.state.phase, h1.ptt.state.lastEnd], ['no_permission', 'moved'], "SD-API-CLIENT-SET-SPEAKING-ROOM — 응답 뒤 옛 방 no_permission · lastEnd:'moved'")
+  assert.deepEqual(sent, [Op.AFFILIATION], 'SD-API-CLIENT-SET-SPEAKING-ROOM① — WS 요청은 AFFILIATION 만(재발행 · 재협상 0)')
+  assert.ok(!dc.includes(C.Type.REQUEST) && !dc.includes(C.Type.RELEASE), 'SD-API-CLIENT-SET-SPEAKING-ROOM①② — 발언권 REQUEST 0 · 클라 RELEASE 0')
+  assert.deepEqual([h1.ptt.state.phase, h1.ptt.state.lastEnd], ['no_permission', 'moved'], "SD-API-CLIENT-SET-SPEAKING-ROOM② — 응답 뒤 옛 방 no_permission · lastEnd:'moved'")
   assert.equal(r.core.rooms.get('r2')!.floor.st.isPub, true, 'SD-API-CLIENT-SET-SPEAKING-ROOM — 새 방이 발언 방(이음매 floor.pub_select)')
   const e = await r.c.setSpeakingRoom('nowhere').catch((x: unknown) => x)
   assert.ok(e instanceof OxLensError && e.category === 'state', 'SD-API-CLIENT-SET-SPEAKING-ROOM — 들어가 있지 않은 방은 state 로 reject')

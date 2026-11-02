@@ -14,6 +14,7 @@ import type { Core } from '../src/domain/ses/core.js'
 import { createClient, OxLensError, Room } from '../src/index.js'
 import { localOf } from '../src/api/handles.js'
 import { LocalCore } from '../src/domain/pub/local.js'
+import { Fault } from '../src/platform/fault.js'
 
 const ALL: Permission = { publish_audio: true, publish_video: true, publish_screen: true, floor_request: true }
 const NO_FLOOR: Permission = { ...ALL, floor_request: false }
@@ -260,7 +261,8 @@ test('SD-ENTRY-ROOM-DELTA — 방 통지 넷과 version 없는 내 권한 통지
     await note(r, Op.PARTICIPANT_EVENT, { type: 'joined', room_id: 'r1', user_id: 'u3', select: false, participant_type: 0, version: vers(5) })
     assert.equal(spy.n('delta'), 6, 'SD-ENTRY-ROOM-DELTA — 통지 하나에 ENTRY.delta 하나')
     assert.deepEqual(spy.calls['delta']!.map((a) => a[1]), [false, false, false, false, true, false], 'SD-ENTRY-ROOM-DELTA — bare 는 version 없는 PARTICIPANT_STATE 만')
-    assert.deepEqual(applied, ['PARTICIPANT_EVENT', 'PARTICIPANT_STATE', 'TRACK_EVENT', 'TRACK_STATE', 'PARTICIPANT_STATE'], 'SD-ENTRY-ROOM-DELTA — 위가 반영하라고 한 통지만 store.apply 한 곳을 지난다 · 낡은 seq(5 ≤ 5)는 0')
+    assert.deepEqual(spy.calls['delta']!.map((a) => (a[0] as { t: string }).t), ['PARTICIPANT_EVENT', 'PARTICIPANT_STATE', 'TRACK_EVENT', 'TRACK_STATE', 'PARTICIPANT_STATE', 'PARTICIPANT_EVENT'], 'SD-ENTRY-ROOM-DELTA — 통지 종류(t)를 그대로 넣는다')
+    assert.deepEqual(applied, ['PARTICIPANT_EVENT', 'PARTICIPANT_STATE', 'PARTICIPANT_STATE'], 'SD-ENTRY-ROOM-DELTA — 위가 명단을 반영하라고 한 통지만 store.apply 한 곳을 지난다 · 트랙 통지는 명단을 안 바꾼다(연:ROOM.C.JOINED.delta_apply_track) · 낡은 seq(5 ≤ 5)는 0')
     assert.deepEqual(h.participants.map((p) => p.userId), ['u1', 'u2'], 'SD-ENTRY-ROOM-DELTA — 낡은 입장 통지는 명단에 없다')
     assert.equal(room.trk.entries.get('t2')?.muted, true, 'SD-ENTRY-ROOM-DELTA — 트랙 · 트랙 상태는 이음매 trk.delta 로 트랙 목록에')
     assert.equal(room.st.cseq, 5, 'version 없는 통지는 보관 seq 를 바꾸지 않는다')
@@ -727,7 +729,7 @@ test('K-sym-RULE-ROOM-PERMISSION-BITS-3①② — 내려간 비트의 발행 API
   await r.c.close()
 })
 
-test('K-sym-RULE-ROOM-PERMISSION-BITS-1①② — 비트를 내린 뒤 장치 복구 · 전면 재구축이 일어나도 자동 재발행 0(PUBLISH_TRACKS add 0) · 앱이 명시로 부르면 state reject', async () => {
+test('K-sym-RULE-ROOM-PERMISSION-BITS-1①②③ — 비트를 내린 뒤 장치 복구 · 전면 재구축이 일어나도 자동 재발행 0(PUBLISH_TRACKS add 0) · 앱이 명시로 부르면 state reject · 재발행하지 않은 트랙은 ended{revoked} · Source 정지', async () => {
   const g = globalThis as unknown as { navigator?: unknown }
   const saved = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
   let acquired = 0
@@ -739,8 +741,11 @@ test('K-sym-RULE-ROOM-PERMISSION-BITS-1①② — 비트를 내린 뒤 장치 �
   try {
     const r = await up()
     await enter(r, 'r1', { mode: 'talk', pub: 'r1' })
-    const t = new LocalCore(r.core.media, 'audio', 'microphone', fakeTrack('audio'), 'sdk', {})
-    void t.publish('r1', 'full').catch(() => undefined)
+    const dev1 = Object.assign(fakeTrack('audio'), { stops: 0, stop(): void { dev1.stops++ } })
+    const t = new LocalCore(r.core.media, 'audio', 'microphone', dev1 as unknown as MediaStreamTrack, 'sdk', {})
+    const ends: unknown[] = []
+    t.events.on('ended', (x) => ends.push(x))
+    const pubbed = t.publish('r1', 'full').then(() => null, (x: unknown) => x)
     await tick()
     await note(r, Op.PARTICIPANT_STATE, { type: 'permission', room_id: 'r1', user_id: 'u1', permission: NO_AUDIO, version: vers(2) })
     const adds = (): number => FakeWS.made.reduce((n, ws) => n + ws.requests(Op.PUBLISH_TRACKS).filter((f) => (f.body as { action?: string }).action === 'add').length, 0)
@@ -763,6 +768,9 @@ test('K-sym-RULE-ROOM-PERMISSION-BITS-1①② — 비트를 내린 뒤 장치 �
     assert.notEqual(t.state, 'staged', 'K-sym-RULE-ROOM-PERMISSION-BITS-1① — 막힌 비트의 트랙은 다시 싣지 않는다')
     assert.ok(pub.some((x) => x.endsWith('.off|permission')) && !pub.some((x) => x.startsWith('PUB.C.any.reregister|')), `K-sym-RULE-ROOM-PERMISSION-BITS-1① — 재발행 대신 비트가 끈다: ${pub.join(' · ')}`)
     assert.equal(acquired, 0, 'K-sym-RULE-ROOM-PERMISSION-BITS-1① — 장치 복구: 비트가 막는 트랙은 재획득(getUserMedia)도 하지 않는다(SDK:RULE-ROOM-PERMISSION-BITS)')
+    assert.deepEqual([t.state, ends, dev1.stops], ['idle', [{ reason: 'revoked' }], 1], 'K-sym-RULE-ROOM-PERMISSION-BITS-1③ — 재발행하지 않은 트랙은 ended{revoked} · Source 정지(owner sdk — 표시등이 꺼진다)')
+    const pe = await pubbed
+    assert.ok(pe instanceof Fault, `기다리던 앱 발행은 정착한다(영영 pending 0 — 받은 것: ${String((pe as Fault | null)?.name)})`)
     assert.equal(t2.state, 'idle', '대체를 다시 잡지 않으니 ended{device_lost}')
     linkOf(r, SA)
     ws2.answer(joinFrame(ws2, 'r1'), joinBody({ ...r, ws: ws2 }, 'r1', { mode: 'talk', pub: 'r1', me: NO_AUDIO } as JB))
@@ -794,5 +802,21 @@ test('K-sym-IMPL-ROOM-API-1 · K-sym-IMPL-ROOM-API-2 — 10채널 기본 join �
   assert.ok(ids.every((id) => (joinFrame(r.ws, id).body as { select: boolean }).select === false), '기본 listen = select:false')
   assert.equal(r.c.speakingRoom, null, 'K-sym-IMPL-ROOM-API-1 — 기본 join 열 번 뒤 발언 방 = null(마지막 입장 방이 아니다)')
   assert.equal(r.c.rooms.size, 9)
+  await r.c.close()
+})
+
+test('SDK:RULE-API-ASYNC 재진입 금지 — 이벤트 핸들러 안에서 부른 API 는 다음 tick 에 나간다 · 핸들러 밖이면 곧바로', async () => {
+  const r = await up()
+  const h = await enter(r, 'r1')
+  let inside = -1
+  h.on('participants', () => { void h.leave(); inside = r.ws.requests(Op.ROOM_LEAVE).length })
+  await note(r, Op.PARTICIPANT_EVENT, { type: 'joined', room_id: 'r1', user_id: 'u2', select: false, participant_type: 0, version: vers(2) })
+  assert.equal(inside, 0, 'SDK:RULE-API-ASYNC — 핸들러가 도는 동안에는 나가지 않는다(퇴장 요청 0)')
+  await tick()
+  assert.equal(r.ws.requests(Op.ROOM_LEAVE).length, 1, 'SDK:RULE-API-ASYNC — 다음 tick 에 나간다')
+  r.ws.answer(r.ws.last(Op.ROOM_LEAVE), {}); await tick()
+  const h2 = await enter(r, 'r2')
+  void h2.leave()
+  assert.equal(r.ws.requests(Op.ROOM_LEAVE).length, 2, 'SDK:RULE-API-ASYNC — 핸들러 밖이면 곧바로')
   await r.c.close()
 })

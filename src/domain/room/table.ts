@@ -6,6 +6,7 @@ import type { Reply } from '../../internal/ses/signaling.js'
 import { RoomCore, type JoinOptions } from './core.js'
 import { AffCore } from '../aff/core.js'
 import { Playback } from '../trk/playback.js'
+import type { MediaRegistry } from '../pub/registry.js'
 
 /** 클라이언트 객체 하나의 방 목록 — 소속(발언 방)은 방 목록 위에 하나다 */
 export class RoomTable extends Map<string, RoomCore> {
@@ -22,7 +23,8 @@ export class RoomTable extends Map<string, RoomCore> {
   async join(roomId: string, opts: JoinOptions): Promise<RoomCore> {
     await this.core.untilActive()
     const live = this.get(roomId)
-    if (live && live.st.rs !== 'NONE') return live.joined()
+    // 살아 있는 Room 이면 그것을 — 재구축이 내려 다시 들어갈 방(rs NONE · rejoin)도 살아 있다(SDK:RULE-API-HANDLES · 옛 핸들이 joining 에 굳지 않게)
+    if (live && (live.st.rs !== 'NONE' || live.st.rejoin)) return live.joined()
     const room = new RoomCore(this.core, roomId, opts)
     this.set(roomId, room)
     const joined = await room.start()
@@ -38,6 +40,9 @@ export class RoomTable extends Map<string, RoomCore> {
   // ── 소속(AFF)이 방 목록을 지나 쓰는 것 — 소속은 세션 영역을 부르지 않는다(may_use) ─────
 
   untilActive(): Promise<void> { return this.core.untilActive() }
+
+  /** 발행 무리 — 소속 이음매 pub.move_out · pub.move_in 이 닿는 곳(AFF → PUB) */
+  get media(): MediaRegistry { return this.core.media }
 
   /** 소속 요청 — AFFILIATION */
   request(op: 'AFFILIATION', body: Record<string, unknown>): Promise<Reply> { return this.core.sig.request(op, body) }

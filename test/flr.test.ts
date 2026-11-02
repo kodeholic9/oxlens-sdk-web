@@ -357,7 +357,11 @@ test('SD-API-PTT-STATE — PttState 필드 전량(arming · armingStage 넷 · l
   u.f.dispose()
 })
 
-test('SD-API-PTT-PRIORITY①② — REQUEST 의 우선순위 TLV = 설정값 · 허가 뒤 state.priority 가 같은 값(깎임 0)', async () => {
+test('SD-API-PTT-PRIORITY①②③ — REQUEST 의 우선순위 TLV = 설정값 · 허가 뒤 state.priority 가 같은 값(깎임 0) · 기본은 0(같은 0 끼리 선점 0 — 서버 FIFO 는 2층)', async () => {
+  const d0 = unit()
+  await pressed(d0)
+  assert.deepEqual([d0.f.priority, prioOf(d0.sent[0]!) ?? 0], [0, 0], 'SD-API-PTT-PRIORITY③ — 기본 우선순위 0 으로 낸다(올려 선점하지 않는다 · 같은 0 끼리는 서버가 FIFO)')
+  d0.f.dispose()
   const u = unit()
   const ptt = new Ptt(u.f, u.room as never)
   ptt.priority = 200
@@ -523,7 +527,7 @@ test('K-sym-RULE-FLR-ROOM-SWITCH-1 — release 를 안 부르면(주입) 상한 
   } finally { mock.timers.reset() }
 })
 
-test('K-sym-RULE-FLR-ROOM-SWITCH-2 — trusted:false 는 DC 생존 하나로만 바뀐다(발언 중 흔들림에 phase 는 그대로 · 다른 사건은 trusted 를 바꾸지 않는다)', async () => {
+test('K-sym-RULE-FLR-ROOM-SWITCH-2 — trusted:false 는 DC 생존 하나로만 바뀐다(발언 중 흔들림에 phase 는 그대로 · DC 사실이 아닌 사건은 trusted 를 바꾸지 않는다 · 재구축은 새 연결 DC 가 설 때 — link.test SD-ENTRY-LINK-REBUILT)', async () => {
   const u = unit()
   set(u, { cs: 'PERM', want: true })
   u.f.dcDown()
@@ -534,7 +538,7 @@ test('K-sym-RULE-FLR-ROOM-SWITCH-2 — trusted:false 는 DC 생존 하나로만 
   u.f.down()
   u.f.join()
   u.f.linkChanged()
-  assert.equal(u.f.snapshot().trusted, false, 'K-sym-RULE-FLR-ROOM-SWITCH-2 — 회수 · 반환 · 재동기 · 재구축 · 입장은 trusted 를 바꾸지 않는다')
+  assert.equal(u.f.snapshot().trusted, false, 'K-sym-RULE-FLR-ROOM-SWITCH-2 — 회수 · 반환 · 재동기 · 내림 · 입장 자체는 trusted 를 바꾸지 않는다(재구축의 회복은 연:LINK.C.REBUILD.rebuilt 의 floor.dc_up — DC 사실이다)')
   assert.equal(u.f.canRequest, false)
   u.f.dcUp()
   assert.equal(u.f.snapshot().trusted, true, 'K-sym-RULE-FLR-ROOM-SWITCH-2 — DC 다시 열림 하나로 돌아온다')
@@ -1096,4 +1100,18 @@ test('SD-API-PTT-PRESS②⑥ — 입장 직후(DC 전) press 는 reject 0 · arm
   await tick(80)
   assert.deepEqual(msgs(peer.sent), [C.Type.REQUEST], 'SD-API-PTT-PRESS⑥ — pub_select 응답 뒤 REQUEST 하나')
   await r.c.close()
+}))
+
+test('재발 20261102d-9 — arming 중 release 뒤 다시 press 하면 그 누름은 산다(연:RULE-FLR-PROC-PRESS · 버튼은 눌려 있다)', () => spying(async (spy) => {
+  const c = unit()
+  let go!: () => void
+  c.media.half = false
+  c.media.hold = new Promise<void>((r) => { go = r })
+  await c.f.press()
+  await c.f.release()
+  await c.f.press()
+  go()
+  for (let i = 0; i < 10; i++) await tick()
+  assert.deepEqual([msgs(c.sent), spy.n('press')], [[C.Type.REQUEST], 1], '재발 9 — 둘째 누름이 REQUEST 하나로 간다(유실 0)')
+  c.f.dispose()
 }))

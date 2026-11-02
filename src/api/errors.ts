@@ -1,6 +1,8 @@
 // author: kodeholic (powered by Claude)
 // spec: v1.2 @d626fda · SDK:IMPL-ERR-TYPE · SDK:RULE-ERR-REJECT-OR-EVENT · model: claude-opus-5-5
 import { Fault, type Category } from '../platform/fault.js'
+import { inHandler } from '../platform/emitter.js'
+import { nextTick } from '../platform/clock.js'
 
 /** 표면 오류형 — wire 코드는 그대로 나른다 · wire 가 아닌 실패는 code 0 + name */
 export class OxLensError extends Error {
@@ -33,6 +35,11 @@ export function toError(e: unknown): OxLensError {
     return x
   }
   return new OxLensError(new Fault({ code: 0, name: 'BUG', category: 'bug', permanent: true, message: String(e), cause: e }))
+}
+
+/** 앱 조작 API — 이벤트 핸들러 안에서 불렸으면 다음 tick 에 나간다(SDK:RULE-API-ASYNC 재진입 금지) · 밖이면 곧바로 · 실패는 OxLensError */
+export function act<T>(fn: () => Promise<T>): Promise<T> {
+  return wrap(inHandler() ? nextTick().then(fn) : fn())
 }
 
 /** 요청 API — 실패는 OxLensError 로 reject */
