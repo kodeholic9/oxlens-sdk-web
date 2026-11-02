@@ -873,7 +873,9 @@ test('K-sym-IMPL-LINK-PROJECTION-2 — wobbly(DC 다시 열기) 중 ICE failed �
   const n = x.links.length
   x.pc.ice('failed'); await tick()
   const dcs = x.pc.dcs.length
-  await tick(1200)
+  // 다시 열기가 남았다면 소진(→ 재구축)까지 갔을 시간 — 간격 × (시도 + 1) × 2
+  const { tries, intervalMs } = x.r.core.cfg.dcReopen
+  await tick(intervalMs * (tries + 1) * 2)
   assert.deepEqual(x.links.slice(n).map((i) => i.state), ['restarting'], 'K-sym-IMPL-LINK-PROJECTION-2 — restarting 하나(다시 열기 소진 → 재구축으로 가지 않는다)')
   assert.deepEqual([x.pc.dcs.length, x.link.st.ls === 'REBUILD'], [dcs, false], 'K-sym-IMPL-LINK-PROJECTION-2 — 다시 열기 중단(새 DC 0) · 재구축 0')
   await x.r.c.close()

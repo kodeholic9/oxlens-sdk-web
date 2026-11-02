@@ -1,7 +1,7 @@
 // author: kodeholic (powered by Claude)
 // SDK:IMPL-ERR-TYPE · SDK:RULE-ERR-DEVICE · SDK:RULE-ERR-REJECT-OR-EVENT — 실패 표면(ERR — 가로지르는 것) 1층. 분류(category) · 장치 실패 이름 · blockedBy 판별을 단위(SD-CATEGORY-* · SD-NAME-* · SD-BLOCKED-BY-*)마다 잰다.
 // 브라우저 없이 — 가짜 WebSocket(test/_ws) · 진짜 클라이언트(test/_rig) · 가짜 navigator(이 파일 — 획득 실패를 시험이 고른다).
-import { test, afterEach } from 'node:test'
+import { test, afterEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { FakeWS, tick } from './_ws.js'
 import { SA, up, linkOf, enter, drain, joinBody, joinFrame, leaveFrame, FAIL, type Rig } from './_rig.js'
@@ -171,23 +171,29 @@ test('SD-CATEGORY-LIMIT①② — 4005 는 재시도 0 · 4009 는 앱 reject 0 
 
 test('SD-CATEGORY-SERVER — 5xxx 는 기본 재시도 3회(300 · 1200 · 2700ms) 뒤에도 안 되면 server 로 reject', async () => {
   const r = await rig()
-  let settled = false
-  const p = r.c.join('r1').then(() => null, (e: unknown) => e).finally(() => { settled = true })
-  await tick()
-  const gaps: number[] = []
-  for (let i = 0; i < 4; i++) {
-    const n = r.ws.requests(Op.ROOM_JOIN).length
+  // 재시도 간격은 시계로 잰다 — 실제로 4초를 기다리지 않는다(setTimeout 을 시험이 쥔다 · 1층 시간)
+  const flush = async (): Promise<void> => { for (let k = 0; k < 8; k++) await new Promise<void>((res) => setImmediate(res)) }
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    let settled = false
+    const p = r.c.join('r1').then(() => null, (e: unknown) => e).finally(() => { settled = true })
+    await flush()
+    for (const [i, want] of [300, 1200, 2700].entries()) {
+      const n = r.ws.requests(Op.ROOM_JOIN).length
+      r.ws.answer(joinFrame(r.ws, 'r1'), FAIL(5003, 'INTERNAL_ERROR'), false)
+      await flush()
+      mock.timers.tick(want - 1); await flush()
+      assert.equal(r.ws.requests(Op.ROOM_JOIN).length, n, `SD-CATEGORY-SERVER — ${i + 1} 번째 재시도는 ${want}ms 전에 안 나간다`)
+      mock.timers.tick(1); await flush()
+      assert.equal(r.ws.requests(Op.ROOM_JOIN).length, n + 1, `SD-CATEGORY-SERVER — ${i + 1} 번째 재시도는 ${want}ms 에 나간다`)
+      assert.equal(settled, false, `SD-CATEGORY-SERVER — ${i + 1} 번째 실패 뒤엔 reject 0(다시 보낸다)`)
+    }
     r.ws.answer(joinFrame(r.ws, 'r1'), FAIL(5003, 'INTERNAL_ERROR'), false)
-    if (i === 3) break
-    const t0 = performance.now()
-    for (let k = 0; k < 400 && r.ws.requests(Op.ROOM_JOIN).length === n; k++) await tick(10)
-    gaps.push(performance.now() - t0)
-    assert.equal(settled, false, `SD-CATEGORY-SERVER — ${i + 1} 번째 실패 뒤엔 reject 0(다시 보낸다)`)
-  }
-  const e = await p
-  assert.equal(r.ws.requests(Op.ROOM_JOIN).length, 4, 'SD-CATEGORY-SERVER — 처음 + 재시도 3')
-  assert.ok([300, 1200, 2700].every((want, i) => gaps[i]! >= want - 15 && gaps[i]! < want + 250), `SD-CATEGORY-SERVER — 간격 300 · 1200 · 2700: ${gaps.map((x) => x.toFixed(0)).join(',')}`)
-  assert.ok(e instanceof OxLensError && e.category === 'server' && e.code === 5003, 'SD-CATEGORY-SERVER — 다 한 뒤 server reject')
+    await flush()
+    const e = await p
+    assert.equal(r.ws.requests(Op.ROOM_JOIN).length, 4, 'SD-CATEGORY-SERVER — 처음 + 재시도 3')
+    assert.ok(e instanceof OxLensError && e.category === 'server' && e.code === 5003, 'SD-CATEGORY-SERVER — 다 한 뒤 server reject')
+  } finally { mock.timers.reset() }
 })
 
 test('SD-CATEGORY-NEGOTIATION — SDP 적용 실패 · pc_mode 불일치는 NEGOTIATION_<단계>(code 0 · negotiation) · 런타임 폴백 0(모드 그대로 · 다시 붙기 0)', async () => {

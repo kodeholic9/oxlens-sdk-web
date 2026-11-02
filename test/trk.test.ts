@@ -2,7 +2,7 @@
 // SDK:IMPL-TRK-RECEIVE · SDK:RULE-TRK-STORE — 받는 쪽 영역 1층(SUB 는 TRK 로 접힌다). 위가 지은 트랙 · 구독 상태기 둘레의 손 결합(보관본 · 핸들 · 보내는 몸통)을 잰다.
 // ★입구는 위 결합(trk_binding · sub_binding)의 ENTRY 를 지나는지 · 표면은 효과 표(effect)대로 나는지를 TRK 단위(SD-ENTRY-TRK-* · SD-EFFECT-TRK-* · SD-API-* · K-sym-*)마다 잰다.
 // 브라우저 없이 — 가짜 WebSocket(test/_ws) · 진짜 연결 상태기에 가짜 PeerLink(줄마다 가짜 수신 트랜시버 — test/_rig).
-import { test } from 'node:test'
+import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { FakeWS, tick } from './_ws.js'
 import { SA, SB, up, linkOf, drain, enter, vers, note, httpMock, getRoom, leaveFrame, joinBody, fakeTrack, type Rig, type JB, type FakeTrack } from './_rig.js'
@@ -526,8 +526,14 @@ test('SD-API-ROOM-ON-ERROR — 재조립 협상 실패 · READY 실패 · 재동
     assert.ok(e instanceof OxLensError && e.code === 3002, 'SD-API-ROOM-ON-ERROR — 내 요청(setLayer)의 실패는 Promise reject')
     assert.equal(errs.length, 2, 'SD-API-ROOM-ON-ERROR — 내 요청의 실패는 room error 0')
     // 재동기 HTTP 실패 — 사다리를 다 밟아도 실패면 하나
-    await note(r, Op.ROOM_EVENT, { type: 'sync_required', room_id: 'r1', reason: 'x' })
-    await tick(1800)
+    // 사다리 간격(300 · 1200)은 시험이 시계를 쥐고 넘긴다 — 실제로 기다리지 않는다(1층 시간)
+    const flush = async (): Promise<void> => { for (let k = 0; k < 8; k++) await new Promise<void>((res) => setImmediate(res)) }
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      r.ws.notify(Op.ROOM_EVENT, { type: 'sync_required', room_id: 'r1', reason: 'x' })
+      await flush()
+      for (const ms of [300, 1200]) { mock.timers.tick(ms); await flush() }
+    } finally { mock.timers.reset() }
     assert.ok(fails >= 3, '재동기를 사다리대로 다시 던졌다')
     assert.equal(errs.length, 3, 'SD-API-ROOM-ON-ERROR — 재동기 HTTP 실패 room error 하나(로그만 남기고 삼키지 않는다)')
     assert.equal(errs[2]!.code, 5003)

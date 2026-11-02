@@ -143,3 +143,18 @@ test('SD-EVENT-TOKEN-REQUIRED③ — 재개 창을 넘긴 재접속(open_late)�
   assert.deepEqual([tokens, closed.length], [[{ cause: 'expired' }], 0], 'SD-EVENT-TOKEN-REQUIRED③ — 이 이벤트 하나 · closed 0')
   await r.c.close()
 })
+
+test('재발 20261103 — 재구축 칸 분산 대기(massJitterMs)는 세션이 쥔 시계라 close() 가 멈춘다(닫힌 클라이언트가 시계를 남기지 않는다 · SDK:RULE-API-HANDLES)', async () => {
+  const r = await up({ massJitterMs: 60_000 })
+  await enter(r, 'r1')
+  const made = FakeWS.made.length
+  r.ws.close()
+  for (let i = 0; i < 300 && FakeWS.made.length === made; i++) await tick(10)
+  const ws2 = FakeWS.made.at(-1)!
+  ws2.open(); await tick()
+  ws2.reply(Op.BIND, { user_id: 'u1', server_ver: 1, heartbeat_interval: 10_000, session_id: 's-2', resume_window_ms: 60_000, pc_mode: '2pc' }); await tick(5)
+  const core = r.core as unknown as { jitter: { armed: boolean } | null }
+  assert.equal(core.jitter?.armed, true, '세션 재구축 — 다시 들어가기 전 분산 대기 중')
+  await r.c.close()
+  assert.equal(core.jitter?.armed, false, '재발 — close() 가 분산 대기를 멈춘다(옛 sleep 은 닫힌 뒤에도 최대 massJitterMs 동안 남았다)')
+})

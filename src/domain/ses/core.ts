@@ -7,7 +7,7 @@ import { Code } from '../../internal/wire/ws.js'
 import { Signaling, type Inbound, type Reply } from '../../internal/ses/signaling.js'
 import { Emitter } from '../../platform/emitter.js'
 import { LogBook, type Logger } from '../../platform/log.js'
-import { sleep } from '../../platform/clock.js'
+import { Timer } from '../../platform/clock.js'
 import { Fault, fromFailure, closedFault } from '../../platform/fault.js'
 import { httpJson, httpUrl } from '../../platform/net.js'
 import { decide } from '../../platform/capability.js'
@@ -99,6 +99,9 @@ export class Core {
   private activeWaiters: Waiter[] = []
   /** 앱의 다음 setToken() 을 기다리는 것 — HTTP 401 로 멈춘 재동기(연:RULE-TRN-HTTP-AUTH-TWO) */
   private tokenWaiters: Waiter[] = []
+  /** 재구축 칸 첫 ROOM_JOIN 의 분산 대기 — 세션이 소유한다 · close() 가 멈춘다(SDK:RULE-API-HANDLES 닫히면 아래 전부 닫힌다) */
+  private jitter: Timer | null = null
+  private readonly jitterRooms = new Set<RoomCore>()
   private appClosed = false
   /** 재접속 중 토큰 요구로 멈췄다 — 새 토큰이 오면 SDK 가 이어서 접속을 넣는다 */
   private resumeOnToken = false
@@ -192,6 +195,8 @@ export class Core {
     this.diag.stop()
     this.media.closeForApp()
     this.watchPage(false)
+    this.jitter?.stop()
+    this.jitterRooms.clear()
     for (const w of this.connectWaiters.splice(0)) w.reject(closedFault('CLOSED'))
     for (const w of this.tokenWaiters.splice(0)) w.reject(closedFault('CLOSED'))
     for (const w of this.activeWaiters.splice(0)) w.reject(closedFault('CLOSED'))
@@ -397,7 +402,14 @@ export class Core {
   rejoinAll(rooms: RoomCore[]): void {
     const marked = rooms.filter((r) => r.st.rejoin)
     if (!marked.length) return
-    void sleep(Math.floor(Math.random() * this.cfg.massJitterMs)).then(() => { for (const r of marked) if (this.rooms.get(r.id) === r) r.rejoin() })
+    for (const r of marked) this.jitterRooms.add(r)
+    this.jitter ??= new Timer(this.cfg.wakeDetectMs)
+    if (this.jitter.armed) return
+    this.jitter.start(Math.floor(Math.random() * this.cfg.massJitterMs), () => {
+      const due = [...this.jitterRooms]
+      this.jitterRooms.clear()
+      for (const r of due) if (this.rooms.get(r.id) === r) r.rejoin()
+    })
   }
 
   private resumeSnapshots(): void {

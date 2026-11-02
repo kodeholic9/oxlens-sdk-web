@@ -828,6 +828,8 @@ test('SD-EVENT-LINK — 서버 둘 중 하나가 흔들리면 그 서버 link �
   a.step('iceBack', LINK.iceBack(a.st), 'ice')
   assert.deepEqual(got.map((i) => [i.server, i.state]), [['sfu-a', 'wobbly'], ['sfu-a', 'up']], 'SD-EVENT-LINK③ — 바뀔 때마다 하나')
   assert.ok(!got.some((i) => i.server === 'sfu-b'), 'SD-EVENT-LINK① — 다른 서버 0')
+  // 직접 만든 연결은 닫는다 — 안정 관찰 시계(recoveryStableMs)가 시험 프로세스를 붙잡지 않게
+  a.closeForApp(); b.closeForApp()
   r.core.links.clear()
 })
 
