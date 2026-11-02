@@ -14,10 +14,9 @@ import { decide } from '../../platform/capability.js'
 import { pageTarget } from '../../platform/env.js'
 import { settle, opusFmtpLine, type ClientOptions, type Settings } from '../defaults.js'
 import { RoomTable } from '../room/table.js'
-import type { RoomCore } from '../rooms.js'
+import type { RoomCore, RoomEvents } from '../room/core.js'
 import type { LinkCore, LinkInfo } from '../links.js'
 import { MediaRegistry, type LocalCore } from '../media-registry.js'
-import type { RemoteCore } from '../remote.js'
 import { SesClock } from './clock.js'
 
 export type SessionState = 'disconnected' | 'connecting' | 'active' | 'resuming'
@@ -55,7 +54,8 @@ export interface CoreEvents extends Record<string, unknown[]> {
   link: [LinkInfo]
   speakingRoom: [string | null]
   speakingRoomFailed: [Fault]
-  track: [RoomCore, RemoteCore]
+  /** 받는 트랙 핸들은 방 이벤트가 든 그 형(SES 는 TRK 를 부르지 않는다 · tools/sdk_deps.json may_use) */
+  track: [RoomCore, RoomEvents['track'][0]]
   audioPlayback: [boolean]
   probe: [unknown]
   stats: [unknown]

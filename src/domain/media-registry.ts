@@ -10,7 +10,7 @@ import { Fault, fromFailure, stateFault, closedFault, negotiationFault } from '.
 import { capture, enumerate, permission, deviceChanges, describe, canSetSink, documentTarget, type DeviceKind, type PermState } from '../platform/env.js'
 import { Timer, sleep } from '../platform/clock.js'
 import type { Core } from './ses/core.js'
-import type { RoomCore } from './rooms.js'
+import type { RoomCore } from './room/core.js'
 import type { Layer } from './defaults.js'
 
 export type Owner = 'app' | 'sdk' | 'external'

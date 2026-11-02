@@ -8,7 +8,7 @@ import * as Mbcp from '../internal/mbcp.js'
 import { Timer, wall } from '../platform/clock.js'
 import { Fault, fromFailure } from '../platform/fault.js'
 import type { Core } from './ses/core.js'
-import { TableStore } from './store.js'
+import { TableStore } from './link/table.js'
 
 export type LinkState = 'connecting' | 'up' | 'wobbly' | 'restarting' | 'rebuilding' | 'closed'
 
@@ -173,7 +173,7 @@ export class LinkCore {
       const room = this.core.rooms.get(rx.room)
       if (room && room.sfuId === this.server) room.floor.receive(rx.rx)
     } else if (f.t === 'track') {
-      for (const r of this.core.roomsOn(this.server)) r.syncRemotes()
+      for (const r of this.core.roomsOn(this.server)) r.trk.syncRemotes()
     }
   }
 
@@ -236,7 +236,7 @@ export class LinkCore {
     this.step(name, step, 'table')
     if (fresh) {
       if (!this.negotiating && (step.label.endsWith('_same') || step.label.endsWith('rebound'))) this.sdpArev = t.arev
-      for (const r of this.core.roomsOn(this.server)) r.syncRemotes()
+      for (const r of this.core.roomsOn(this.server)) r.trk.syncRemotes()
     }
   }
 
@@ -305,7 +305,7 @@ export class LinkCore {
   private send(tx: LINK.Tx): void {
     if (tx.ws === 'READY') {
       for (const r of this.core.roomsOn(this.server)) {
-        r.sendReady()
+        r.trk.sendReady()
         if (r.floor.st.cs === 'QUEUED') r.floor.queuePosition()
       }
     } else if (tx.ws === 'HEARTBEAT') {
@@ -364,10 +364,10 @@ export class LinkCore {
       case 'pub.reregister_server': core.media.reregisterAll(this.server); break
       case 'rooms.rejoin_server': core.rejoinAll(rooms); break
       case 'store.drop_server': for (const r of rooms) r.downAll(); break
-      case 'sub.nego_ok': for (const r of rooms) r.subStep('negoOk', SUBmod.negoOk(r.sub), 'nego'); break
-      case 'sub.nego_fail': for (const r of rooms) r.subStep('negoFail', SUBmod.negoFail(r.sub), 'nego'); break
-      case 'sub.table_changed': for (const r of rooms) r.subStep('tableChanged', SUBmod.tableChanged(r.sub), 'table'); break
-      case 'sub.table_rebound': for (const r of rooms) r.subStep('tableRebound', SUBmod.tableRebound(r.sub), 'table'); break
+      case 'sub.nego_ok': for (const r of rooms) r.trk.subStep('negoOk', SUBmod.negoOk(r.trk.sub), 'nego'); break
+      case 'sub.nego_fail': for (const r of rooms) r.trk.subStep('negoFail', SUBmod.negoFail(r.trk.sub), 'nego'); break
+      case 'sub.table_changed': for (const r of rooms) r.trk.subStep('tableChanged', SUBmod.tableChanged(r.trk.sub), 'table'); break
+      case 'sub.table_rebound': for (const r of rooms) r.trk.subStep('tableRebound', SUBmod.tableRebound(r.trk.sub), 'table'); break
     }
   }
 
@@ -387,7 +387,7 @@ export class LinkCore {
     for (const room of this.core.roomsOn(this.server)) {
       if (!r.ok && room.joinPending) room.events.emit('error', this.negoFault ?? new Fault({ code: 0, name: 'NEGOTIATION_APPLY', category: 'negotiation' }))
       if (room.joinPending && !this.st.nego) room.finishJoin()
-      else room.syncRemotes()
+      else room.trk.syncRemotes()
     }
   }
 

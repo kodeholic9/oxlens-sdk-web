@@ -1,12 +1,15 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-TRK-RECEIVE RemoteTrack · attach · adaptiveStream · room.audio · SDK:IMPL-SRC-BLOCKS Playback · model: claude-opus-5-5
-import type { TrackEntry, MlineEntry } from '../internal/wire/ws.js'
-import { Emitter } from '../platform/emitter.js'
-import { documentTarget } from '../platform/env.js'
-import { setPlayoutDelay } from '../platform/webrtc.js'
-import { bugFault } from '../platform/fault.js'
-import type { Core } from './ses/core.js'
-import type { RoomCore } from './rooms.js'
+// spec: v1.2 @d626fda · SDK:IMPL-TRK-RECEIVE RemoteTrack · attach · adaptiveStream · room.audio · SDK:IMPL-SRC-BLOCKS Playback · SDK:RULE-MOD-AREA-MIRROR domain/trk · model: claude-opus-5-5
+// ★옛 domain/remote.ts 를 그대로 옮겼다(재설계 없음 — TRK 는 제 차례에 다시 짓는다).
+import type { TrackEntry, MlineEntry } from '../../internal/wire/ws.js'
+import { Emitter } from '../../platform/emitter.js'
+import { documentTarget } from '../../platform/env.js'
+import { setPlayoutDelay } from '../../platform/webrtc.js'
+import { bugFault } from '../../platform/fault.js'
+import type { RoomCore } from '../room/core.js'
+
+/** 클라이언트 객체 — 방이 든 것을 그대로 쓴다(TRK 는 SES 를 부르지 않는다 · tools/sdk_deps.json may_use) */
+type Core = RoomCore['core']
 
 export interface RemoteInfo {
   readonly id: string
@@ -134,7 +137,7 @@ export class RemoteCore {
     const el = this.audioEl
     const cur = el.srcObject as MediaStream | null
     if (!cur || cur.getAudioTracks()[0] !== t) el.srcObject = new MediaStream([t])
-    const a = this.room.audio
+    const a = this.room.trk.audio
     el.muted = a.muted
     el.volume = Math.max(0, Math.min(1, a.volume * this.volume))
     this.core.media.playback.play(el)
@@ -143,7 +146,7 @@ export class RemoteCore {
   setVolume(v: number): void { this.volume = Math.max(0, Math.min(1, v)); this.applyPlayback() }
 
   setLayer(v: { spatial?: number; temporal?: number; paused?: boolean; priority?: number }): Promise<void> {
-    return this.room.setLayer(this.id, v)
+    return this.room.trk.setLayer(this.id, v)
   }
 
   setReceive(o: { playoutDelayMs: number | null }): boolean {

@@ -8,7 +8,7 @@ import { Emitter } from '../platform/emitter.js'
 import { Timer, now, wall } from '../platform/clock.js'
 import { Fault, closedFault } from '../platform/fault.js'
 import type { Core } from './ses/core.js'
-import type { RoomCore } from './rooms.js'
+import type { RoomCore } from './room/core.js'
 
 export type Phase = 'off' | 'no_permission' | 'pending_request' | 'has_permission' | 'pending_release' | 'queued'
 export type LastEnd = 'released' | 'revoked' | 'denied' | 't132_expired' | 'no_response' | 'moved' | 'left' | 'rebuilt' | 'arm_failed'
@@ -224,7 +224,7 @@ export class FloorCore {
   private lastSpeaker: string | null | undefined
 
   private emitSpeaker(): void {
-    const ids = [...this.room.remotes.values()].filter((r) => r.type === 'slot' && r.row !== null).map((r) => r.id)
+    const ids = [...this.room.trk.remotes.values()].filter((r) => r.type === 'slot' && r.row !== null).map((r) => r.id)
     const key = `${this.st.shown}|${ids.join(',')}`
     if (key === this.speakerKey) return
     this.speakerKey = key
@@ -255,7 +255,7 @@ export class FloorCore {
       const e = PB.effect(f)
       if (f === 'mic.open') { this.talkingSince = wall(); this.core.media.floorOpen(this.room) }
       else if (f === 'mic.close') { this.talkingSince = undefined; this.core.media.floorClose(this.room) }
-      else if (f === 'media.render') { for (const r of this.room.remotes.values()) if (r.type === 'slot') r.applyPlayback() }
+      else if (f === 'media.render') { for (const r of this.room.trk.remotes.values()) if (r.type === 'slot') r.applyPlayback() }
       else if (f === 'app.granted' || f === 'app.granted_queued') {
         this.remainingSec = this.st.grant
         this.grantedPrio = this.st.prio

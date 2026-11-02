@@ -1,10 +1,10 @@
 // author: kodeholic (powered by Claude)
 // spec: v1.2 @d626fda · SDK:RULE-API-HANDLES · SDK:RULE-API-ASYNC · SDK:IMPL-ROOM-API · SDK:IMPL-FLR-BUTTON · SDK:IMPL-PUB-API · SDK:IMPL-TRK-RECEIVE · model: claude-opus-5-5
-import type { RoomCore, RoomState } from '../domain/rooms.js'
-import type { RemoteCore, RemoteInfo } from '../domain/remote.js'
+import type { RoomCore, RoomState } from '../domain/room/core.js'
+import type { RemoteCore, RemoteInfo } from '../domain/trk/remote.js'
 import { LocalCore, type LocalState, type Owner, type EndReason, type TrackOptions, type VideoEncoding, type AudioEncoding } from '../domain/media-registry.js'
 import type { FloorCore, PttState as CorePttState, PressSource } from '../domain/floor.js'
-import type { Participant, Permission } from '../domain/store.js'
+import type { Participant, Permission } from '../domain/room/store.js'
 import type { LinkState } from '../domain/links.js'
 import type { Core } from '../domain/ses/core.js'
 import { Fault, fromFailure, stateFault } from '../platform/fault.js'
@@ -52,7 +52,7 @@ export class Room {
   get rebuilding(): boolean { return this.core.rebuilding || this.link === 'rebuilding' }
   get participants(): Participant[] { return [...this.core.store.members.values()] }
   get permission(): Permission { return this.core.permission }
-  get tracks(): RemoteTrack[] { return [...this.core.remotes.values()].filter((r) => r.mediaStreamTrack !== null).map(remoteOf) }
+  get tracks(): RemoteTrack[] { return [...this.core.trk.remotes.values()].filter((r) => r.mediaStreamTrack !== null).map(remoteOf) }
   get mediaCodecs(): { audio?: string; video?: string } { return { ...this.core.store.mediaCodecs } }
 
   leave(): Promise<void> { return wrap(this.core.leave()) }
@@ -91,10 +91,10 @@ export class Room {
 /** 방의 수신 오디오 — SDK 가 재생한다 */
 export class RoomAudio {
   constructor(private readonly core: RoomCore) {}
-  get muted(): boolean { return this.core.audio.muted }
-  get volume(): number { return this.core.audio.volume }
-  setMuted(m: boolean): void { this.core.setAudioMuted(m) }
-  setVolume(v: number): void { this.core.setAudioVolume(v) }
+  get muted(): boolean { return this.core.trk.audio.muted }
+  get volume(): number { return this.core.trk.audio.volume }
+  setMuted(m: boolean): void { this.core.trk.setAudioMuted(m) }
+  setVolume(v: number): void { this.core.trk.setAudioVolume(v) }
 }
 
 /** 발언권 표면 — room.ptt */

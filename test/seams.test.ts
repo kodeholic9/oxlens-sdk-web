@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import * as ROOM from '../src/domain/gen/room_client.js'
 import * as FLR from '../src/domain/gen/floor_client.js'
-import { RoomCore } from '../src/domain/rooms.js'
+import { RoomCore } from '../src/domain/room/core.js'
 import type { Core } from '../src/domain/ses/core.js'
 
 function fakeCore(): Core {
@@ -18,7 +18,7 @@ function fakeCore(): Core {
   } as unknown as Core
 }
 
-type Seamed = { roomSeam(fx: ROOM.SeamFx, label: string): void }
+type Seamed = { seam(fx: ROOM.SeamFx, label: string): void }
 
 test('연:FLR.C.any.join — ROOM 이 발언권으로 보내는 이음매는 전부 발언권 입구에 닿는다(대장 C-53 ②)', () => {
   const toFloor = Object.entries(ROOM.SEAMS).filter(([, s]) => s.to === 'FLR') as [ROOM.SeamFx, { react: readonly (keyof typeof FLR.PROC_ENTRY)[] }][]
@@ -28,14 +28,14 @@ test('연:FLR.C.any.join — ROOM 이 발언권으로 보내는 이음매는 전
     const entries: string[] = []
     const step = room.floor.flrStep.bind(room.floor)
     room.floor.flrStep = (entry, st, cause) => { entries.push(entry); step(entry, st, cause) }
-    ;(room as unknown as Seamed).roomSeam(fx, 'test')
+    ;(room as unknown as Seamed).seam(fx, 'test')
     assert.deepEqual(entries, s.react.map((r) => FLR.PROC_ENTRY[r]), `${fx} 를 받는 자리가 없다`)
   }
 })
 
 test('연:FLR.C.any.join — 떠난 방에 다시 들면 그 방 발언권 클라가 떠난 채로 남지 않는다', () => {
   const room = new RoomCore(fakeCore(), 'r1', {})
-  const seam = (room as unknown as Seamed).roomSeam.bind(room)
+  const seam = (room as unknown as Seamed).seam.bind(room)
   seam('floor.leave', 'ROOM.C.JOINED.not_in_sub_rooms')
   assert.equal(room.floor.st.left, true)
   seam('floor.join', 'ROOM.C.JOINING.join_ok')

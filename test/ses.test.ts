@@ -13,7 +13,7 @@ import * as LINK from '../src/domain/gen/link_client.js'
 import { DEFAULTS } from '../src/domain/gen/sdk_defaults.js'
 import { settle } from '../src/domain/defaults.js'
 import { LinkCore } from '../src/domain/links.js'
-import { RoomCore } from '../src/domain/rooms.js'
+import { RoomCore } from '../src/domain/room/core.js'
 import type { Core } from '../src/domain/ses/core.js'
 import * as FC from '../src/internal/wire/floor_codec.js'
 import * as Mbcp from '../src/internal/mbcp.js'
@@ -559,7 +559,7 @@ test('SD-EFFECT-SES-APP-REBUILT — 이어받기 실패 뒤 새 세션이면 reb
   await tick(5)
   assert.equal(requests(ws, Op.ROOM_JOIN), 1, '같은 방에 다시 들어간다')
   assert.equal(r.core.rooms.get('r1'), room, '같은 핸들')
-  room.roomStep('joinRes', ROOM.joinRes(room.st, { code: 0, part: 'res', server_config: { pc_mode: '2pc', sfu_id: 1 }, version: { epoch: 1, seq: 1 } }, '2pc'), 'ROOM_JOIN.res')
+  room.enter('joinRes', 'ROOM_JOIN.res', [{ code: 0, part: 'res', server_config: { pc_mode: '2pc', sfu_id: 1 }, version: { epoch: 1, seq: 1 } }, '2pc'])
   assert.equal(handle.rebuilding, false, 'SD-EFFECT-SES-APP-REBUILT — 다시 입장하면 rebuilt')
   assert.equal(r.sessions.at(-1)!.recovering, false, '재구축이 끝나면 session 이벤트가 recovering 을 내린다')
   await r.c.close()

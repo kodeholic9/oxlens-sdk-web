@@ -8,7 +8,7 @@ import type { Signaling, Reply } from '../../internal/ses/signaling.js'
 import type { Emitter } from '../../platform/emitter.js'
 import type { Logger } from '../../platform/log.js'
 import { Fault, fromFailure, closedFault, stateFault } from '../../platform/fault.js'
-import type { RoomCore } from '../rooms.js'
+import type { RoomCore } from '../room/core.js'
 
 export interface AffEvents extends Record<string, unknown[]> {
   speakingRoom: [string | null]
