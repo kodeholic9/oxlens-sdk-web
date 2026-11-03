@@ -18,7 +18,8 @@
     "gate:live": "node scripts/gate.mjs --live",
     "serve:lan": "node qa/lan/serve.mjs"
   },
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
+  "author": "Tae Goo Kang <kodeholic99@gmail.com>",
   "private": true,
   "devDependencies": {
     "@types/node": "^22.20.1",

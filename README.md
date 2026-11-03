@@ -3,6 +3,8 @@
 브라우저에서 [OxLens SFU](https://github.com/kodeholic9/oxlens-sfu) 에 붙는 TypeScript SDK 다. 무전(PTT — 발언권 · 다방 청취)과 화상회의(전이중 · 시뮬캐스트)를 한 클라이언트로 쓴다.
 *Browser SDK for the OxLens SFU — push-to-talk and video conferencing. The documents are in Korean.*
 
+라이선스: Apache-2.0 · 판: `1.0.0-alpha` — 아직 최종 판이 아니다(표면이 바뀔 수 있고 npm 에 올리지 않았다).
+
 - 서버와의 계약: [클라 통신 규격](https://github.com/kodeholic9/oxlens-sfu/blob/main/docs/protocol/README.md)
 - 서버와 SDK 가 실제로 주고받는 흐름(실측): [학습 문서](https://github.com/kodeholic9/oxlens-sfu/blob/main/docs/learn/00_INDEX.md)
 - 기여 · 시험 · 구조: [CONTRIBUTING.md](CONTRIBUTING.md)
@@ -104,3 +106,7 @@ button.onpointerup = () => { void ch.ptt.release() }
 - 브라우저: 시험은 Chromium 으로 돈다(Playwright). Firefox · Safari 는 아직 정규 시험 밖이다.
 - 영상 무전(비디오 발언권)은 보류 중이다 — 브라우저의 송신 pacer 를 앱에서 다룰 수 없다.
 - 판 번호: 서버 · SDK 가 같은 이름(`v1.N`)으로 함께 태그된다. 같은 태그끼리 맞춰 쓴다.
+
+## 라이선스
+
+Apache License 2.0 — [LICENSE](LICENSE).
