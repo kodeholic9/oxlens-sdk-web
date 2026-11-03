@@ -1,7 +1,7 @@
 {
   "name": "@oxlens/sdk",
   "version": "1.0.0-alpha.0",
-  "description": "OxLens client SDK — surface first. Contract: context/spec/oxlens_sdk_spec.md over oxlens_client_protocol.md.",
+  "description": "OxLens web client SDK — push-to-talk and video conferencing over the OxLens SFU. Contract: oxlens-sfu docs/protocol.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
