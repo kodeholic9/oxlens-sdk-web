@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/link/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 457239814ea9aa5e · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 f22a390fb52bbd32 · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -299,13 +299,13 @@ export function renego(s: St): Step {
 /** 재협상이 끝났다 — ok = 성공 (바깥: 브라우저 협상(offer/answer)의 결과) */
 export function negoRes(s: St, ok: boolean): Step {
   if (ok && s.dirty) {
-    return done(s, { ...s, dirty: false }, 'LINK.C.any.nego_ok_next', [], [], [{ fx: 'sub.nego_ok', to: 'SUB', at: 'sameServer' }, { fx: 'pub.nego_ok', to: 'PUB', at: 'sameServer' }], [])
+    return done(s, { ...s, dirty: false }, 'LINK.C.any.nego_ok_next', [], [], [], [])
   }
   if (ok) {
     return done(s, { ...s, nego: false }, 'LINK.C.any.nego_ok', [], [], [{ fx: 'sub.nego_ok', to: 'SUB', at: 'sameServer' }, { fx: 'pub.nego_ok', to: 'PUB', at: 'sameServer' }], [])
   }
   if (s.dirty) {
-    return done(s, { ...s, dirty: false }, 'LINK.C.any.nego_fail_next', [], [], [{ fx: 'sub.nego_fail', to: 'SUB', at: 'sameServer' }, { fx: 'pub.nego_fail', to: 'PUB', at: 'sameServer' }], [])
+    return done(s, { ...s, dirty: false }, 'LINK.C.any.nego_fail_next', [], [], [], [])
   }
   return done(s, { ...s, nego: false }, 'LINK.C.any.nego_fail', [], [], [{ fx: 'sub.nego_fail', to: 'SUB', at: 'sameServer' }, { fx: 'pub.nego_fail', to: 'PUB', at: 'sameServer' }], [])
 }

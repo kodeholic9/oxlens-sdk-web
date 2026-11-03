@@ -178,7 +178,7 @@ test('SD-ENTRY-TRK-NEGO-OK · SD-ENTRY-TRK-NEGO-FAIL — 그 서버 협상 결�
     const t0 = r.trace.length
     await table(r, 5, [row('0', 't2')])
     await drain(r)
-    const okRes = r.trace.slice(t0).filter((t) => t.layer === 'LINK' && t.key === 'sfu-a' && t.label.startsWith('LINK.C.any.nego_ok')).length
+    const okRes = r.trace.slice(t0).filter((t) => t.layer === 'LINK' && t.key === 'sfu-a' && t.label === 'LINK.C.any.nego_ok').length   // 큐가 빈 끝만 — 중간 끝(nego_ok_next)은 구독 · 발행에 알리지 않는다(연:RULE-LINK-SDP-RENEGOTIATE)
     const perRoom = (cause: string) => r.trace.slice(t0).filter((t) => t.layer === 'SUB' && t.cause === cause).map((t) => t.key)
     assert.ok(okRes >= 1)
     assert.equal(spy.n('negoOk') - ok0, okRes * 2, 'SD-ENTRY-TRK-NEGO-OK — 협상 성공 하나에 그 서버의 방마다 ENTRY.negoOk 하나')
@@ -191,7 +191,7 @@ test('SD-ENTRY-TRK-NEGO-OK · SD-ENTRY-TRK-NEGO-FAIL — 그 서버 협상 결�
     const t1 = r.trace.length
     await table(r, 6, [row('0', 't2'), row('1', undefined)])
     await drain(r, SA, false)
-    const failRes = r.trace.slice(t1).filter((t) => t.layer === 'LINK' && t.key === 'sfu-a' && t.label.startsWith('LINK.C.any.nego_fail')).length
+    const failRes = r.trace.slice(t1).filter((t) => t.layer === 'LINK' && t.key === 'sfu-a' && t.label === 'LINK.C.any.nego_fail').length
     assert.ok(failRes >= 1)
     assert.equal(spy.n('negoFail') - fail0, failRes * 2, 'SD-ENTRY-TRK-NEGO-FAIL — 협상 실패 하나에 그 서버의 방마다 ENTRY.negoFail 하나')
     assert.equal(r.ws.requests(Op.READY).length, ready1, 'SD-ENTRY-TRK-NEGO-FAIL — 실패했으면 READY 를 보내지 않는다')

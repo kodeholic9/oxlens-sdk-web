@@ -671,6 +671,46 @@ test('SD-ENTRY-LINK-RENEGO — SDP 다시 조립 요청(위 이음매 sdp.rebuil
   } finally { spy.restore() }
 })
 
+test('연:RULE-LINK-SDP-RENEGOTIATE 큐 — 협상 중에 온 표는 중간 끝(nego_ok_next)에 READY 0 · 큐가 빈 끝에 READY 하나(그때의 가장 새 arev) · 중간 끝의 이음매에 sub.* · pub.* 0', async () => {
+  // 생성 상태기 — 중간 끝은 구독 · 발행에 알리지 않는다(실측 20261103: 입장 응답과 남의 영상 발행이 6ms 겹쳐 arev 2 acked 1 · 영구 검은 화면)
+  const dirty = { ...LINK.initial(), nego: true, dirty: true }
+  const mid = LINK.negoRes(dirty, true)
+  assert.equal(mid.label, 'LINK.C.any.nego_ok_next')
+  assert.deepEqual(mid.seams, [], '중간 끝(성공) — sub.nego_ok · pub.nego_ok 0')
+  const midFail = LINK.negoRes(dirty, false)
+  assert.equal(midFail.label, 'LINK.C.any.nego_fail_next')
+  assert.deepEqual(midFail.seams, [], '중간 끝(실패) — sub.nego_fail · pub.nego_fail 0')
+  const last = LINK.negoRes({ ...LINK.initial(), nego: true, dirty: false }, true)
+  assert.equal(last.label, 'LINK.C.any.nego_ok')
+  assert.deepEqual(last.seams.map((s) => s.fx).sort(), ['pub.nego_ok', 'sub.nego_ok'], '큐가 빈 끝 — 둘 다 알린다')
+
+  const spy = spyOn()
+  try {
+    const x = await upLink()
+    spy.reset()
+    const ready0 = readies(x)
+    let open1!: () => void
+    FakePC.gate = new Promise<void>((r) => { open1 = r })
+    await mline(x, 2, [row('0', undefined)])                       // 협상 1 시작(표 2)
+    await mline(x, 3, [row('0', undefined), row('1', undefined)])  // 협상 중에 표 3 — 큐
+    assert.equal(x.link.st.dirty, true)
+    let open2!: () => void
+    FakePC.gate = new Promise<void>((r) => { open2 = r })           // 협상 2 는 열 때까지 기다린다
+    open1()
+    await until(() => spy.n('negoRes') === 1)
+    await tick()
+    assert.equal(readies(x) - ready0, 0, '중간 끝 — READY 0(보내면 표 3 을 못 싣고 다음 끝엔 READY 가 없다)')
+    assert.equal(x.room.core.trk.sub.st.ready, 'WANT', '구독은 WANT 그대로')
+    open2()
+    await until(() => spy.n('negoRes') === 2)
+    await tick()
+    assert.equal(readies(x) - ready0, 1, '큐가 빈 끝 — READY 하나')
+    assert.equal((x.r.ws.last(Op.READY).body as { arev: number }).arev, 3, 'READY 는 그때의 가장 새 표(arev 3)')
+    assert.equal(x.link.st.nego, false)
+    await x.r.c.close()
+  } finally { spy.restore() }
+})
+
 test('SD-ENTRY-LINK-TABLE-CARRIED — 입장 응답이 실어 온 배정표가 ENTRY.tableCarried 하나(arev · 줄 · 줄 수) · 어느 길이든 새 차례 번호가 이긴다', async () => {
   const spy = spyOn()
   try {
