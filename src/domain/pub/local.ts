@@ -475,6 +475,8 @@ export class LocalCore {
   floorOpen(): void { this.enter('floorOpen', 'mic.open', []); this.coldTimer.stop() }
   /** FLR mic.close */
   floorClose(): void { this.enter('floorClose', 'mic.close', []); this.armCold() }
+  /** 발언권이 no_permission 으로 돌아왔다(거절 · 철회 · 놓음 끝) — 무발화 30초를 그때부터 다시 센다(SDK:RULE-FLR-MIC-POWER) */
+  floorIdle(): void { this.armCold() }
   /** LINK pub.drop_server — 그 서버 연결이 닫혔다 · 협상 · 발행을 기다리던 발행은 closed 로 reject(SDK:IMPL-PUB-API 효과 표 app.publish_failed) */
   dropServer(): void { this.enter('dropServer', 'link', [], closedFault('TRANSPORT')); this.slot = null; this.gate = false }
   /** ROOM pub.room_gone — 발행한 방을 잃었다 */
@@ -673,6 +675,8 @@ export class LocalCore {
 
   private goCold(): void {
     if (this.st.ps === 'SENDING' || this.owner !== 'sdk' || this.ended || this.cold) return
+    // 누름 응답 · 줄 서기 중이면 곧 말한다 — 반납하면 허가 순간 재획득 360~640ms 로 첫 음절이 잘린다(SDK:RULE-FLR-MIC-POWER)
+    if (this.media.floorsOn(this.sfuId).some((f) => f.wantsFloor)) { this.armCold(); return }
     this.cold = true
     this.track.stop()
     this.media.book.record('PUB', this.key, this.st.ps, this.st.ps, 'SDK.cold', 'mic_power')

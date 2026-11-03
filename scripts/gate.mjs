@@ -2,7 +2,8 @@
 // 한 명령 게이트. 통과·실패·미실행을 다른 표시로 쓰고, 미실행에는 사유를 붙인다
 // — "못 쟀다"가 초록으로 새지 않게 한다.
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -24,11 +25,20 @@ function skip(name, why) {
 
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx'
 let ok = true
+// ★생성본 스물(src/domain/gen · src/internal/wire)이 규격 원천의 산출과 같은가 — 옮기기 · 대조는 context 의 도구 하나가 한다(npm run sync:sdk · 202611/20261103j M1).
+//   손으로 옮기다 빠진 파일 · 손으로 고친 생성본이 1층 초록으로 새지 않게.
+const sync = resolve(root, '..', '..', 'context', 'spec', 'tools', 'sdk_sync.py')
+if (existsSync(sync)) ok = step('생성본', 'python3', [sync, '--check', root]) && ok
+else skip('생성본', `규격 원천이 없다(${sync})`)
 ok = step('typecheck', npx, ['tsc', '--noEmit', '-p', 'tsconfig.json']) && ok
 ok = step('arch', process.execPath, ['tools/arch_check.mjs']) && ok
 ok = step('3층 좌표', process.execPath, ['tools/qa_spec_check.mjs']) && ok
 ok = step('build', npx, ['tsc', '-p', 'tsconfig.build.json']) && ok
-ok = step('1층 단위', process.execPath, ['test/run.mjs']) && ok
+const tapFile = join(root, '.archive', 'gate', 'unit.tap')
+mkdirSync(dirname(tapFile), { recursive: true })
+rmSync(tapFile, { force: true })
+ok = step('1층 단위', process.execPath, ['test/run.mjs'], root, { OXSDK_TEST_TAP: tapFile }) && ok
+keepGateRecord()
 // ★3층 앞에 빌드를 강제한다 — SDK 를 고치고 빌드를 잊으면 옛 코드를 시험하고 초록을 받는다.
 
 const liveDir = join(root, 'qa', 'live')
@@ -90,12 +100,37 @@ async function serverIsHead() {
   return same
 }
 
+/**
+ * 작업 트리(무시 파일 빼고 · 새 파일 포함)의 나무 객체 — 진짜 색인은 건드리지 않는다. 커밋한 뒤 HEAD^{tree} 와 같으면 「이 기록은 그 커밋을 잰 것」이다
+ * (context spec/tools/commit_check.py 의 work_tree 와 같은 셈 · 202611/20261103j S3).
+ */
+function workTree() {
+  const dir = mkdtempSync(join(tmpdir(), 'oxsdk-tree-'))
+  const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
+  const git = (...a) => spawnSync('git', a, { cwd: root, env, encoding: 'utf8' })
+  git('read-tree', 'HEAD')
+  git('add', '-A', '--', '.')
+  const tree = git('write-tree').stdout.trim()
+  rmSync(dir, { recursive: true, force: true })
+  return tree
+}
+
+/** 1층 기록 — .archive/gate/latest.json(통과 · 실패 수 · 작업 트리). 커밋 꼬리의 「SDK 1층 N」을 context 커밋 앞 훅이 이것과 대조한다. */
+function keepGateRecord() {
+  const tap = existsSync(tapFile) ? readFileSync(tapFile, 'utf8') : ''
+  const num = (k) => Number((tap.match(new RegExp(`^# ${k} (\\d+)$`, 'm')) ?? [])[1] ?? NaN)
+  const sha = spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim()
+  const rec = { at: new Date().toISOString(), sdk_sha: sha, tree: workTree(), unit: { pass: num('pass'), fail: num('fail'), tests: num('tests') } }
+  writeFileSync(join(root, '.archive', 'gate', 'latest.json'), JSON.stringify(rec, null, 1) + '\n')
+  console.log(`  ⓘ 1층 기록: .archive/gate/latest.json (통과 ${rec.unit.pass} · 실패 ${rec.unit.fail} · 트리 ${rec.tree.slice(0, 12)})`)
+}
+
 async function keepLiveRecord(passed) {
   const hub = process.env.OXE2E_HUB ?? '127.0.0.1:1974'
   const server = await serverBuild()
   const sha = spawnSync('git', ['rev-parse', '--short=12', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim()
   const dirty = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' }).stdout.trim() !== ''
-  const rec = { at: new Date().toISOString(), run: `live-${stamp}`, passed, sdk_sha: sha, sdk_dirty: dirty, server_build: server, hub, rows }
+  const rec = { at: new Date().toISOString(), run: `live-${stamp}`, passed, sdk_sha: sha, sdk_dirty: dirty, tree: workTree(), server_build: server, hub, rows }
   const body = JSON.stringify(rec, null, 1) + '\n'
   mkdirSync(runDir, { recursive: true })
   writeFileSync(join(runDir, 'record.json'), body, { flag: 'wx' })

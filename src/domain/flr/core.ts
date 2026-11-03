@@ -114,6 +114,9 @@ export class FloorCore {
     return this.room.st.rs === 'JOINED' && this.trusted && this.room.permission.floorRequest && (p === 'off' || p === 'no_permission') && !this.t9.armed && !this.room.rebuilding && !this.arming
   }
 
+  /** 발언권을 원하거나 쥔 중(no_permission 밖) — 마이크를 반납하지 않는다(SDK:RULE-FLR-MIC-POWER) */
+  get wantsFloor(): boolean { return this.st.cs !== 'NOPERM' }
+
   get mic(): 'hot' | 'hot_standby' | 'cold' {
     if (this.st.cs === 'PERM' || this.st.cs === 'PREL') return 'hot'
     return this.media.halfMicCold(this.room.sfuId) ? 'cold' : 'hot_standby'
@@ -286,6 +289,7 @@ export class FloorCore {
     const extras: Extra[] = []
     for (const f of step.fx) this.effect(f, extras)
     if (this.st.cs === 'NOPERM' && prev.cs !== 'NOPERM' && this.lastEnd === 'released' && extras.length === 0) extras.push('released')
+    if (this.st.cs === 'NOPERM' && prev.cs !== 'NOPERM') this.media.floorIdle(this.room.sfuId)
     if (this.st.cs !== 'PERM' && this.st.cs !== 'QUEUED') this.remainingSec = undefined
     this.surface(extras)
     if (this.intentOwed) {

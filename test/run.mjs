@@ -38,5 +38,7 @@ await build({
 const built = readdirSync(out).filter((f) => f.endsWith('.mjs')).map((f) => join(out, f))
 // 한 시험의 시한 — 걸린 시험이 게이트를 붙잡지 않고 실패로 드러나게(기본 60초)
 const timeout = process.env.OXSDK_TEST_TIMEOUT ?? '60000'
-const r = spawnSync(process.execPath, ['--test', `--test-timeout=${timeout}`, ...built], { stdio: 'inherit' })
+// 게이트가 수를 기록하게 TAP 도 파일로 낸다(OXSDK_TEST_TAP · scripts/gate.mjs — 커밋 꼬리의 「1층 N」을 context 검사기가 대조 · 202611/20261103j S3)
+const tap = process.env.OXSDK_TEST_TAP ? ['--test-reporter=spec', '--test-reporter-destination=stdout', '--test-reporter=tap', `--test-reporter-destination=${process.env.OXSDK_TEST_TAP}`] : []
+const r = spawnSync(process.execPath, ['--test', `--test-timeout=${timeout}`, ...tap, ...built], { stdio: 'inherit' })
 process.exit(r.status ?? 1)

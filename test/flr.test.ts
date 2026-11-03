@@ -85,6 +85,7 @@ function unit(o: { half?: boolean } = {}): U {
     warmHalf: async () => undefined,
     floorOpen: () => { media.opened++ },
     floorClose: () => { media.closed++ },
+    floorIdle: () => undefined,
   }
   const aff = {
     speakingRoom: 'ch-3' as string | null, selects: [] as string[],

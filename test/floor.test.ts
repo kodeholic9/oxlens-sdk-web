@@ -30,7 +30,7 @@ function rig(): Rig {
     linkFor: () => ({ peer }),
     ses: { cs: 'ACTIVE' },
     log: { debug: () => undefined, warn: () => undefined, error: () => undefined },
-    media: { hasHalfMic: () => true, halfMicCold: () => false, floorClose: () => undefined, floorOpen: () => undefined },
+    media: { hasHalfMic: () => true, halfMicCold: () => false, floorClose: () => undefined, floorOpen: () => undefined, floorIdle: () => undefined },
     rooms: { playback: {}, aff: {} },
   } as unknown as Core
   const room = new RoomCore(core, 'ch-3', {})

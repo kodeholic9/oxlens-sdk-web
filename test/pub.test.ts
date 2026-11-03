@@ -599,6 +599,33 @@ test('SD-KNOB-COLD — 무발화 창 뒤 Source.stop + sender 는 replaceTrack(n
   assert.equal(pubReqs(x).length, 1, 'wire 0(발행 그대로)')
 })
 
+test('SDK:RULE-FLR-MIC-POWER 줄 서기 — 누름 응답 · 줄 서기 동안은 무발화 창이 지나도 반납 0 · 허가에 재획득 0 · 거절로 no_permission 에 돌아오면 그때부터 창을 다시 세어 반납', async () => {
+  const x = await pubUp()
+  x.r.core.media.coldAfter = 10
+  const h = await halfMic(x)
+  const f = x.room.core.floor
+  const gums = nav.gum.length
+  f.st = { ...f.st, cs: 'PREQ' }
+  f.receive({ t: 'QINFO', info: { position: 1, priority: 0 } } as never)
+  assert.equal(f.st.cs, 'QUEUED')
+  await tick(40)
+  assert.deepEqual([h.cold, nav.gum[0]!.track.stops], [false, 0], '줄 서는 동안 창(10ms)의 네 배가 지나도 반납 0 — 곧 말한다')
+  f.receive({ t: 'GRANTED', priority: 0, duration: 30 } as never)
+  f.enter('intent', 'hold', [])   // 줄 선 사람의 허가는 발언 의지를 거쳐 연다(연:FLR.C.QUEUED.intent · T132)
+  await tick()
+  assert.deepEqual([f.st.cs, nav.gum.length], ['PERM', gums], '허가 — 데우기(재획득) 없이 게이트만 연다')
+  await ungrant(x)
+  f.st = { ...f.st, cs: 'PREQ' }
+  await tick(40)
+  assert.equal(h.cold, false, '누름 응답 대기도 반납 0')
+  f.receive({ t: 'DENY', cause: 3 } as never)
+  assert.equal(f.st.cs, 'NOPERM')
+  await tick(4)
+  assert.equal(h.cold, false, '거절 직후 — 창을 그때부터 다시 센다')
+  await tick(40)
+  assert.equal(h.cold, true, '거절 뒤 창이 지나면 반납')
+})
+
 test('SD-KNOB-LOCAL-TRACK-STOP — 순서: replaceTrack(null) → remove → Source.stop · 트랜시버 잔존(방향 그대로 — inactive 로 돌리지 않는다)', async () => {
   const x = await pubUp()
   const t = await mic(x)

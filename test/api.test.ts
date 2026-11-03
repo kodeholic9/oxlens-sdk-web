@@ -292,7 +292,7 @@ test('SD-EVENT-LOCAL-TRACK-STATE — 발행 단 · 소유권 변화(publish · �
   const d = a!.setDuplex('half'); await tick(); answerLast(x, Op.TRACK_SET); await d
   look()
   grant(x); await tick(); look()
-  await x.room.core.floor.release(); await tick(40); look()
+  await x.room.core.floor.release(); x.room.core.floor.receive({ t: 'ACK', of: 4 } as never); await tick(40); look()   // 놓음 끝은 서버 ACK(연:DEV-FLR-RELEASE-ACK) — 놓는 중(pending_release)엔 반납하지 않는다
   assert.deepEqual(seen, ['acquired/app', 'sending/sdk', 'sending/external', 'sending/sdk', 'registered/sdk', 'sending/sdk', 'registered/sdk'], 'SD-EVENT-LOCAL-TRACK-STATE — 속성 state · owner 갱신')
   assert.equal(core.cold, true, 'cold 에 들어갔다(state 는 registered 그대로)')
   assert.deepEqual(emitted.filter((n) => n !== 'published' && n !== 'silence'), [], `SD-EVENT-LOCAL-TRACK-STATE — 이벤트 0(발행 결과 published · 무음 판정 silence 밖): ${emitted.join(' · ')}`)

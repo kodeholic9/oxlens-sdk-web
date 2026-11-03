@@ -145,6 +145,7 @@ export class MediaRegistry {
 
   floorOpen(sfuId: string | null): void { for (const t of this.on(sfuId)) if (t.duplex === 'half') t.floorOpen() }
   floorClose(sfuId: string | null): void { for (const t of this.on(sfuId)) if (t.duplex === 'half') t.floorClose() }
+  floorIdle(sfuId: string | null): void { for (const t of this.on(sfuId)) if (t.duplex === 'half') t.floorIdle() }
 
   // ── 이음매가 부르는 무리 입구(LINK · SES) ──────────────────────────────
 
