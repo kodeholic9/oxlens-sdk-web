@@ -137,10 +137,10 @@ export function readDeny(msg: Message): { value: { cause?: number | undefined; r
   return { value: { cause, reason, room }, missing }
 }
 
-/** 4 Floor Release(원문 8.2.7) · C→S · A 안 세운다 — 필수 room · 선택 없음 */
+/** 4 Floor Release(원문 8.2.7) · C→S · A 세운다 — 필수 room · 선택 없음 */
 export function buildRelease(a: { room: string }): Message {
   const fields: Field[] = [{ id: TlvId.ROOM, value: utf8(a.room) }]
-  return { type: Type.RELEASE, ack: false, fields }
+  return { type: Type.RELEASE, ack: true, fields }
 }
 export function readRelease(msg: Message): { value: { room?: string | undefined }; missing: string[] } {
   const missing: string[] = []

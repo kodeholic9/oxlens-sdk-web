@@ -1115,3 +1115,37 @@ test('재발 20261102d-9 — arming 중 release 뒤 다시 press 하면 그 누�
   assert.deepEqual([msgs(c.sent), spy.n('press')], [[C.Type.REQUEST], 1], '재발 9 — 둘째 누름이 REQUEST 하나로 간다(유실 0)')
   c.f.dispose()
 }))
+
+test('FLR.C.PREL.rx_ACK_release — RELEASE 는 A 비트를 세운다 · ACK(of RELEASE) 하나에 no_permission · 곧바로 다시 누르면 REQUEST(연:DEV-FLR-RELEASE-ACK)', async () => {
+  const u = unit()
+  await pressed(u)
+  u.rx(granted())
+  assert.equal(u.f.st.cs, 'PERM')
+  await u.f.release()
+  const rel = u.sent.at(-1)!
+  assert.deepEqual([rel.type, rel.ack, u.f.st.cs], [C.Type.RELEASE, true, 'PREL'], 'RELEASE 에 A 비트 · pending Release')
+  u.rx(C.buildAck({ of: C.Type.GRANTED, room: R }))
+  assert.equal(u.f.st.cs, 'PREL', '다른 종류의 ACK 은 놓음 끝이 아니다(FLR.C.PREL.rx_ACK_other)')
+  u.rx(C.buildAck({ of: C.Type.RELEASE, room: R }))
+  assert.deepEqual([u.f.st.cs, u.f.snapshot().phase], ['NOPERM', 'no_permission'], 'ACK(of RELEASE) 에 놓음 끝 — IDLE 을 기다리지 않는다')
+  const n = u.sent.length
+  await pressed(u)
+  assert.deepEqual(msgs(u.sent.slice(n)), [C.Type.REQUEST], '놓은 뒤 곧바로 다시 누름이 버려지지 않는다')
+  u.f.dispose()
+})
+
+test('FLR.C.PREL.rx_GRANTED — 줄 철회 중 승계 허가가 오면 화자 표시를 내린다 · 이어 ACK 으로 놓음이 끝나도 앞 화자가 남지 않는다(연:DEV-FLR-PREL-GRANTED-DISPLAY)', async () => {
+  const u = unit()
+  await pressed(u)
+  u.rx(taken('tourptt_B'))
+  u.rx(qinfo(1))
+  assert.equal(u.f.st.cs, 'QUEUED')
+  assert.equal(u.f.st.shown, 'tourptt_B', '줄에 선 동안 화자 표시 = 앞 화자')
+  await u.f.release()
+  assert.equal(u.f.st.cs, 'PREL', '줄 철회 = 놓는 중')
+  u.rx(granted())
+  assert.deepEqual([u.f.st.cs, u.f.st.shown], ['PREL', null], '놓는 중 허가 — 머물고 화자 표시를 내린다')
+  u.rx(C.buildAck({ of: C.Type.RELEASE, room: R }))
+  assert.deepEqual([u.f.st.cs, u.f.st.shown, u.f.snapshot().phase], ['NOPERM', null, 'no_permission'], '서버가 허가 상태였던 나에게 IDLE 을 안 보내도 앞 화자가 남지 않는다')
+  u.f.dispose()
+})

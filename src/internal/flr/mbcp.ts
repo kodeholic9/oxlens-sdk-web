@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/mbcp · SDK:RULE-MOD-AREA-MIRROR internal/flr · 연:TRN.frame.DC · 연:RULE-FLR-HEADER · 연:RULE-FLR-TLV · 연:RULE-FLR-ROOM-KEY · model: claude-opus-5-5
+// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/mbcp · SDK:RULE-MOD-AREA-MIRROR internal/flr · 연:TRN.frame.DC · 연:RULE-FLR-HEADER · 연:RULE-FLR-TLV · 연:RULE-FLR-ROOM-KEY · 연:DEV-FLR-RELEASE-ACK · model: claude-opus-5-5
 import * as C from '../wire/floor_codec.js'
 
 const SVC_FLOOR = 0x01
@@ -13,6 +13,7 @@ export type FloorRx =
   | { t: 'DENY'; ack?: boolean; cause: number; reason?: string }
   | { t: 'QINFO'; ack?: boolean; info: { position: number; priority: number } }
   | { t: 'REVOKE'; ack?: boolean; cause: number; reason?: string }
+  | { t: 'ACK'; ack?: boolean; of: number }
 
 export interface Received {
   readonly room: string
@@ -96,6 +97,11 @@ export function parse(buf: Uint8Array): Received | null {
       if (r.missing.length || r.value.room === undefined) return null
       const rx: FloorRx = r.value.reason === undefined ? { t: 'REVOKE', ack: m.ack, cause: r.value.cause! } : { t: 'REVOKE', ack: m.ack, cause: r.value.cause!, reason: r.value.reason }
       return { room: r.value.room, rx }
+    }
+    case C.Type.ACK: {
+      const r = C.readAck(m)
+      if (r.missing.length || r.value.room === undefined) return null
+      return { room: r.value.room, rx: { t: 'ACK', ack: m.ack, of: r.value.of! } }
     }
     default:
       return null
