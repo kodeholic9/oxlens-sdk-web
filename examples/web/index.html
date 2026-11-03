@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oxlens sample</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; max-width: 1100px; margin-inline: auto; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  input, select, button { font: inherit; padding: 6px 10px; }
+  button { cursor: pointer; }
+  #status { font-family: ui-monospace, monospace; font-size: 13px; padding: 6px 10px; border: 1px solid #8884; border-radius: 6px; margin-bottom: 12px; }
+  #banner { display: none; padding: 10px; background: #e9a60033; border: 1px solid #e9a600; border-radius: 6px; margin-bottom: 12px; cursor: pointer; }
+  #stage { display: grid; grid-template-columns: 1fr 260px; gap: 12px; }
+  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; align-content: start; }
+  .tile { position: relative; background: #000; aspect-ratio: 4/3; border-radius: 6px; overflow: hidden; }
+  .tile video { width: 100%; height: 100%; object-fit: cover; }
+  .tile .label { position: absolute; left: 6px; bottom: 6px; color: #fff; font-size: 12px; background: #0008; padding: 2px 6px; border-radius: 4px; }
+  aside h2 { font-size: 14px; margin: 0 0 6px; }
+  #roster { list-style: none; padding: 0; margin: 0 0 16px; font-size: 14px; }
+  #roster li { padding: 2px 0; }
+  #ptt { display: none; margin-bottom: 16px; }
+  #pttBtn { width: 100%; padding: 28px 0; font-size: 20px; font-weight: 700; border-radius: 10px; border: 2px solid #888; background: #8882; user-select: none; touch-action: none; }
+  #pttBtn.has_permission { background: #2e7d32; color: #fff; border-color: #2e7d32; }
+  #pttBtn.pending_request, #pttBtn.queued, #pttBtn.pending_release { background: #e9a600; color: #000; border-color: #e9a600; }
+  #pttState, #speaker { font-family: ui-monospace, monospace; font-size: 13px; margin-top: 6px; }
+  #log { font-family: ui-monospace, monospace; font-size: 11px; height: 180px; overflow: auto; border: 1px solid #8884; border-radius: 6px; padding: 6px; margin-top: 12px; white-space: pre; }
+  #log .warn { color: #e9a600; } #log .error { color: #d32f2f; }
+  #leave { display: none; }
+</style>
+</head>
+<body>
+<h1>oxlens sample</h1>
+<form id="enter">
+  <input id="userId" placeholder="이름 (예: A)" required>
+  <input id="roomId" placeholder="방 (예: demo)" value="demo" required>
+  <select id="mode">
+    <option value="conf">회의 — 마이크 · 카메라 · 영상 타일</option>
+    <option value="ptt">무전 — 누르고 말하기</option>
+  </select>
+  <button type="submit" id="join">입장</button>
+  <button type="button" id="leave">나가기</button>
+</form>
+<div id="status">disconnected</div>
+<div id="banner">소리가 꺼져 있습니다 — 여기를 눌러 켭니다(브라우저 자동재생 정책)</div>
+<div id="stage">
+  <div id="tiles"></div>
+  <aside>
+    <div id="ptt">
+      <button id="pttBtn" type="button">누르고 말하기</button>
+      <div id="pttState">phase: off</div>
+      <div id="speaker">speaker: —</div>
+    </div>
+    <h2>참가자</h2>
+    <ul id="roster"></ul>
+  </aside>
+</div>
+<div id="log"></div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -86,6 +86,14 @@ button.onpointerup = () => { void ch.ptt.release() }
 
 더 긴 예: [`examples/dispatch-console.ts`](examples/dispatch-console.ts)(지령대 — 채널 열 개 청취 + 한 채널 PTT) · [`examples/ptt-handset.ts`](examples/ptt-handset.ts)(PTT 단말 — 토글 · 무전 영상).
 
+**띄워 보기** — 위 빠른 시작을 그대로 돌리는 샘플 앱이 [`examples/web/`](examples/web/) 에 있다(백엔드 `server.mjs` 가 토큰 · 방을 맡고 정적 파일을 낸다 · 페이지 `index.html` + `app.js`). 서버를 띄운 뒤:
+
+```bash
+npm run build && node examples/web/server.mjs
+```
+
+브라우저 탭 둘로 `http://localhost:5590` 을 열고 이름을 달리해 같은 방에 들어가면 회의(서로의 영상) · 무전(누르고 말하기 · 화자 표시)을 볼 수 있다. 카메라 · 마이크는 `localhost` 에서만 열린다(다른 기기에서 붙이려면 https 가 필요하다). 접속점 · 계정은 환경 변수 `OXLENS_BASE` · `OXLENS_API_KEY` · `OXLENS_API_SECRET` 로 바꾼다.
+
 ## 표면 한눈에
 
 | 핸들 | 무엇 | 주요 멤버 |
