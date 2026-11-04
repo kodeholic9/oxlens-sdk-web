@@ -79,20 +79,70 @@ test('SD-ENTRY-PUB-NEGO — 연결의 협상 결과(위 이음매 pub.nego_ok ·
   } finally { spy.restore() }
 })
 
-test('SD-ENTRY-PUB-PUB-RES — 받은 발행 응답 하나가 ENTRY.pubRes 하나(action · code · part)', async () => {
+test('연:RULE-PUB-NEGO-OK — 협상 끝은 협상을 기다리는 트랙만 받는다: 발행 요청이 날아가는 중에 남의 협상이 끝나도(성공 · 실패) add 재송신 0 · 실패 0 · 응답으로 발행이 선다', async () => {
+  const x = await pubUp()
+  const midOf = (f: { body: unknown }): string => (f.body as { tracks: { mid: string }[] }).tracks[0]!.mid
+  const adds = (): { body: unknown }[] => x.r.ws.requests(Op.PUBLISH_TRACKS).filter((f) => (f.body as { action: string }).action === 'add')
+  const p = x.r.c.media.enableMicrophone().catch((e: unknown) => e)
+  await tick(); await drain(x.r)
+  assert.equal(adds().length, 1, '마이크 협상 끝 — add 하나가 날아간다(응답 전)')
+  // 남의 협상 성공 — 카메라를 켠다(그 서버 발행 전부에 pub.nego_ok)
+  const c = x.r.c.media.enableCamera().catch((e: unknown) => e)
+  for (let i = 0; i < 6; i++) await tick()
+  await drain(x.r)
+  // 남의 협상 실패 — 획득한 트랙을 발행한다(그 협상만 깨진다 · 그 서버 발행 전부에 pub.nego_fail)
+  const [lobby] = await x.r.c.media.acquire({ camera: true })
+  const q = x.r.c.media.publish(lobby!).catch((e: unknown) => e)
+  for (let i = 0; i < 6; i++) await tick()
+  await drain(x.r, SA, false)
+  assert.ok((await q) instanceof OxLensError, '깨진 협상의 트랙만 실패한다')
+  // 날아가던 add 에 차례로 응답한다(신호 통로는 한 번에 하나씩 보낸다) — 응답이 더 부르는 add 까지 끝까지
+  const done = new Set<unknown>()
+  for (let round = 0; round < 6; round++) {
+    for (const f of adds().filter((f) => !done.has(f))) { done.add(f); x.r.ws.answer(f as never, { tracks: [{ mid: midOf(f), track_id: `t-${midOf(f)}` }] }) }
+    await tick(); await tick()
+  }
+  const mids = adds().map(midOf)
+  assert.equal(new Set(mids).size, mids.length, `트랙마다 add 하나 — 남의 협상 끝에 다시 보내지 않는다(mid ${mids.join(' · ')})`)
+  const [m, k] = [await p, await c]
+  assert.ok(!(m instanceof Error) && !(k instanceof Error), `날아가던 발행은 남의 협상 실패에 무너지지 않는다(마이크 ${String(m)} · 카메라 ${String(k)})`)
+  assert.deepEqual([(m as { state: string }).state, (k as { state: string }).state], ['sending', 'sending'], '응답으로 발행이 선다 — 앱이 아는 것과 서버가 같다')
+  assert.equal(pubReqs(x, 'remove').length, 0, '되돌리기 0')
+})
+
+test('연:RULE-PUB-SET-PROC · 연:RULE-PUB-REMOVE-FORM — 전환 응답을 기다리는 사이 떠나면 그 응답이 정한다: 반이중 적용이면 반이중 발행으로 남고 · 그 트랙의 remove 는 들어가 있는 방으로', async () => {
+  const x = await pubUp()
+  await enter(x.r, 'r2', { pub: 'r1' })
+  const t = await mic(x)
+  assert.equal(t.duplex, 'full')
+  const d = t.setDuplex('half').catch((e: unknown) => e); await tick()
+  const l = x.room.leave(); await tick()
+  // 서버는 같은 WS 순서대로 전환을 먼저 처리했다 — 반이중으로 바꾼 뒤 떠남을 처리해 반이중 발행을 남긴다(그 서버에 r2 가 남았다)
+  answerLast(x, Op.TRACK_SET, { duplex: 'half' }); await tick()
+  x.r.ws.answer(leaveFrame(x.r.ws, 'r1'), {}); await l; await tick()
+  await d
+  assert.deepEqual([t.duplex, t.state], ['half', 'registered'], '떠나기 전 확정값(전이중)으로 내리지 않는다 — 서버와 같이 반이중 발행으로 남는다')
+  const before = pubReqs(x, 'remove').length
+  void t.stop(); await tick(); await tick()
+  const rm = pubReqs(x, 'remove')
+  assert.equal(rm.length, before + 1, 'stop() 이 remove 하나')
+  assert.equal(rm.at(-1)!.room_id, 'r2', '떠난 방(r1)이 아니라 그 서버에서 들어가 있는 방으로 지목한다 — 떠난 방이면 3002 로 거절되어 서버에 무전 마이크가 남는다')
+})
+
+test('SD-ENTRY-PUB-PUB-RES — 받은 발행 응답 하나가 ENTRY.pubRes 하나(action · code · part · pid — 그 응답이 답한 요청의 번호)', async () => {
   const spy = spyOn()
   try {
     const x = await pubUp()
     const t = await mic(x)
-    assert.deepEqual(spy.calls['pubRes'], [[{ action: 'add', code: 0, part: 'res' }]], 'SD-ENTRY-PUB-PUB-RES — add 응답이 ENTRY.pubRes 하나')
+    assert.deepEqual(spy.calls['pubRes'], [[{ action: 'add', code: 0, part: 'res', pid: 1 }]], 'SD-ENTRY-PUB-PUB-RES — add 응답이 ENTRY.pubRes 하나 · 그 시도의 번호')
     assert.equal(planOf(spy, 'pubRes').label, 'PUB.C.STAGED.pub_ok')
     const s = t.stop(); await tick()
     answerLast(x, Op.PUBLISH_TRACKS, {}); await s; await tick()
-    assert.deepEqual(spy.calls['pubRes']!.at(-1), [{ action: 'remove', code: 0, part: 'res' }], 'SD-ENTRY-PUB-PUB-RES — remove 응답도 ENTRY.pubRes 하나')
+    assert.deepEqual(spy.calls['pubRes']!.at(-1), [{ action: 'remove', code: 0, part: 'res', pid: 0 }], 'SD-ENTRY-PUB-PUB-RES — remove 응답도 ENTRY.pubRes 하나(번호 없음)')
     const q = x.r.c.media.enableCamera().catch((e: unknown) => e)
     await tick(); await drain(x.r)
     answerLast(x, Op.PUBLISH_TRACKS, { code: 4002, name: 'TRACK_LIMIT', permanent: false }, false); await tick()
-    assert.deepEqual(spy.calls['pubRes']!.at(-1), [{ action: 'add', code: 4002, part: 'fail' }], 'SD-ENTRY-PUB-PUB-RES — 실패 응답은 code · fail')
+    assert.deepEqual(spy.calls['pubRes']!.at(-1), [{ action: 'add', code: 4002, part: 'fail', pid: 1 }], 'SD-ENTRY-PUB-PUB-RES — 실패 응답은 code · fail')
     const e = await q
     assert.ok(e instanceof OxLensError && e.code === 4002 && e.category === 'limit')
   } finally { spy.restore() }
@@ -216,7 +266,7 @@ test('SD-ENTRY-PUB-RESUME-CHECK — 이어받기 응답 대조(위 이음매 SES
 test('SD-ENTRY-PUB-ROOM-GONE — 발행한 방을 잃으면(위 이음매 ROOM pub.room_gone) ENTRY.roomGone 하나 · SDK 사건으로 넣는 곳 0 · 같은 서버에 방이 남으면 연결은 그대로(drop_server 0)', async () => {
   const spy = spyOn()
   try {
-    assert.deepEqual(PUB.REACTS.roomGone, ['ROOM:pub.room_gone'], 'SD-ENTRY-PUB-ROOM-GONE — 위가 정한 부르는 곳 하나(방)')
+    assert.deepEqual(PUB.REACTS.roomGone, ['ROOM:pub.room_gone', 'ROOM:pub.room_left'], 'SD-ENTRY-PUB-ROOM-GONE — 위가 정한 부르는 곳(방 — 서버가 정리 · 앱이 떠남)')
     const x = await pubUp()
     await enter(x.r, 'r2', { pub: 'r1' })
     const t = await mic(x)
@@ -815,7 +865,7 @@ test('SD-ENTRY-PUB-SET-DUPLEX-RES — TRACK_SET 응답마다 ENTRY.setDuplexRes 
     spy.reset()
     const d1 = t.setDuplex('half'); await tick()
     answerLast(x, Op.TRACK_SET, { ssrc: 1000, duplex: 'half' }); await d1
-    assert.deepEqual([spy.n('setDuplexRes'), spy.calls['setDuplexRes']![0]], [1, [{ duplex: 'half', noop: false, part: 'res' }]], 'SD-ENTRY-PUB-SET-DUPLEX-RES① — 응답 하나에 입구 하나')
+    assert.deepEqual([spy.n('setDuplexRes'), spy.calls['setDuplexRes']![0]], [1, [{ duplex: 'half', noop: false, part: 'res', code: 0 }]], 'SD-ENTRY-PUB-SET-DUPLEX-RES① — 응답 하나에 입구 하나')
     assert.equal(planOf(spy, 'setDuplexRes').label, 'PUB.C.SENDING.set_half', '결합 코드 ENTRY 를 지난다')
     assert.deepEqual([t.state, t.core.gateOpen, s.replaced.at(-1), x.room.core.floor.st.hasHalf], ['registered', false, null, true], 'SD-ENTRY-PUB-SET-DUPLEX-RES② — 게이트 닫힘 · registered · 발언권에 반이중 발행(floor.reg_half)')
     const d2 = t.setDuplex('full'); await tick()

@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/pub/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 f22a390fb52bbd32 · 영역 PUB 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 78125d51524c9506 · 영역 PUB 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -29,8 +29,14 @@ export interface St {
   readonly mv: boolean
   /** TRACK_SET{duplex} 응답을 기다린다 — 응답 전엔 게이트 · 반이중 여부를 바꾸지 않는다(RULE-PUB-SET-PROC · 202611/20261102e) */
   readonly dset: boolean
+  /** ★TRACK_SET{duplex} 응답을 기다리는 사이 발행한 방을 잃었다 — 남길지(반이중) 내릴지(전이중)를 그 응답이 정한다(PUB.C.any.room_gone_pending · 202611/20261104a G) */
+  readonly lost: boolean
+  /** 기다리는 PUBLISH_TRACKS{add} 요청의 pid(0 = 없다) — 그 요청의 응답만 적용한다(LINK req 와 같은 꼴 · 202611/20261104a) */
+  readonly req: number
+  /** 마지막으로 매긴 add 요청 pid */
+  readonly rid: number
 }
-export const initial = (): St => ({ sfu: 0, room: 0, ps: 'IDLE', want: false, half: false, nego: false, mv: false, dset: false })
+export const initial = (): St => ({ sfu: 0, room: 0, ps: 'IDLE', want: false, half: false, nego: false, mv: false, dset: false, lost: false, req: 0, rid: 0 })
 
 /** 이 상태기가 내는 것 */
 export type Tx =
@@ -56,7 +62,7 @@ export const REACTS = {
   floorClose: ['FLR:mic.close'],
   resumeCheck: ['SES:pub.resume_check'],
   dropServer: ['LINK:pub.drop_server'],
-  roomGone: ['ROOM:pub.room_gone'],
+  roomGone: ['ROOM:pub.room_gone', 'ROOM:pub.room_left'],
   moveOut: ['AFF:pub.move_out'],
   moveIn: ['AFF:pub.move_in'],
 } as const
@@ -91,19 +97,19 @@ export function on(s: St): Step | null {
 
 /** 발행 협상이 끝났다(§[PUB.C.STAGED.nego_ok]) — 받는 상태 밖이면 null(사건이 없던 것) */
 export function nego(s: St, ok: boolean): Step | null {
-  if (!(s.ps === 'STAGED')) return null
+  if (!(s.ps === 'STAGED' && s.nego)) return null
   if (ok && !s.want) {
     return done(s, { ...s, ps: 'IDLE', nego: false }, 'PUB.C.STAGED.nego_ok_unwanted', [], [], [], [])
   }
   if (ok) {
-    return done(s, { ...s, nego: false }, 'PUB.C.STAGED.nego_ok', [{ ws: 'PUBLISH_TRACKS', part: 'req', action: 'add', duplex: s.half ? 'half' : 'full' }], [], [], [])
+    return done(s, { ...s, nego: false, rid: s.rid + 1, req: s.rid + 1 }, 'PUB.C.STAGED.nego_ok', [{ ws: 'PUBLISH_TRACKS', part: 'req', action: 'add', duplex: s.half ? 'half' : 'full' }], [], [], [])
   }
   return done(s, { ...s, ps: 'IDLE', nego: false }, 'PUB.C.STAGED.nego_fail', [], ['app.publish_failed'], [], [])
 }
 
 /** PUBLISH_TRACKS 응답을 받았다(§[PUB.C.STAGED.pub_ok] · §[RULE-PUB-REMOVE-FORM]) (받음: PUBLISH_TRACKS) */
-export function pubRes(s: St, m: { readonly action: PubAction; readonly code: number; readonly part: Part }): Step {
-  if (s.ps !== 'STAGED' || (m.part === 'res' && m.action === 'remove') || m.code === 3005) {
+export function pubRes(s: St, m: { readonly action: PubAction; readonly code: number; readonly part: Part; readonly pid: number }): Step {
+  if (s.ps !== 'STAGED' || s.nego || (m.part === 'res' && m.action === 'remove') || m.code === 3005 || m.pid !== s.req) {
     return done(s, s, 'PUB.C.any.pub_res_other', [], [], [], [])
   }
   if (m.part === 'res' && !s.want) {
@@ -197,7 +203,7 @@ export function resumeCheck(s: St, listed: boolean): Step {
     return done(s, { ...s, ps: 'REGISTERED' }, 'PUB.C.STAGED.resume_listed', [], [], [], [])
   }
   if (s.ps === 'STAGED' && !s.nego && s.want) {
-    return done(s, s, 'PUB.C.STAGED.resume_unlisted', [{ ws: 'PUBLISH_TRACKS', part: 'req', action: 'add', duplex: s.half ? 'half' : 'full' }], [], [], [])
+    return done(s, { ...s, rid: s.rid + 1, req: s.rid + 1 }, 'PUB.C.STAGED.resume_unlisted', [{ ws: 'PUBLISH_TRACKS', part: 'req', action: 'add', duplex: s.half ? 'half' : 'full' }], [], [], [])
   }
   if (s.ps === 'STAGED' && !s.nego) {
     return done(s, { ...s, ps: 'IDLE' }, 'PUB.C.STAGED.resume_unlisted_unwanted', [], [], [], [])
@@ -216,12 +222,18 @@ export function dropServer(s: St): Step {
   return done(s, { ...s, ps: 'IDLE', nego: false }, 'PUB.C.any.drop_server', [], [], [], [])
 }
 
-/** 발행한 방을 잃었다(퇴장 · 강퇴 · 방 닫힘 · 스냅샷에 없는 방) — 서버가 그 방의 전이중 발행을 정리했다(원칙 ③) */
-export function roomGone(s: St): Step {
-  if (!s.half && (s.ps === 'REGISTERED' || s.ps === 'SENDING')) {
-    return done(s, { ...s, ps: 'IDLE', nego: false }, 'PUB.C.any.room_gone', [], ['track.detach'], [], [])
+/** 발행한 방을 잃었다(퇴장 · 강퇴 · 방 닫힘 · 스냅샷에 없는 방) — 서버가 그 방의 전이중 발행을 정리했다(원칙 ③) · self = 클라가 떠나기 시작했다(pub.room_left — 서버는 먼저 보낸 요청을 처리한 뒤 떠남을 처리한다) · 아니면 서버가 먼저 정리했고 클라가 나중에 안다 */
+export function roomGone(s: St, self: boolean): Step {
+  if (self && s.dset && (s.ps === 'REGISTERED' || s.ps === 'SENDING')) {
+    return done(s, { ...s, lost: true }, 'PUB.C.any.room_gone_pending', [], [], [], [])
   }
-  return done(s, s, 'PUB.C.any.room_gone_other', [], [], [], [])
+  if (!s.half && (s.ps === 'REGISTERED' || s.ps === 'SENDING')) {
+    return done(s, { ...s, ps: 'IDLE', nego: false, lost: false }, 'PUB.C.any.room_gone', [], ['track.detach'], [], [])
+  }
+  if (!s.half && s.ps === 'STAGED') {
+    return done(s, { ...s, ps: 'IDLE', nego: false }, 'PUB.C.STAGED.room_gone', [], ['app.publish_failed'], [], [])
+  }
+  return done(s, { ...s, lost: false }, 'PUB.C.any.room_gone_other', [], [], [], [])
 }
 
 /** 서버를 건너는 전환 ① — 옛 서버의 내 발행 트랙을 내린다(PUBLISH_TRACKS{remove}) · 읽는 것: here = AFF.pub · ROOM.sfu */
@@ -262,27 +274,30 @@ export function setDuplex(s: St, d: Duplex): Step | null {
 }
 
 /** TRACK_SET{duplex} 응답을 받았다 — 적용됐으면 게이트 · 반이중 여부를 바꾼다(RULE-PUB-SET-PROC) (받음: TRACK_SET) */
-export function setDuplexRes(s: St, m: { readonly duplex: Duplex; readonly noop: boolean; readonly part: Part }): Step {
+export function setDuplexRes(s: St, m: { readonly code: number; readonly duplex: Duplex; readonly noop: boolean; readonly part: Part }): Step {
   if (!s.dset) {
     return done(s, s, 'PUB.C.any.set_res_other', [], [], [], [])
   }
   if (s.ps !== 'REGISTERED' && s.ps !== 'SENDING') {
-    return done(s, { ...s, dset: false }, 'PUB.C.any.set_res_gone', [], ['app.duplex_failed'], [], [])
+    return done(s, { ...s, dset: false, lost: false }, 'PUB.C.any.set_res_gone', [], ['app.duplex_failed'], [], [])
+  }
+  if (s.lost && ((m.part === 'res' && m.duplex === 'full') || (m.part !== 'res' && (!s.half || m.code === 3005)))) {
+    return done(s, { ...s, dset: false, lost: false, ps: 'IDLE', nego: false }, 'PUB.C.any.set_lost_drop', [], ['track.detach', 'app.duplex_failed'], [], [])
   }
   if (m.part !== 'res') {
-    return done(s, { ...s, dset: false }, 'PUB.C.any.set_fail', [], ['app.duplex_failed'], [], [])
+    return done(s, { ...s, dset: false, lost: false }, 'PUB.C.any.set_fail', [], ['app.duplex_failed'], [], [])
   }
   if (m.noop) {
-    return done(s, { ...s, dset: false }, 'PUB.C.any.set_noop', [], ['app.duplex'], [], [])
+    return done(s, { ...s, dset: false, lost: false }, 'PUB.C.any.set_noop', [], ['app.duplex'], [], [])
   }
   if (m.duplex === 'half' && s.ps === 'SENDING') {
-    return done(s, { ...s, dset: false, half: true, ps: 'REGISTERED' }, 'PUB.C.SENDING.set_half', [], ['track.detach', 'app.duplex'], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
+    return done(s, { ...s, dset: false, lost: false, half: true, ps: 'REGISTERED' }, 'PUB.C.SENDING.set_half', [], ['track.detach', 'app.duplex'], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
   }
   if (m.duplex === 'half' && s.ps === 'REGISTERED') {
-    return done(s, { ...s, dset: false, half: true }, 'PUB.C.REGISTERED.set_half', [], ['app.duplex'], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
+    return done(s, { ...s, dset: false, lost: false, half: true }, 'PUB.C.REGISTERED.set_half', [], ['app.duplex'], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
   }
   if (s.half && s.ps === 'REGISTERED') {
-    return done(s, { ...s, dset: false, half: false, ps: 'SENDING' }, 'PUB.C.REGISTERED.set_full', [], ['track.attach', 'app.duplex'], [], [])
+    return done(s, { ...s, dset: false, lost: false, half: false, ps: 'SENDING' }, 'PUB.C.REGISTERED.set_full', [], ['track.attach', 'app.duplex'], [], [])
   }
-  return done(s, { ...s, dset: false, half: false }, 'PUB.C.any.set_full', [], ['app.duplex'], [], [])
+  return done(s, { ...s, dset: false, lost: false, half: false }, 'PUB.C.any.set_full', [], ['app.duplex'], [], [])
 }

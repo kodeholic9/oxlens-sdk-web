@@ -43,6 +43,8 @@ export class LinkCore {
   private negotiating = false
   /** 재구축 끝(rebuilt)이 지운 협상 큐 — 새 연결은 지금 보관본으로 짓는다(연:LINK.C.REBUILD.rebuilt) · 떠 있는 협상이 끝나면 한 번 더 */
   private rebuildOwed = false
+  /** 입장 응답의 자격이 보관값과 달라 갈아 끼운 새 연결의 세대 — 그 응답의 이음매 link.server_ice 가 넣는다(연:RULE-ROOM-JOIN-PROC) */
+  private replaced: number | null = null
   private buildArev = 0
   private readonly grace: Timer
   private readonly applyTimer: Timer
@@ -109,6 +111,7 @@ export class LinkCore {
       have.peer?.close()
       have.peer = peer
       have.sc = sc
+      if (stale) have.replaced = have.gen(sc.ice.publish_ufrag)
       have.adoptPeer()
       return have
     }
@@ -222,6 +225,12 @@ export class LinkCore {
   epochChanged(): void { this.enter('epochChanged', 'epoch', []) }
   pubLost(): void { this.enter('pubLost', 'resume', []) }
   roomLeft(last: boolean): void { this.enter('roomLeft', 'leave', [last]) }
+  /** ROOM link.server_ice — 입장 응답의 자격이 보관값과 달랐나(갈아 끼웠나) · 재구축 중이 아니면 옛 Peer 축출 → 그 서버 발행 전부 다시(연:RULE-ROOM-JOIN-PROC) */
+  serverIce(): void {
+    const g = this.replaced
+    this.replaced = null
+    this.enter('serverIce', 'ROOM_JOIN.ice', [g !== null, g ?? this.st.gen])
+  }
 
   /** 입장 응답 · 이어받기 응답이 실어 온 표 — MLINE_EVENT 와 같게 받는다(어느 길로 와도 새 arev 가 이긴다) */
   tableCarried(t: MlineTable): void {

@@ -444,6 +444,7 @@ export class RoomCore {
         else link?.flushPendingTable()
         break
       }
+      case 'link.server_ice': link?.serverIce(); break
       case 'sdp.rebuild': link?.renego(); break
       case 'link.room_left': {
         const last = core.roomsOn(this.sfuId).every((r) => r === this || r.st.rs === 'NONE')
@@ -462,7 +463,8 @@ export class RoomCore {
       case 'aff.join_failed': core.rooms.aff.joinFailed(this.id, this.lastFault, label); break
       case 'floor.join': this.floor.join(); break
       case 'floor.leave': this.floor.leave(); break
-      case 'pub.room_gone': for (const l of core.media.inRoom(this.id)) l.roomGone(); break
+      case 'pub.room_gone': for (const l of core.media.inRoom(this.id)) l.roomGone(false); break
+      case 'pub.room_left': for (const l of core.media.inRoom(this.id)) l.roomGone(true); break
     }
   }
 

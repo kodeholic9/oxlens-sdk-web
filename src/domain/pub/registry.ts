@@ -101,6 +101,18 @@ export class MediaRegistry {
     return { id: r.id, sfuId: r.sfuId, bits: { publishAudio: p.publishAudio, publishVideo: p.publishVideo, publishScreen: p.publishScreen }, codecs: { ...r.store.mediaCodecs } }
   }
 
+  /** 그 방에 들어가 있다(JOINED) */
+  joinedIn(roomId: string): boolean { return this.rooms.get(roomId)?.st.rs === 'JOINED' }
+
+  /** 그 서버에서 들어가 있는 방 — 발언 방이 그 서버면 그 방 · 아니면 들어가 있는 아무 방(방을 잃고 남은 반이중의 remove 가 지목한다 — 연:RULE-PUB-REMOVE-FORM) */
+  joinedOn(sfuId: string | null): string | null {
+    if (sfuId === null) return null
+    const sp = this.rooms.aff.speakingRoom
+    if (sp !== null && this.rooms.get(sp)?.sfuId === sfuId && this.joinedIn(sp)) return sp
+    for (const r of this.rooms.values()) if (r.sfuId === sfuId && r.st.rs === 'JOINED') return r.id
+    return null
+  }
+
   /** 그 서버 방들의 발언권 — 발행 이음매 floor.reg_half(sameServer) · 게이트 · 해체가 닿는 곳 */
   floorsOn(sfuId: string | null): FloorCore[] {
     return sfuId === null ? [] : [...this.rooms.values()].filter((r) => r.sfuId === sfuId).map((r) => r.floor)

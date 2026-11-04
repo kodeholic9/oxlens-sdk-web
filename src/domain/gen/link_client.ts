@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/link/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 f22a390fb52bbd32 · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 78125d51524c9506 · 영역 LINK 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -79,6 +79,7 @@ export const SEAMS = {
 } as const
 /** 이음매가 부르는 입구 — 다른 영역(또는 이 영역)의 효과가 부른다 · 부르는 곳은 위가 정했다(아래가 넣는 사건이 아니다) */
 export const REACTS = {
+  serverIce: ['ROOM:link.server_ice'],
   closeAll: ['SES:media.close_all'],
   roomLeft: ['ROOM:link.room_left'],
   repair: ['SES:media.repair'],
@@ -245,6 +246,20 @@ export function rebuilt(s: St, g: number, stood: boolean): Step | null {
   return done(s, { ...s, ls: 'OK', ice: 'OK', assoc: true, dc: true, gen: g, pgen: 0, sync: true, cause: 'NONE', nego: false, dirty: false, everUp: true }, 'LINK.C.REBUILD.rebuilt', [], ['app.link_ok'], [{ fx: 'floor.dc_up', to: 'FLR', at: 'sameServer' }], [])
 }
 
+/** 입장 응답의 server_config.ice(§[RULE-ROOM-JOIN-PROC]) — fresh = 보관한 자격과 다르다 · g = 그 자격의 세대 */
+export function serverIce(s: St, fresh: boolean, g: number): Step {
+  if (!fresh) {
+    return done(s, s, 'LINK.C.any.server_ice_same', [], [], [], [])
+  }
+  if (s.ls === 'REBUILD') {
+    return done(s, s, 'LINK.C.REBUILD.server_ice_rebuild', [], [], [], [])
+  }
+  if (s.ls === 'NONE') {
+    return done(s, s, 'LINK.C.NONE.server_ice_closed', [], [], [], [])
+  }
+  return done(s, { ...s, ls: 'OK', ice: 'OK', assoc: true, dc: true, gen: g, pgen: 0, req: 0, sync: true, cause: 'NONE', nego: false, dirty: false, everUp: true }, 'LINK.C.any.peer_replaced', [], ['app.link_ok'], [{ fx: 'floor.dc_down', to: 'FLR', at: 'sameServer' }, { fx: 'floor.down_server', to: 'FLR', at: 'sameServer' }, { fx: 'pub.reregister_server', to: 'PUB', at: 'sameServer' }, { fx: 'floor.dc_up', to: 'FLR', at: 'sameServer' }], [])
+}
+
 /** 세션이 미디어 연결을 전부 닫는다(RULE-SES-REBUILD 2 · RULE-SES-ON-DROP 2·3) */
 export function closeAll(s: St): Step {
   return done(s, { ...s, ls: 'NONE', dc: false, sync: false, nego: false, dirty: false, pgen: 0, req: 0 }, 'LINK.C.any.close_all', [], ['conn.close'], [{ fx: 'pub.drop_server', to: 'PUB', at: 'sameServer' }], [])
@@ -290,6 +305,9 @@ export function pubLost(s: St): Step {
 
 /** 구독 · 발행 SDP 를 다시 조립해 협상한다(RULE-LINK-SDP-RENEGOTIATE · 그 서버 전체 — RULE-TRK-TRACK-EVENT-PROC) */
 export function renego(s: St): Step {
+  if (s.ls === 'NONE') {
+    return done(s, s, 'LINK.C.NONE.renego_closed', [], [], [], [])
+  }
   if (s.nego) {
     return done(s, { ...s, dirty: true }, 'LINK.C.any.renego_queued', [], [], [], [])
   }

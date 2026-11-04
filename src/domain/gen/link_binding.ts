@@ -31,11 +31,12 @@ export const ENTRY = {
   pubLost: F.pubLost,
   renego: F.renego,
   tableCarried: F.tableCarried,
+  serverIce: F.serverIce,
 } as const
 
 /** 위 코드가 내놓는 입구 전부(Step 을 돌려주는 함수) — 입구 표가 하나라도 빠지거나 남으면 여기서 깨진다 · false = 넣지 않는다(판정표에 사유) */
 type EntryName = { [K in keyof typeof F]: (typeof F)[K] extends (s: F.St, ...a: never[]) => F.Step | null ? K : never }[keyof typeof F]
-export const ENTRY_ALL: Record<EntryName, boolean> = { iceDisc: true, iceBack: true, waitOver: true, linkEvent: true, hbRes: true, restartRes: true, applyTimeout: true, applied: true, assocLost: true, dcClosed: true, reopened: true, rebuilt: true, negoRes: true, mlineEvent: true, closeAll: true, roomLeft: true, repair: true, epochChanged: true, pubLost: true, renego: true, tableCarried: true }
+export const ENTRY_ALL: Record<EntryName, boolean> = { iceDisc: true, iceBack: true, waitOver: true, linkEvent: true, hbRes: true, restartRes: true, applyTimeout: true, applied: true, assocLost: true, dcClosed: true, reopened: true, rebuilt: true, negoRes: true, mlineEvent: true, closeAll: true, roomLeft: true, repair: true, epochChanged: true, pubLost: true, renego: true, tableCarried: true, serverIce: true }
 
 /** 위 효과 하나 → SDK 가 낼 이벤트 · 할 동작(효과 표) — 위 효과가 늘거나 줄면 여기서 깨진다 */
 export function effect(f: F.Fx): { readonly event?: LinkEvent; readonly action?: LinkAction } {

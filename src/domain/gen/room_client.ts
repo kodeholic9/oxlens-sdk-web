@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/room/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 f22a390fb52bbd32 · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 78125d51524c9506 · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -8,7 +8,7 @@ export type PcMode = '1pc' | '2pc'
 export type Part = 'req' | 'res' | 'fail' | 'body'
 export type RoomEv = 'affiliation' | 'sync_required'
 export type Fx = 'app.bug' | 'app.join_failed' | 'app.joined' | 'app.left' | 'app.members' | 'app.room_gone' | 'http.abandon' | 'ws.abandon'
-export type SeamFx = 'aff.down' | 'aff.implicit' | 'aff.join_failed' | 'aff.leave' | 'floor.join' | 'floor.leave' | 'link.epoch_changed' | 'link.room_left' | 'link.table' | 'pub.room_gone' | 'ready.tracks' | 'room.sub_rooms' | 'sdp.rebuild' | 'store.drop' | 'sub.drop' | 'trk.delta' | 'trk.snapshot'
+export type SeamFx = 'aff.down' | 'aff.implicit' | 'aff.join_failed' | 'aff.leave' | 'floor.join' | 'floor.leave' | 'link.epoch_changed' | 'link.room_left' | 'link.server_ice' | 'link.table' | 'pub.room_gone' | 'pub.room_left' | 'ready.tracks' | 'room.sub_rooms' | 'sdp.rebuild' | 'store.drop' | 'sub.drop' | 'trk.delta' | 'trk.snapshot'
 export type TimerName = never
 
 /** 클라 상태 — 원천 ROOM K */
@@ -54,8 +54,10 @@ export const SEAMS = {
   'floor.leave': { to: 'FLR', react: ['CLeave'] },
   'link.epoch_changed': { to: 'LINK', react: ['CEpochChanged'] },
   'link.room_left': { to: 'LINK', react: ['CRoomLeft'] },
+  'link.server_ice': { to: 'LINK', react: ['CServerIce'] },
   'link.table': { to: 'LINK', react: ['CTableCarried'] },
   'pub.room_gone': { to: 'PUB', react: ['CRoomGone'] },
+  'pub.room_left': { to: 'PUB', react: ['CRoomGone'] },
   'ready.tracks': { to: 'SUB', react: ['CReady'] },
   'room.sub_rooms': { to: 'ROOM', react: ['CSubRooms'] },
   'sdp.rebuild': { to: 'LINK', react: ['CRenego'] },
@@ -111,7 +113,7 @@ export function joinRes(s: St, m: { readonly code: number; readonly part: Part; 
     return done(s, { ...s, rs: 'LEAVING', sfu: m.server_config.sfu_id }, 'ROOM.C.JOINING.join_pc_mismatch', [{ ws: 'ROOM_LEAVE', part: 'req' }], ['app.join_failed'], [{ fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'room.sub_rooms', to: 'ROOM', at: 'sameServer' }], [])
   }
   if (m.part === 'res') {
-    return done(s, { ...s, rs: 'JOINED', cseq: m.version.seq, cepoch: m.version.epoch, sfu: m.server_config.sfu_id }, 'ROOM.C.JOINING.join_ok', [], ['app.joined'], [{ fx: 'trk.snapshot', to: 'TRK', at: 'self' }, { fx: 'link.table', to: 'LINK', at: 'sameServer' }, { fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'ready.tracks', to: 'SUB', at: 'self' }, { fx: 'room.sub_rooms', to: 'ROOM', at: 'sameServer' }, { fx: 'aff.implicit', to: 'AFF', at: 'self' }, { fx: 'floor.join', to: 'FLR', at: 'self' }], [])
+    return done(s, { ...s, rs: 'JOINED', cseq: m.version.seq, cepoch: m.version.epoch, sfu: m.server_config.sfu_id }, 'ROOM.C.JOINING.join_ok', [], ['app.joined'], [{ fx: 'trk.snapshot', to: 'TRK', at: 'self' }, { fx: 'link.server_ice', to: 'LINK', at: 'sameServer' }, { fx: 'link.table', to: 'LINK', at: 'sameServer' }, { fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'ready.tracks', to: 'SUB', at: 'self' }, { fx: 'room.sub_rooms', to: 'ROOM', at: 'sameServer' }, { fx: 'aff.implicit', to: 'AFF', at: 'self' }, { fx: 'floor.join', to: 'FLR', at: 'self' }], [])
   }
   if (m.code === 4009) {
     return done(s, { ...s, retry: true }, 'ROOM.C.JOINING.join_4009', [], [], [], [])
@@ -140,7 +142,7 @@ export function leave(s: St): Step | null {
   if (s.rs === 'JOINING') {
     return done(s, { ...s, quit: true }, 'ROOM.C.JOINING.app_leave_wait', [], [], [], [])
   }
-  return done(s, { ...s, rs: 'LEAVING', rsync: false, ahead: 0 }, 'ROOM.C.JOINED.leave', [{ ws: 'ROOM_LEAVE', part: 'req' }], ['http.abandon'], [{ fx: 'floor.leave', to: 'FLR', at: 'self' }, { fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'sub.drop', to: 'SUB', at: 'self' }, { fx: 'pub.room_gone', to: 'PUB', at: 'sameRoom' }], [])
+  return done(s, { ...s, rs: 'LEAVING', rsync: false, ahead: 0 }, 'ROOM.C.JOINED.leave', [{ ws: 'ROOM_LEAVE', part: 'req' }], ['http.abandon'], [{ fx: 'floor.leave', to: 'FLR', at: 'self' }, { fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'sub.drop', to: 'SUB', at: 'self' }, { fx: 'pub.room_left', to: 'PUB', at: 'sameRoom' }], [])
 }
 
 /** ROOM_LEAVE 응답을 받았다(§[RULE-ROOM-LEAVE-RES]) (받음: ROOM_LEAVE) */

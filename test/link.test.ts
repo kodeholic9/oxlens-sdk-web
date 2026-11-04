@@ -475,6 +475,31 @@ test('SD-ENTRY-LINK-REBUILT — 재구축의 새 PeerLink 결과가 ENTRY.rebuil
   } finally { spy.restore() }
 })
 
+test('SD-ENTRY-LINK-SERVER-ICE — 입장 응답의 자격이 같으면 ENTRY.serverIce(fresh 거짓) · 재구축이 아닌데 다르면(옛 Peer 축출) fresh 참 → LINK.C.any.peer_replaced · 그 서버 발행 전부 다시(pub.reregister_server) · 방 다시 입장(rooms.rejoin_server) 0', async () => {
+  const spy = spyOn()
+  try {
+    const x = await upLink()
+    const media = x.r.core.media as unknown as { reregisterAll(s: string | null): void }
+    const orig = media.reregisterAll.bind(media)
+    let rereg = 0
+    media.reregisterAll = (s) => { rereg++; orig(s) }
+    let p = x.r.c.join('r2'); await tick()
+    x.r.ws.answer(joinFrame(x.r.ws, 'r2'), joinBody(x.r, 'r2', { subs: ['r1', 'r2'] })); await p; await tick()
+    assert.equal(spy.calls['serverIce']!.at(-1)![0], false, 'SD-ENTRY-LINK-SERVER-ICE — 같은 Peer(같은 자격)면 fresh 거짓')
+    assert.equal(planOf(spy, 'serverIce').label, 'LINK.C.any.server_ice_same')
+    const madeBefore = FakePC.made.length
+    p = x.r.c.join('r3'); await tick()
+    const sc: ServerConfig = { ...SA, ice: { ...SA.ice, publish_ufrag: 'pubUf7' } }
+    x.r.ws.answer(joinFrame(x.r.ws, 'r3'), joinBody(x.r, 'r3', { sc, subs: ['r3'] })); await p; await tick()
+    assert.ok(FakePC.made.length > madeBefore, '새 자격 — 새 PeerLink 로 갈아 끼웠다(LinkCore.adopt)')
+    assert.deepEqual(spy.calls['serverIce']!.at(-1), [true, x.r.core.epochs.id('ufrag:pubUf7')], 'SD-ENTRY-LINK-SERVER-ICE — fresh 참 · g = 새 자격의 세대')
+    assert.equal(planOf(spy, 'serverIce').label, 'LINK.C.any.peer_replaced', '연:RULE-ROOM-JOIN-PROC — 옛 Peer 축출')
+    assert.equal(rereg, 1, '연:RULE-ROOM-JOIN-PROC — 그 서버 발행을 전부 다시 건다(갈아 끼우기만 하면 서버엔 발행이 없다)')
+    assert.ok(!planOf(spy, 'serverIce').seams.some((s) => s.fx === 'rooms.rejoin_server'), '방은 다시 들어가지 않는다 — 그 입장이 또 옛 Peer 를 축출한다')
+    await x.r.c.close()
+  } finally { spy.restore() }
+})
+
 test('SD-ENTRY-LINK-NEGO-RES — 협상 큐의 결과가 ENTRY.negoRes 하나 · ok 참 / 거짓', async () => {
   const spy = spyOn()
   try {

@@ -181,11 +181,11 @@ export class LocalCore {
 
   // ── 입구 표 — 위 결합 ENTRY 를 지나 한 걸음 ─────────────────────────────
 
-  /** 입구 하나 — 위가 안 받으면(null) 받지 않는 사건으로 적는다 · 받았는지를 돌려준다 */
-  private enter<K extends Entry>(name: K, cause: string, args: Args<K>, fault: Fault | null = null): boolean {
+  /** 입구 하나 — 위가 안 받으면(null) 받지 않는 사건으로 적는다 · quiet 면 사건이 없던 것으로 둔다 · 받았는지를 돌려준다 */
+  private enter<K extends Entry>(name: K, cause: string, args: Args<K>, fault: Fault | null = null, quiet = false): boolean {
     const f = PBn.ENTRY[name] as unknown as (s: PUB.St, ...a: Args<K>) => PUB.Step | null
     const step = f(this.st, ...args)
-    if (!step) { this.media.book.impossible('PUB', this.key, this.st.ps, name); return false }
+    if (!step) { if (!quiet) this.media.book.impossible('PUB', this.key, this.st.ps, name); return false }
     this.lastFault = fault
     this.step(step, cause)
     this.lastFault = null
@@ -310,48 +310,57 @@ export class LocalCore {
     const link = this.link
     const room = this.roomId ?? ''
     if (tx.action === 'add') {
+      // 이 시도의 번호 — 그 응답만 받는다(연:RULE-PUB-OK 2 · 위 상태 req)
+      const pid = this.st.req
       const info = this.slot && link?.peer ? link.peer.sendInfo(this.slot) : null
       if (!link || !info) {
-        this.enter('pubRes', 'PUBLISH_TRACKS.local', [{ action: 'add', code: 1003, part: 'fail' }], negotiationFault('NO_SDP'))
+        this.enter('pubRes', 'PUBLISH_TRACKS.local', [{ action: 'add', code: 1003, part: 'fail', pid }], negotiationFault('NO_SDP'))
         return
       }
       const t: Record<string, unknown> = { ...info.track, duplex: tx.duplex ?? this.duplex, simulcast: this.simulcast }
       if (this.kind === 'video') t['source'] = this.source === 'screen' ? 'screen' : 'camera'
       const body = { action: 'add', room_id: room, tracks: [t as unknown as PublishTrack], ...info.ext }
-      link.request('PUBLISH_TRACKS', body).then((r) => this.reply(r.ok, r.body, 'add'), () => undefined)
+      link.request('PUBLISH_TRACKS', body).then((r) => this.reply(r.ok, r.body, 'add', pid), () => undefined)
     } else {
       if (!this.trackId || !link) return
-      link.request('PUBLISH_TRACKS', { action: 'remove', room_id: room, track_ids: [this.trackId] }).then((r) => this.reply(r.ok, r.body, 'remove'), () => undefined)
+      link.request('PUBLISH_TRACKS', { action: 'remove', room_id: this.addressRoom(), track_ids: [this.trackId] }).then((r) => this.reply(r.ok, r.body, 'remove', 0), () => undefined)
     }
+  }
+
+  /** 지목할 방 — 트랙의 방에 들어가 있으면 그 방 · 방을 잃고 남은 반이중이면 그 서버에서 들어가 있는 방(연:RULE-PUB-REMOVE-FORM) */
+  private addressRoom(): string {
+    const own = this.roomId
+    if (own !== null && this.media.joinedIn(own)) return own
+    return this.media.joinedOn(this.sfuId) ?? own ?? ''
   }
 
   /** duplex 전환 요청 — 기준 방은 발언 방(TRACK_SET{duplex}) · 응답은 입구 setDuplexRes */
   private sendDuplex(d: PUB.Duplex): void {
     const link = this.link
     const base = this.duplexBase
-    const fail = (cause: string, f: Fault): void => { this.enter('setDuplexRes', cause, [{ duplex: d, noop: false, part: 'fail' }], f) }
+    const fail = (cause: string, f: Fault): void => { this.enter('setDuplexRes', cause, [{ duplex: d, noop: false, part: 'fail', code: typeof f.code === 'number' ? f.code : 0 }], f) }
     if (!link || !this.trackId || base === null) { fail('TRACK_SET.local', stateFault('STATE_NOT_PUBLISHED')); return }
     link.request('TRACK_SET', { room_id: base, track_id: this.trackId, duplex: d }).then((r) => {
       if (!r.ok) { const f = fromFailure(r.body); fail(`TRACK_SET.${f.code}`, f); return }
       const b = r.body as TrackSetRes
-      this.enter('setDuplexRes', 'TRACK_SET.res', [{ duplex: b.duplex ?? d, noop: b.noop === true, part: 'res' }])
+      this.enter('setDuplexRes', 'TRACK_SET.res', [{ duplex: b.duplex ?? d, noop: b.noop === true, part: 'res', code: 0 }])
     }, () => fail('TRACK_SET.closed', closedFault('TRANSPORT')))
   }
 
   /** 발행 응답 — 입구 pubRes · 2006 이면 막힌 비트로 방 권한을 맞춘다(재시도 없음 — SDK:RULE-PUB-DENIED) */
-  private reply(ok: boolean, body: unknown, action: 'add' | 'remove'): void {
+  private reply(ok: boolean, body: unknown, action: 'add' | 'remove', pid: number): void {
     if (ok && action === 'add') {
       const b = body as { tracks?: { mid: string; track_id: string }[] }
       const mine = b.tracks?.find((x) => x.mid === this.slot?.mid) ?? b.tracks?.[0]
       if (mine) this.trackId = mine.track_id
     }
-    if (ok) { this.enter('pubRes', `PUBLISH_TRACKS.${action}`, [{ action, code: 0, part: 'res' }]); return }
+    if (ok) { this.enter('pubRes', `PUBLISH_TRACKS.${action}`, [{ action, code: 0, part: 'res', pid }]); return }
     const f = fromFailure(body)
     if (f.code === 2006 && this.roomId !== null) {
       const denied = (f.details ?? {})['denied']
       if (Array.isArray(denied)) this.media.denied(this.roomId, denied.map(String))
     }
-    this.enter('pubRes', `PUBLISH_TRACKS.${f.code}`, [{ action, code: f.code, part: 'fail' }], f)
+    this.enter('pubRes', `PUBLISH_TRACKS.${f.code}`, [{ action, code: f.code, part: 'fail', pid }], f)
   }
 
   // ── Encoder — sender · 게이트 · 인코딩 값 ──────────────────────────────
@@ -467,8 +476,8 @@ export class LocalCore {
 
   // ── 이음매가 부르는 입구(위 REACTS) ────────────────────────────────────
 
-  /** LINK pub.nego_ok · pub.nego_fail — 협상을 기다리는 발행만 */
-  nego(ok: boolean): void { if (this.st.ps === 'STAGED') this.enter('nego', ok ? 'nego.ok' : 'nego.fail', [ok], ok ? null : this.link?.negoFault ?? negotiationFault('APPLY')) }
+  /** LINK pub.nego_ok · pub.nego_fail — 연결은 그 서버의 발행 전부에 알린다 · 받는 것은 위가 정한다(협상을 기다리는 발행만 — 연:RULE-PUB-NEGO-OK) · 나머지는 사건이 없던 것 */
+  nego(ok: boolean): void { this.enter('nego', ok ? 'nego.ok' : 'nego.fail', [ok], ok ? null : this.link?.negoFault ?? negotiationFault('APPLY'), true) }
   /** TRK pub.revoked — 트랙 목록에서 내 트랙이 빠졌다 */
   revoked(): void { this.enter('revoked', 'TRACK_EVENT.remove', [{}]) }
   /** FLR mic.open */
@@ -479,8 +488,8 @@ export class LocalCore {
   floorIdle(): void { this.armCold() }
   /** LINK pub.drop_server — 그 서버 연결이 닫혔다 · 협상 · 발행을 기다리던 발행은 closed 로 reject(SDK:IMPL-PUB-API 효과 표 app.publish_failed) */
   dropServer(): void { this.enter('dropServer', 'link', [], closedFault('TRANSPORT')); this.slot = null; this.gate = false }
-  /** ROOM pub.room_gone — 발행한 방을 잃었다 */
-  roomGone(): void { this.enter('roomGone', 'room', []) }
+  /** ROOM pub.room_gone · pub.room_left — 발행한 방을 잃었다 · self = 앱이 떠나기 시작했다(전환 응답을 기다리면 그 응답이 정한다 — 연:RULE-PUB-SET-PROC) */
+  roomGone(self: boolean): void { this.enter('roomGone', self ? 'room.left' : 'room', [self]) }
   /** SES pub.resume_check — 이어받기 응답의 발행 목록 대조 */
   resumeCheck(listed: boolean): void { this.enter('resumeCheck', 'RESUME', [listed]) }
 
