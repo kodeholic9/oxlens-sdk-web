@@ -55,6 +55,9 @@ const qa = {
     client.on('track', (room, t) => {
       state.tracks.set(t.id, { track: t, roomId: room.id })
       note('track', { id: t.id, kind: t.kind, roomId: room.id, slot: t.type === 'slot', userId: t.userId ?? null })
+      // 학습 탐침 — 상대 트랙 속성 사건(연:TRK.op.TRACK_STATE muted · 연:TRK.op.TRACK_EVENT 항목 교체 active)
+      t.on('muted', (m) => note('remoteMuted', { id: t.id, roomId: room.id, muted: m }))
+      t.on('active', (e) => note('remoteActive', { id: t.id, roomId: room.id, active: e.active }))
       if (t.kind === 'video') {
         const el = document.createElement('video')
         el.id = `v-${t.id}`
@@ -143,7 +146,7 @@ const qa = {
 
   ptt(roomId) {
     const st = state.client.rooms.get(roomId)?.ptt.state
-    return st ? { phase: st.phase, trusted: st.trusted, canRequest: st.canRequest, remainingSec: st.remainingSec ?? null } : null
+    return st ? { phase: st.phase, trusted: st.trusted, canRequest: st.canRequest, remainingSec: st.remainingSec ?? null, mic: st.mic } : null
   },
 
   // 수동 시험(qa/lan) — 발언권 상태 전량과 설정 손잡이. SDK:IMPL-FLR-BUTTON·SDK:IMPL-FLR-EXPOSE 표면을 그대로 낸다.
@@ -162,6 +165,21 @@ const qa = {
   async pttEnable(roomId) { await state.client.rooms.get(roomId).ptt.enable() },
 
   keepWarm(roomId, ms) { state.client.rooms.get(roomId).ptt.keepWarm(ms) },
+
+  /** 학습 탐침 — 내 트랙의 속성을 산 채로 바꾼다 · 음소거(연:PUB.op.TRACK_SET muted) · 회의↔무전(연:PUB.op.TRACK_SET duplex) */
+  async setLocalMuted(trackId, m) {
+    const t = state.client.media.tracks.find((x) => x.trackId === trackId)
+    await t.setMuted(m)
+    return { id: t.trackId, muted: t.muted }
+  },
+  async setLocalDuplex(trackId, d) {
+    const t = state.client.media.tracks.find((x) => x.trackId === trackId)
+    await t.setDuplex(d)
+    return { id: t.trackId, duplex: t.duplex, state: t.state }
+  },
+  remoteTracks() {
+    return [...state.tracks.values()].map(({ track: t, roomId }) => ({ id: t.id, roomId, kind: t.kind, userId: t.userId ?? null, active: t.active, muted: t.muted ?? null, receiving: t.receiving }))
+  },
 
   speaker(roomId) { return state.speakers.get(roomId) ?? null },
 
@@ -202,7 +220,7 @@ const qa = {
         if (row.type === 'outbound-rtp') packets = row.packetsSent ?? null
       }
       out.push({
-        id: t.trackId, kind: t.kind, state: t.state, duplex: t.duplex, owner: t.owner,
+        id: t.trackId, kind: t.kind, state: t.state, duplex: t.duplex, muted: t.muted, owner: t.owner,
         server: t.server ?? null, packets,
       })
     }
