@@ -122,8 +122,12 @@ export class RoomCore {
   }
 
   get link(): LinkCore | undefined { return this.core.linkFor(this.sfuId) }
-  /** 지금 이 방 입장의 join_id — 방 상태를 바꾸는 요청이 싣는다 · 입장 응답 전이면 없다(연:RULE-ROOM-JOIN-ID) */
-  get joinId(): string | undefined { return this.st.jsure ? this.jid(this.st.jid) : undefined }
+  /**
+   * 마지막으로 안 이 방 입장의 join_id — 방 상태를 바꾸는 요청이 싣는다(연:RULE-ROOM-JOIN-ID).
+   * 갈아 끼우는 입장이 날아가는 동안은 옛 값 그대로 — 서버가 갈아 끼운 뒤면 그 요청은 3002 로 걸러진다(그 입장 때 지은 요청이다).
+   * 값이 없는 방(첫 입장 응답 전)의 상태 요청은 정상 흐름에 없다 — 발행은 입장 뒤 · 소속 전환은 입장 응답을 기다린다(연:RULE-ROOM-JOIN-START 2) — 생기면 칸 없이 가 서버 1003(bug)이 그 결함을 드러낸다
+   */
+  get joinId(): string | undefined { return this.jid(this.st.jid) }
   /** 위 값을 요청 본문 칸으로 — 모르면 빈 칸 */
   get joinIdField(): { join_id?: string } { return jidField(this.joinId) }
   private jid(n: number): string | undefined { return n ? this.core.jids.str(n) : undefined }

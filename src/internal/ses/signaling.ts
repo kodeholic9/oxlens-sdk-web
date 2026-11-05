@@ -208,8 +208,9 @@ export class Signaling {
     this.watch()
   }
 
-  /** 세션이 끝났다 — 대기표 전부 closed 로 reject */
+  /** 세션이 끝났다 — 대기표 전부 closed 로 reject · 다음 connect() 전까지 새 요청도 곧바로 closed(보내지 못한 요청은 기한이 없다 — 매달리지 않게) */
   sessionEnd(f: Fault): void {
+    this.ended = true
     for (const p of this.held) p.reject(f)
     for (const p of this.waiting) p.reject(f)
     for (const p of this.inflight.values()) p.reject(f)

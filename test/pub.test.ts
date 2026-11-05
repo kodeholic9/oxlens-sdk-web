@@ -938,3 +938,110 @@ test('SD-API-CLIENT-SET-SPEAKING-ROOM④ — 새 서버가 거절하면 옛 방�
   answerAdd(x, 't-mic-back'); await tick(); await tick()
   assert.equal(x.mic.state, 'sending')
 })
+
+// ══ 요청 수명 — 방 상태 요청의 join_id · 버림 표 행마다(연:RULE-ROOM-JOIN-ID · 연:RULE-TRN-REQ-ABANDON · 검증 세션 S2 · S3) ══
+
+/** 기한을 짧게 — 시계 한 바퀴(1초) 안에 만료를 본다 */
+function shortReq(x: X): void { (x.r.core.sig as unknown as { opts: { reqTimeoutMs: number } }).opts.reqTimeoutMs = 30 }
+async function waitFor(f: () => boolean, ms = 4000): Promise<void> { for (let i = 0; i < ms / 10 && !f(); i++) await tick(10) }
+const pubLabels = (x: X): string[] => x.r.trace.filter((t) => t.layer === 'PUB').map((t) => t.label)
+const jidOf = (b: unknown): string | undefined => (b as { join_id?: string }).join_id
+
+/** 기한 초과로 끊긴 소켓을 같은 세션으로 다시 잇는다 — 다시 보낸 요청이 새 소켓으로 간다 */
+async function resumeSame(x: X, pubs: unknown[] = []): Promise<FakeWS> {
+  const old = x.r.ws
+  await waitFor(() => FakeWS.made.at(-1) !== old)
+  const ws = FakeWS.made.at(-1)!
+  ws.open(); await tick()
+  ws.reply(Op.BIND, BIND_OK); await tick(); await tick()
+  ws.reply(Op.RESUME, { snapshot: { r1: { participants: [mem('u1')], me: mem('u1'), tracks: [], version: vers(1) } }, publications: pubs, mline_tables: [] })
+  await tick(); await tick()
+  x.r.ws = ws
+  return ws
+}
+
+test('연:RULE-ROOM-JOIN-ID — 발행 add · remove · READY · SUBSCRIBE_LAYER 도 그 방 입장의 join_id 를 싣는다', async () => {
+  const x = await pubUp()
+  const t = await mic(x)
+  assert.equal(jidOf(pubReqs(x, 'add').at(-1)), 'j-r1', 'PUBLISH_TRACKS add')
+  assert.equal(jidOf(x.r.ws.last(Op.READY).body), 'j-r1', 'READY')
+  x.room.core.trk.sub.setLayer({ track_id: 't-x', spatial: 0 } as never).catch(() => undefined); await tick()
+  assert.equal(jidOf(x.r.ws.last(Op.SUBSCRIBE_LAYER).body), 'j-r1', 'SUBSCRIBE_LAYER')
+  answerLast(x, Op.SUBSCRIBE_LAYER); await tick()
+  void t.stop(); await tick(); await tick()
+  assert.equal(jidOf(pubReqs(x, 'remove').at(-1)), 'j-r1', 'PUBLISH_TRACKS remove')
+})
+
+test('연:RULE-TRN-REQ-ABANDON 발행 add — 기한을 넘기면 발행 전으로 · enable* 는 closed(REQ_EXPIRED) · PUB.C.STAGED.expired', async () => {
+  const x = await pubUp()
+  shortReq(x)
+  let err: unknown = null
+  x.r.c.media.enableMicrophone().catch((e: unknown) => { err = e })
+  await tick(); await drain(x.r)
+  assert.equal(pubReqs(x, 'add').length, 1)
+  await waitFor(() => err !== null)
+  assert.ok(err instanceof OxLensError && err.category === 'closed' && err.name === 'REQ_EXPIRED', String(err))
+  assert.ok(pubLabels(x).includes('PUB.C.STAGED.expired'))
+})
+
+test('연:RULE-TRN-REQ-ABANDON TRACK_SET 전환 — 기한을 넘기면 확정된 값 그대로 · setDuplex() 는 closed(REQ_EXPIRED) · PUB.C.any.expired_set', async () => {
+  const x = await pubUp()
+  const t = await mic(x)
+  shortReq(x)
+  let err: unknown = null
+  t.setDuplex('half').catch((e: unknown) => { err = e })
+  await waitFor(() => err !== null)
+  assert.ok(err instanceof OxLensError && err.name === 'REQ_EXPIRED', String(err))
+  assert.equal(t.duplex, 'full', '확정된 값 그대로')
+  assert.ok(pubLabels(x).includes('PUB.C.any.expired_set'))
+})
+
+test('연:RULE-TRN-REQ-ABANDON remove — 기한을 넘기면 다시 보낸다(멱등) · 본문은 그때의 지목 방 · join_id', async () => {
+  const x = await pubUp()
+  const t = await mic(x)
+  shortReq(x)
+  void t.stop(); await tick(); await tick()
+  const first = x.r.ws.requests(Op.PUBLISH_TRACKS).at(-1)!
+  const ws = await resumeSame(x)
+  await waitFor(() => pubReqs(x, 'remove').length > 0)
+  const again = ws.requests(Op.PUBLISH_TRACKS).at(-1)!
+  assert.deepEqual([(again.body as { action: string }).action, jidOf(again.body), again.pid > first.pid], ['remove', 'j-r1', true], '버린 뒤 새 요청(새 pid)으로 다시 보낸 remove')
+})
+
+test('연:RULE-TRN-REQ-ABANDON SUBSCRIBE_LAYER — 기한을 넘기면 마지막 값으로 다시 보낸다 · 기다리던 setLayer 는 그 응답이 정한다', async () => {
+  const x = await pubUp()
+  shortReq(x)
+  let out: string | null = null
+  x.room.core.trk.sub.setLayer({ track_id: 't-x', spatial: 1 } as never).then(() => { out = 'ok' }, (e: { name: string }) => { out = e.name })
+  await tick()
+  const ws = await resumeSame(x)
+  await waitFor(() => ws.requests(Op.SUBSCRIBE_LAYER).length > 0)
+  assert.equal(out, null, '버린 요청이 setLayer 를 reject 하지 않는다')
+  assert.deepEqual((ws.last(Op.SUBSCRIBE_LAYER).body as { targets: unknown[] }).targets, [{ track_id: 't-x', spatial: 1 }])
+  answerLast(x, Op.SUBSCRIBE_LAYER); await tick(); await tick()
+  assert.equal(out, 'ok')
+})
+
+test('연:RULE-TRN-REQ-ABANDON READY — 기한을 넘기면 다시 보낸다(멱등)', async () => {
+  const x = await pubUp()
+  FakeWS.auto.delete(Op.READY)
+  try {
+    shortReq(x)
+    const sends: string[] = []
+    const sub = x.room.core.trk.sub as unknown as { sendReady: () => void }
+    const orig = sub.sendReady.bind(sub)
+    sub.sendReady = () => { sends.push('ready'); orig() }
+    sub.sendReady()
+    await waitFor(() => sends.length > 1)
+    assert.ok(sends.length > 1, '만료가 READY 를 다시 낸다')
+  } finally { FakeWS.auto.set(Op.READY, {}) }
+})
+
+test('연:RULE-TRN-REQ-ABANDON AFFILIATION — 기한을 넘기면 응답 실패와 같이 · setSpeakingRoom() 은 closed(REQ_EXPIRED)', async () => {
+  const x = await pubUp()
+  shortReq(x)
+  let err: unknown = null
+  x.r.c.setSpeakingRoom(null).catch((e: unknown) => { err = e })
+  await waitFor(() => err !== null)
+  assert.ok(err instanceof OxLensError && err.name === 'REQ_EXPIRED', String(err))
+})

@@ -327,14 +327,15 @@ export class LocalCore {
       })
     } else {
       if (!this.trackId || !link) return
-      const room = this.addressRoom()
-      this.sendRemove(link, { action: 'remove', room_id: room, ...this.media.joinIdIn(room), track_ids: [this.trackId] })
+      this.sendRemove(link, this.trackId)
     }
   }
 
-  /** remove — 기한을 넘기면 다시 보낸다(멱등 · 연:RULE-TRN-REQ-ABANDON) */
-  private sendRemove(link: LinkCore, body: Record<string, unknown>): void {
-    link.request('PUBLISH_TRACKS', body).then((r) => this.reply(r.ok, r.body, 'remove', 0), (e: unknown) => { if (expired(e)) this.sendRemove(link, body) })
+  /** remove — 기한을 넘기면 다시 보낸다(멱등 · 연:RULE-TRN-REQ-ABANDON) · 본문은 그때의 지목 방 · join_id 로 새로 짓는다(READY · SUBSCRIBE_LAYER 와 같은 꼴) */
+  private sendRemove(link: LinkCore, trackId: string): void {
+    const room = this.addressRoom()
+    link.request('PUBLISH_TRACKS', { action: 'remove', room_id: room, ...this.media.joinIdIn(room), track_ids: [trackId] })
+      .then((r) => this.reply(r.ok, r.body, 'remove', 0), (e: unknown) => { if (expired(e)) this.sendRemove(link, trackId) })
   }
 
   /** 지목할 방 — 트랙의 방에 들어가 있으면 그 방 · 방을 잃고 남은 반이중이면 그 서버에서 들어가 있는 방(연:RULE-PUB-REMOVE-FORM) */

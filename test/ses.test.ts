@@ -940,3 +940,28 @@ test('연:RULE-TRN-REQ-LIFE ⑤ · 연:RULE-TRN-REQ-ABANDON · ROOM.C.JOINING.ex
   assert.equal(ws.readyState, 3, '⑤ 기한을 넘기면 소켓을 끊는다')
   await r.c.close()
 })
+
+test('연:RULE-TRN-REQ-LIFE ②⑤ — 끊긴 동안 들고 있던 요청도 기한이 간다 · 다시 붙기 전에 넘기면 그것만 closed(REQ_EXPIRED)', async () => {
+  const r = rig()
+  const ws = await up(r)
+  ;(r.core.sig as unknown as { opts: { reqTimeoutMs: number } }).opts.reqTimeoutMs = 30
+  let err: unknown = null
+  r.c.join('r1').catch((e: unknown) => { err = e })
+  await real()
+  ws.close(); await tick(5)
+  for (let i = 0; i < 300 && err === null; i++) await tick(10)
+  assert.ok(err instanceof OxLensError && err.name === 'REQ_EXPIRED', `끊긴 동안 들고 있던 입장이 기한을 넘겼다: ${String(err)}`)
+  await r.c.close()
+})
+
+test('연:RULE-TRN-REQ-LIFE 4 — 세션이 끝난 뒤(앱 close 가 아닌 길) 낸 요청은 곧바로 closed(CLOSED) · 매달리지 않는다(검증 세션 S1)', async () => {
+  const r = rig()
+  const ws = await up(r)
+  ws.close(); await tick(5)
+  await bind(FAIL(2002, 'TOKEN_INVALID'), false)
+  assert.equal(r.core.ses.cs, 'DISCONNECTED')
+  let out: string | null = null
+  r.core.sig.request('MESSAGE', { room_id: 'r1', content: 'x' }).then(() => { out = 'answered' }, (f: { name: string }) => { out = f.name })
+  await tick(20)
+  assert.equal(out, 'CLOSED')
+})
