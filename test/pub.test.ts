@@ -255,10 +255,10 @@ test('SD-ENTRY-PUB-RESUME-CHECK — 이어받기 응답 대조(위 이음매 SES
     }
     assert.equal(spy.n('resumeCheck'), 0)
     await resume([{ track_id: 't-mic', room_id: 'r1', kind: 'audio', duplex: 'full', codec: 'opus' }])
-    assert.deepEqual(spy.calls['resumeCheck'], [[true]], 'SD-ENTRY-PUB-RESUME-CHECK — 내 트랙이 실린 응답 → ENTRY.resumeCheck(listed 참) 하나')
+    assert.deepEqual(spy.calls['resumeCheck'], [[true, false]], 'SD-ENTRY-PUB-RESUME-CHECK — 내 트랙이 실린 응답 → ENTRY.resumeCheck(listed 참) 하나')
     assert.equal(planOf(spy, 'resumeCheck').label, 'PUB.C.any.resume_listed')
     await resume([])
-    assert.deepEqual(spy.calls['resumeCheck']!.at(-1), [false], 'SD-ENTRY-PUB-RESUME-CHECK — 빠진 응답 → listed 거짓')
+    assert.deepEqual(spy.calls['resumeCheck']!.at(-1), [false, false], 'SD-ENTRY-PUB-RESUME-CHECK — 빠진 응답 → listed 거짓')
     assert.deepEqual(planOf(spy, 'resumeCheck').seams.map((s) => s.fx), ['link.pub_lost'], '발행이 사라졌으면 위가 그 서버 재구축을 건다')
   } finally { spy.restore() }
 })
@@ -400,7 +400,7 @@ test('SD-API-LOCAL-TRACK-SET-MUTED — setDuplex 뒤 enabled=true · 반이중 �
   const m = t.setMuted(true); await tick(); answerLast(x, Op.TRACK_SET); await m
   assert.deepEqual([t.muted, t.mediaStreamTrack.enabled], [true, false], 'setMuted 의 손잡이는 track.enabled')
   const d = t.setDuplex('half'); await tick()
-  assert.deepEqual(x.r.ws.last(Op.TRACK_SET).body, { room_id: 'r1', track_id: 't-mic', duplex: 'half' }, '기준 방 = speakingRoom')
+  assert.deepEqual(x.r.ws.last(Op.TRACK_SET).body, { room_id: 'r1', join_id: 'j-r1', track_id: 't-mic', duplex: 'half' }, '기준 방 = speakingRoom')
   answerLast(x, Op.TRACK_SET); await d
   assert.deepEqual([t.duplex, t.muted, t.mediaStreamTrack.enabled], ['half', false, true], 'SD-API-LOCAL-TRACK-SET-MUTED④ — setDuplex 응답 뒤 enabled=true(서버도 muted=false 로 초기화)')
   const sets = x.r.ws.requests(Op.TRACK_SET).length
@@ -728,7 +728,7 @@ test('SD-KNOB-SET-MUTED — setMuted 의 손잡이는 track.enabled 만 · sende
   const before = { replaced: s.replaced.length, params: s.params.length, track: s.track }
   const m = t.setMuted(true); await tick(); answerLast(x, Op.TRACK_SET); await m
   assert.deepEqual([t.mediaStreamTrack.enabled, s.replaced.length, s.params.length, s.track], [false, before.replaced, before.params, before.track], 'SD-KNOB-SET-MUTED — enabled=false 만 · sender 유지')
-  assert.deepEqual(x.r.ws.last(Op.TRACK_SET).body, { room_id: 'r1', track_id: 't-mic', muted: true })
+  assert.deepEqual(x.r.ws.last(Op.TRACK_SET).body, { room_id: 'r1', join_id: 'j-r1', track_id: 't-mic', muted: true })
 })
 
 // ══ 재발 시험 — 이번에 고친 결함 ══════════════════════════════════════════════════════════════════
@@ -792,7 +792,7 @@ test('SD-ENTRY-PUB-MOVE-OUT — 서버를 건너는 발언 방 전환 ①(위 �
     const removes = pubReqs(x, 'remove').length
     const sw = x.r.c.setSpeakingRoom('r3').catch(() => undefined)
     await tick()
-    assert.deepEqual(x.r.ws.last(Op.AFFILIATION).body, { pub_deselect: 'r1' }, '옛 서버 해제 요청')
+    assert.deepEqual(x.r.ws.last(Op.AFFILIATION).body, { pub_deselect: 'r1', pub_deselect_join_id: 'j-r1' }, '옛 서버 해제 요청')
     assert.equal(spy.n('moveOut'), 2, 'SD-ENTRY-PUB-MOVE-OUT① — 내 트랙마다 ENTRY.moveOut 하나')
     const byHere = spy.calls['moveOut']!.map((a) => a[0]).sort()
     assert.deepEqual(byHere, [false, true], 'SD-ENTRY-PUB-MOVE-OUT① — 읽는 값 here = 트랙의 서버가 떠나는 발행 방(r1)의 서버다')
@@ -850,7 +850,7 @@ test('SD-ENTRY-PUB-SET-DUPLEX — LocalTrack.setDuplex() 가 ENTRY.setDuplex 하
     const d = t.setDuplex('half'); await tick()
     assert.deepEqual([spy.n('setDuplex'), spy.calls['setDuplex']![0]], [1, ['half']], 'SD-ENTRY-PUB-SET-DUPLEX① — 입구 setDuplex 하나 · 바라는 duplex')
     assert.equal(planOf(spy, 'setDuplex').label, 'PUB.C.any.set_duplex', '결합 코드 ENTRY 를 지난다')
-    assert.deepEqual(x.r.ws.requests(Op.TRACK_SET).map((f) => f.body), [{ room_id: 'r1', track_id: 't-mic', duplex: 'half' }], 'SD-ENTRY-PUB-SET-DUPLEX① — TRACK_SET{duplex} 하나(기준 방 = 발언 방)')
+    assert.deepEqual(x.r.ws.requests(Op.TRACK_SET).map((f) => f.body), [{ room_id: 'r1', join_id: 'j-r1', track_id: 't-mic', duplex: 'half' }], 'SD-ENTRY-PUB-SET-DUPLEX① — TRACK_SET{duplex} 하나(기준 방 = 발언 방)')
     assert.deepEqual([t.state, t.core.gateOpen, s.replaced.length, t.core.duplex], ['sending', true, replaced, 'full'], 'SD-ENTRY-PUB-SET-DUPLEX② — 응답 전 브라우저 손잡이 0(게이트 · 반이중 여부 그대로)')
     answerLast(x, Op.TRACK_SET, { ssrc: 1000, duplex: 'half' }); await d
   } finally { spy.restore() }
@@ -897,10 +897,13 @@ test('SD-EFFECT-PUB-APP-DUPLEX — 위 효과 app.duplex(응답 · noop 포함)�
     answerLast(x, Op.TRACK_SET, { ssrc: 1000, duplex: 'half' }); await d
     assert.deepEqual(planOf(spy, 'setDuplexRes').events, ['duplexApplied'], 'SD-EFFECT-PUB-APP-DUPLEX — 결합 plan() 이 낸다')
     assert.deepEqual([done, dev.enabled, t.muted, t.core.gateOpen, t.core.profile], [true, true, false, false, 'ptt'], 'SD-EFFECT-PUB-APP-DUPLEX①② — resolve · enabled=true · 게이트 닫힘 · 프로필 ptt(응답 뒤)')
-    // noop — 서버가 이미 그 상태라고 하면 바꿀 것 없이 resolve
+    // noop — 서버가 이미 그 상태라고 해도 그 값이 클라와 다르면 그 값으로 맞춘다(다시 보낸 전환의 응답 — 연:RULE-TRN-IDEMPOTENT) · 어느 쪽이든 app.duplex 로 resolve
     const n = t.setDuplex('full'); await tick()
-    answerLast(x, Op.TRACK_SET, { ssrc: 1000, noop: true }); await n
-    assert.deepEqual([planOf(spy, 'setDuplexRes').label, planOf(spy, 'setDuplexRes').events], ['PUB.C.any.set_noop', ['duplexApplied']], 'SD-EFFECT-PUB-APP-DUPLEX① — noop 도 app.duplex 로 resolve')
+    answerLast(x, Op.TRACK_SET, { ssrc: 1000, duplex: 'full', noop: true }); await n
+    assert.deepEqual([planOf(spy, 'setDuplexRes').label, planOf(spy, 'setDuplexRes').events], ['PUB.C.REGISTERED.set_full', ['duplexApplied']], 'SD-EFFECT-PUB-APP-DUPLEX① — 값이 다른 noop 도 app.duplex 로 resolve')
+    const same = t.setDuplex('half'); await tick()
+    answerLast(x, Op.TRACK_SET, { ssrc: 1000, duplex: 'full', noop: true }); await same
+    assert.deepEqual([planOf(spy, 'setDuplexRes').label, planOf(spy, 'setDuplexRes').events], ['PUB.C.any.set_noop', ['duplexApplied']], 'SD-EFFECT-PUB-APP-DUPLEX① — 값이 지금과 같은 noop(서버가 이미 full)은 set_noop 으로 resolve')
   } finally { spy.restore() }
 })
 
@@ -927,7 +930,7 @@ test('SD-API-CLIENT-SET-SPEAKING-ROOM④ — 새 서버가 거절하면 옛 방�
   await affAnswer(x, FAIL(2006, 'NOT_AUTHORIZED', { denied: ['publish_audio'] }), false)
   const e = await sw
   assert.ok(e instanceof OxLensError && e.code === 2006, 'SD-API-CLIENT-SET-SPEAKING-ROOM④ — setSpeakingRoom() 은 그 실패로 reject')
-  assert.deepEqual(x.r.ws.last(Op.AFFILIATION).body, { pub_select: 'r1' }, 'SD-API-CLIENT-SET-SPEAKING-ROOM④ — 옛 방 pub_select(되돌림)')
+  assert.deepEqual(x.r.ws.last(Op.AFFILIATION).body, { pub_select: 'r1', pub_select_join_id: 'j-r1' }, 'SD-API-CLIENT-SET-SPEAKING-ROOM④ — 옛 방 pub_select(되돌림)')
   const adds = pubReqs(x, 'add').length
   await affAnswer(x, { sub_rooms: ['r1'], pub_room: 'r1', cause: 'user' })
   await drain(x.r, SA)

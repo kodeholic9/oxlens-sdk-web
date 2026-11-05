@@ -5,6 +5,7 @@ import * as PBn from '../gen/pub_binding.js'
 import type { PublishTrack, TrackSetRes } from '../../internal/wire/ws.js'
 import type { SendSlot, Encoding } from '../../internal/link/transport.js'
 import * as Probe from '../../internal/probe.js'
+import { expired, REQ_EXPIRED } from '../../internal/ses/signaling.js'
 import { Emitter } from '../../platform/emitter.js'
 import { Fault, fromFailure, stateFault, closedFault, negotiationFault } from '../../platform/fault.js'
 import { capture } from '../../platform/env.js'
@@ -319,12 +320,21 @@ export class LocalCore {
       }
       const t: Record<string, unknown> = { ...info.track, duplex: tx.duplex ?? this.duplex, simulcast: this.simulcast }
       if (this.kind === 'video') t['source'] = this.source === 'screen' ? 'screen' : 'camera'
-      const body = { action: 'add', room_id: room, tracks: [t as unknown as PublishTrack], ...info.ext }
-      link.request('PUBLISH_TRACKS', body).then((r) => this.reply(r.ok, r.body, 'add', pid), () => undefined)
+      const body = { action: 'add', room_id: room, ...this.media.joinIdIn(room), tracks: [t as unknown as PublishTrack], ...info.ext }
+      link.request('PUBLISH_TRACKS', body).then((r) => this.reply(r.ok, r.body, 'add', pid), (e: unknown) => {
+        // 이 시도의 발행 요청이 기한을 넘겼다 — 발행 전으로 · 앱에 발행 실패(연:RULE-TRN-REQ-ABANDON)
+        if (expired(e) && pid === this.st.req) this.enter('reqExpired', 'PUBLISH_TRACKS.expired', [], closedFault(REQ_EXPIRED))
+      })
     } else {
       if (!this.trackId || !link) return
-      link.request('PUBLISH_TRACKS', { action: 'remove', room_id: this.addressRoom(), track_ids: [this.trackId] }).then((r) => this.reply(r.ok, r.body, 'remove', 0), () => undefined)
+      const room = this.addressRoom()
+      this.sendRemove(link, { action: 'remove', room_id: room, ...this.media.joinIdIn(room), track_ids: [this.trackId] })
     }
+  }
+
+  /** remove — 기한을 넘기면 다시 보낸다(멱등 · 연:RULE-TRN-REQ-ABANDON) */
+  private sendRemove(link: LinkCore, body: Record<string, unknown>): void {
+    link.request('PUBLISH_TRACKS', body).then((r) => this.reply(r.ok, r.body, 'remove', 0), (e: unknown) => { if (expired(e)) this.sendRemove(link, body) })
   }
 
   /** 지목할 방 — 트랙의 방에 들어가 있으면 그 방 · 방을 잃고 남은 반이중이면 그 서버에서 들어가 있는 방(연:RULE-PUB-REMOVE-FORM) */
@@ -340,11 +350,15 @@ export class LocalCore {
     const base = this.duplexBase
     const fail = (cause: string, f: Fault): void => { this.enter('setDuplexRes', cause, [{ duplex: d, noop: false, part: 'fail', code: typeof f.code === 'number' ? f.code : 0 }], f) }
     if (!link || !this.trackId || base === null) { fail('TRACK_SET.local', stateFault('STATE_NOT_PUBLISHED')); return }
-    link.request('TRACK_SET', { room_id: base, track_id: this.trackId, duplex: d }).then((r) => {
+    link.request('TRACK_SET', { room_id: base, ...this.media.joinIdIn(base), track_id: this.trackId, duplex: d }).then((r) => {
       if (!r.ok) { const f = fromFailure(r.body); fail(`TRACK_SET.${f.code}`, f); return }
       const b = r.body as TrackSetRes
       this.enter('setDuplexRes', 'TRACK_SET.res', [{ duplex: b.duplex ?? d, noop: b.noop === true, part: 'res', code: 0 }])
-    }, () => fail('TRACK_SET.closed', closedFault('TRANSPORT')))
+    }, (e: unknown) => {
+      // 기한을 넘겼다 — 확정된 값 그대로 · 서버 값은 이어지는 RESUME 의 publications[] 가 준다(연:RULE-TRN-REQ-ABANDON)
+      if (expired(e)) this.enter('reqExpired', 'TRACK_SET.expired', [], closedFault(REQ_EXPIRED))
+      else fail('TRACK_SET.closed', closedFault('TRANSPORT'))
+    })
   }
 
   /** 발행 응답 — 입구 pubRes · 2006 이면 막힌 비트로 방 권한을 맞춘다(재시도 없음 — SDK:RULE-PUB-DENIED) */
@@ -491,7 +505,7 @@ export class LocalCore {
   /** ROOM pub.room_gone · pub.room_left — 발행한 방을 잃었다 · self = 앱이 떠나기 시작했다(전환 응답을 기다리면 그 응답이 정한다 — 연:RULE-PUB-SET-PROC) */
   roomGone(self: boolean): void { this.enter('roomGone', self ? 'room.left' : 'room', [self]) }
   /** SES pub.resume_check — 이어받기 응답의 발행 목록 대조 */
-  resumeCheck(listed: boolean): void { this.enter('resumeCheck', 'RESUME', [listed]) }
+  resumeCheck(listed: boolean, shalf: boolean): void { this.enter('resumeCheck', 'RESUME', [listed, shalf]) }
 
   /** AFF pub.move_out — 서버를 건너는 발언 방 전환 ① · 읽는 값 here = 이 트랙의 서버가 떠나는 발행 방의 서버다 */
   moveOut(here: boolean): void { if (!this.ended) this.enter('moveOut', 'aff.move_out', [here]) }
@@ -597,7 +611,7 @@ export class LocalCore {
       if (this.duplex === 'half') throw stateFault('STATE_HALF_DUPLEX_NO_MUTE')
       const link = this.link
       if (!this.trackId || !this.roomId || !link) { this.muted = m; this.track.enabled = !m; return }
-      const r = await link.request('TRACK_SET', { room_id: this.roomId, track_id: this.trackId, muted: m })
+      const r = await link.request('TRACK_SET', { room_id: this.roomId, ...this.media.joinIdIn(this.roomId), track_id: this.trackId, muted: m })
       if (!r.ok) throw fromFailure(r.body)
       this.muted = m
       this.track.enabled = !m

@@ -559,7 +559,7 @@ test('SD-EFFECT-SES-APP-REBUILT — 이어받기 실패 뒤 새 세션이면 reb
   await tick(5)
   assert.equal(requests(ws, Op.ROOM_JOIN), 1, '같은 방에 다시 들어간다')
   assert.equal(r.core.rooms.get('r1'), room, '같은 핸들')
-  room.enter('joinRes', 'ROOM_JOIN.res', [{ code: 0, part: 'res', server_config: { pc_mode: '2pc', sfu_id: 1 }, version: { epoch: 1, seq: 1 } }, '2pc'])
+  room.enter('joinRes', 'ROOM_JOIN.res', [{ code: 0, join_id: 1, part: 'res', server_config: { pc_mode: '2pc', sfu_id: 1 }, version: { epoch: 1, seq: 1 } }, '2pc'])
   assert.equal(handle.rebuilding, false, 'SD-EFFECT-SES-APP-REBUILT — 다시 입장하면 rebuilt')
   assert.equal(r.sessions.at(-1)!.recovering, false, '재구축이 끝나면 session 이벤트가 recovering 을 내린다')
   await r.c.close()
@@ -880,3 +880,63 @@ test('K-sym-IMPL-SES-EVENTS-2 — tokenRequired 를 받아 setToken 하면 재�
   await ok.c.close()
 })
 
+
+// ══ 요청 수명 — 대기표(연:RULE-TRN-REQ-LIFE · SDK:IMPL-SES-CLOCK) ═══════════════════
+
+/** 시그널링에 낸 요청을 그대로 적는다 — 소켓이 닫혀 wire 에 안 나간 요청까지 본다 */
+function sends(core: Core): [string, unknown][] {
+  const log: [string, unknown][] = []
+  const sig = core.sig as unknown as { request: (op: string, body: unknown) => Promise<unknown> }
+  const orig = sig.request.bind(sig)
+  sig.request = (op, body) => { log.push([op, body]); return orig(op, body) }
+  return log
+}
+
+test('연:RULE-TRN-REQ-LIFE ②③④⑥ — 끊긴 동안 보낸 요청을 들고 있다가 같은 세션 RESUME 뒤 처음 pid 로 다시 · 끊긴 동안 낸 요청은 그 뒤 · 새 세션이면 버린다', async () => {
+  const r = rig()
+  let ws = await up(r)
+  r.c.join('r1').catch(() => undefined); await real()
+  const join = ws.last(Op.ROOM_JOIN)
+  ws.close(); await tick(5)
+  let later: string | null = null
+  r.core.sig.request('MESSAGE', { room_id: 'r1', content: 'b' }).then((x) => { later = x.ok ? 'ok' : 'fail' }, (f: { name: string }) => { later = f.name })
+  ws = await bind(BIND_OK)
+  assert.equal(r.labels.at(-1), 'SES.C.RESUMING.bind_same')
+  assert.deepEqual([requests(ws, Op.ROOM_JOIN), requests(ws, Op.MESSAGE)], [0, 0], '② 세션이 서기 전(RESUME 응답 전)에는 대기표 요청이 나가지 않는다 · 끊김은 버림이 아니다')
+  ws.reply(Op.RESUME, { snapshot: {}, publications: [], mline_tables: [] }); await real()
+  const again = ws.last(Op.ROOM_JOIN)
+  assert.deepEqual([requests(ws, Op.ROOM_JOIN), again.pid, again.body], [1, join.pid, join.body], '③ 같은 세션이 이어지면 처음 pid · 처음 본문 그대로 다시 보낸다')
+  assert.equal(requests(ws, Op.MESSAGE), 0, '③ 끊긴 동안 낸 요청은 다시 보낸 요청 뒤에 간다(창 1)')
+  ws.reply(Op.ROOM_JOIN, { code: 3005, name: 'X', permanent: true }, false); await real()
+  const msg = ws.last(Op.MESSAGE)
+  assert.ok(msg && msg.pid > join.pid, '⑥ pid 는 세션 동안 이어 센다 — 다시 보낸 요청의 번호와 겹치지 않는다')
+  ws.reply(Op.MESSAGE, {}); await real()
+  assert.equal(later, 'ok')
+  // 새 세션 — 옛 세션의 대기 요청은 버린다(TRANSPORT)
+  ws.close(); await tick(5)
+  let dropped: string | null = null
+  r.core.sig.request('MESSAGE', { room_id: 'r1', content: 'c' }).then(() => { dropped = 'answered' }, (f: { name: string }) => { dropped = f.name })
+  ws = await bind({ ...BIND_OK, session_id: 's-2' })
+  await real()
+  assert.deepEqual([dropped, requests(ws, Op.MESSAGE)], ['TRANSPORT', 0], '④ 새 세션이면 옛 세션의 대기 요청은 버린다 — 새 소켓에 나가지 않는다')
+  await r.c.close()
+})
+
+test('연:RULE-TRN-REQ-LIFE ⑤ · 연:RULE-TRN-REQ-ABANDON · ROOM.C.JOINING.expired — 기한을 넘긴 입장은 그것만 버리고 소켓을 끊는다 · join() 은 closed(REQ_EXPIRED) · join_id 없는 ROOM_LEAVE', async () => {
+  const r = rig()
+  const ws = await up(r)
+  ;(r.core.sig as unknown as { opts: { reqTimeoutMs: number } }).opts.reqTimeoutMs = 30
+  const log = sends(r.core)
+  const rooms: string[] = []
+  r.c.diagnostics.on('transition', (t) => { if (t.layer === 'ROOM') rooms.push(t.label) })
+  let err: unknown = null
+  r.c.join('r1').catch((e: unknown) => { err = e })
+  await real()
+  assert.equal(requests(ws, Op.ROOM_JOIN), 1)
+  for (let i = 0; i < 300 && err === null; i++) await tick(10)
+  assert.ok(err instanceof OxLensError && err.category === 'closed' && err.name === 'REQ_EXPIRED', `입장 실패는 closed(REQ_EXPIRED) — 다시 시도할 수 있는 분류: ${String(err)}`)
+  assert.ok(rooms.includes('ROOM.C.JOINING.expired'), '위 경우 ROOM.C.JOINING.expired')
+  assert.deepEqual(log.filter(([op]) => op === 'ROOM_LEAVE'), [['ROOM_LEAVE', { room_id: 'r1' }]], '서버 맞추기 — 입장 응답을 못 받았으니 join_id 없는 퇴장(연:RULE-ROOM-LEAVE-FORM)')
+  assert.equal(ws.readyState, 3, '⑤ 기한을 넘기면 소켓을 끊는다')
+  await r.c.close()
+})

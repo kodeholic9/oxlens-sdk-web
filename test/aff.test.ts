@@ -109,7 +109,7 @@ test('SD-ENTRY-AFF-DESELECT — setSpeakingRoom(null) 이 ENTRY.deselect 하나 
     await tick()
     assert.equal(spy.n('deselect'), 1, 'SD-ENTRY-AFF-DESELECT — setSpeakingRoom(null) 하나에 ENTRY.deselect 하나')
     const f = await affReply(r, res(['r1'], null))
-    assert.deepEqual(f.body, { pub_deselect: 'r1' }, 'SD-ENTRY-AFF-DESELECT — 지금 발언 방을 빼는 요청 하나')
+    assert.deepEqual(f.body, { pub_deselect: 'r1', pub_deselect_join_id: 'j-r1' }, 'SD-ENTRY-AFF-DESELECT — 지금 발언 방을 빼는 요청 하나')
     await d
     assert.equal(r.c.speakingRoom, null)
     await r.c.setSpeakingRoom(null)
@@ -184,7 +184,7 @@ test('SD-ENTRY-AFF-JOIN-SELECT①② — 발언 방 · 전환이 없을 때 talk
     r.ws.answer(joinFrame(r.ws, 'rb'), joinBody(r, 'rb', { pub: 'ra' }))
     await tick(); await drain(r)
     const f = await affReply(r, { code: 1006, name: 'CODEC_MISMATCH', permanent: true }, false)
-    assert.deepEqual(f.body, { pub_deselect: 'ra', pub_select: 'rb' }, 'SD-ENTRY-AFF-JOIN-SELECT② — 입장 뒤 setSpeakingRoom(rb)')
+    assert.deepEqual(f.body, { pub_deselect: 'ra', pub_deselect_join_id: 'j-ra', pub_select: 'rb', pub_select_join_id: 'j-rb' }, 'SD-ENTRY-AFF-JOIN-SELECT② — 입장 뒤 setSpeakingRoom(rb)')
     const hb = await pb
     assert.deepEqual([hb.state, r.c.speakingRoom?.id, failed.length], ['joined', 'ra', 1], 'SD-ENTRY-AFF-JOIN-SELECT② — 전환이 실패해도 방에 남는다 · 발언 방 그대로 · speakingRoomFailed')
     // ② 전환이 떠 있음 — 응답 전 talk 입장은 select:false
@@ -335,7 +335,7 @@ test('SD-ENTRY-AFF-DOWN — 재구축이 방을 내림(위 이음매 aff.down)�
     linkOf(r, SA)
     r.ws.answer(joinFrame(r.ws, 'r1'), joinBody(r, 'r1', { pub: null }))
     await tick(); await tick()
-    assert.deepEqual([affs(r), r.ws.last(Op.AFFILIATION).body], [1, { pub_select: 'r1' }], 'SD-ENTRY-AFF-DOWN③ — 다시 들어간 뒤 AFFILIATION{pub_select} 하나(위 경우 AFF.C.any.implicit_back)')
+    assert.deepEqual([affs(r), r.ws.last(Op.AFFILIATION).body], [1, { pub_select: 'r1', pub_select_join_id: 'j-r1' }], 'SD-ENTRY-AFF-DOWN③ — 다시 들어간 뒤 AFFILIATION{pub_select} 하나(위 경우 AFF.C.any.implicit_back)')
     await affReply(r, res(['r1'], 'r1'))
     assert.deepEqual([speakingId(r), r.core.rooms.aff.st.back], ['r1', 'NONE'], 'SD-ENTRY-AFF-DOWN③ — 발언 방을 되찾는다')
     await r.c.close()
@@ -398,7 +398,7 @@ test('SD-EFFECT-AFF-APP-AFF-FAILED — 위 효과 app.aff_failed 는 speakingRoo
   assert.ok(e2 instanceof OxLensError && e2.code === 2006, 'SD-EFFECT-AFF-APP-AFF-FAILED — 실패 응답이면 그 응답 코드의 분류로 reject')
   assert.deepEqual([failed.length, r.c.speakingRoom, seen], [3, null, [null]], 'SD-EFFECT-AFF-APP-AFF-FAILED — 응답이 바꾼 만큼만(해제는 반영)')
   const back = await affReply(r, res(['r1', 'r2'], 'r1'))
-  assert.deepEqual([back.body, r.c.speakingRoom?.id, seen], [{ pub_select: 'r1' }, 'r1', [null, 'r1']], 'SD-EFFECT-AFF-APP-AFF-FAILED — 되돌림(옛 방 pub_select)이 서면 발언 방이 돌아온다')
+  assert.deepEqual([back.body, r.c.speakingRoom?.id, seen], [{ pub_select: 'r1', pub_select_join_id: 'j-r1' }, 'r1', [null, 'r1']], 'SD-EFFECT-AFF-APP-AFF-FAILED — 되돌림(옛 방 pub_select)이 서면 발언 방이 돌아온다')
   const d = r.c.setSpeakingRoom(null)
   await affReply(r, res(['r1', 'r2'], null))
   await d
@@ -454,7 +454,7 @@ test('SD-API-CLIENT-SET-SPEAKING-ROOM — 전환은 AFFILIATION 만(발언권 RE
   assert.equal(h1.ptt.state.phase, 'has_permission', 'SD-API-CLIENT-SET-SPEAKING-ROOM — SDK 가 먼저 release() 를 내지 않는다(응답 전 그대로)')
   const f = await affReply(r, res(['r1', 'r2'], 'r2'))
   await p
-  assert.deepEqual(f.body, { pub_deselect: 'r1', pub_select: 'r2' }, 'SD-API-CLIENT-SET-SPEAKING-ROOM — 같은 서버면 소속 요청 하나')
+  assert.deepEqual(f.body, { pub_deselect: 'r1', pub_deselect_join_id: 'j-r1', pub_select: 'r2', pub_select_join_id: 'j-r2' }, 'SD-API-CLIENT-SET-SPEAKING-ROOM — 같은 서버면 소속 요청 하나')
   const sent = r.ws.frames().filter((x) => x.kind === 'request').slice(before).map((x) => x.op)
   assert.deepEqual(sent, [Op.AFFILIATION], 'SD-API-CLIENT-SET-SPEAKING-ROOM① — WS 요청은 AFFILIATION 만(재발행 · 재협상 0)')
   assert.ok(!dc.includes(C.Type.REQUEST) && !dc.includes(C.Type.RELEASE), 'SD-API-CLIENT-SET-SPEAKING-ROOM①② — 발언권 REQUEST 0 · 클라 RELEASE 0')
@@ -480,6 +480,6 @@ test('연:RULE-ROOM-JOIN-START 2 — select:true 입장이 떠 있는 동안의 
   await p
   const f = await affReply(r, res(['r1', 'ra'], 'r1'))
   await s
-  assert.deepEqual([f.body, done, r.c.speakingRoom?.id], [{ pub_deselect: 'ra', pub_select: 'r1' }, true, 'r1'], '입장이 정한 발언 방에서 고른 방으로 옮긴다')
+  assert.deepEqual([f.body, done, r.c.speakingRoom?.id], [{ pub_deselect: 'ra', pub_deselect_join_id: 'j-ra', pub_select: 'r1', pub_select_join_id: 'j-r1' }, true, 'r1'], '입장이 정한 발언 방에서 고른 방으로 옮긴다')
   await r.c.close()
 })

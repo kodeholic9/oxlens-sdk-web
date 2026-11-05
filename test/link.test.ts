@@ -457,9 +457,10 @@ test('SD-ENTRY-LINK-REBUILT — 재구축의 새 PeerLink 결과가 ENTRY.rebuil
       assert.equal(x.link.state, 'rebuilding')
       const trustBefore = x.r.c.rooms.get('r1')?.ptt.state.trusted
       await until(() => x.r.ws.requests(Op.ROOM_JOIN).length === 2)
+      assert.equal((joinFrame(x.r.ws, 'r1').body as { join_id?: string }).join_id, 'j-r1', '재구축의 다시 입장은 갈아 끼울 입장의 join_id 를 싣는다(연:RULE-ROOM-JOIN-REPLACE)')
       spy.reset()
       const sc: ServerConfig = { ...SA, ice: { ...SA.ice, publish_ufrag: 'pubUf9' } }
-      x.r.ws.answer(joinFrame(x.r.ws, 'r1'), joinBody(x.r, 'r1', { sc, arev: 2 }))
+      x.r.ws.answer(joinFrame(x.r.ws, 'r1'), joinBody(x.r, 'r1', { sc, arev: 2, jid: 'j-r1-new' }))
       await until(() => FakePC.made.length === 2 && FakePC.made[1]!.remoteDescription !== null)
       await tick()
       const fresh = FakePC.made[1]!
@@ -469,6 +470,7 @@ test('SD-ENTRY-LINK-REBUILT — 재구축의 새 PeerLink 결과가 ENTRY.rebuil
       assert.equal(spy.n('rebuilt'), 1, `SD-ENTRY-LINK-REBUILT — 새 연결의 결과(stood=${stood})가 ENTRY.rebuilt 하나`)
       assert.deepEqual(spy.calls['rebuilt']![0], [x.r.core.epochs.id('ufrag:pubUf9'), stood], 'SD-ENTRY-LINK-REBUILT — g = 새 자격의 세대 · stood')
       assert.equal(x.link.state, stood ? 'up' : 'restarting')
+      assert.equal(x.r.core.rooms.get('r1')?.joinId, 'j-r1-new', '갈아 끼운 입장의 응답이 준 새 join_id 를 뒤 요청이 싣는다(연:RULE-ROOM-JOIN-ID)')
       if (stood) assert.deepEqual([trustBefore, x.r.c.rooms.get('r1')?.ptt.state.trusted], [false, true], 'K-sym-RULE-FLR-ROOM-SWITCH-2 — DC 소진 · 연관 소멸로 재구축되면 trusted 거짓 · 새 연결의 DC 가 서면 참(연:LINK.C.REBUILD.rebuilt 의 floor.dc_up — 거짓에 남으면 canRequest 가 막혀 PTT 를 못 누른다)')
       await x.r.c.close()
     }
@@ -663,7 +665,7 @@ test('SD-ENTRY-LINK-PUB-LOST — 이어받기 응답에 내 발행이 없으면(
     const t = new LocalCore(x.r.core.media, 'audio', 'external', fakeTrack('audio') as unknown as MediaStreamTrack, 'external', {})
     t.st = { ...t.st, ps: 'REGISTERED' }
     t.sfuId = 'sfu-a'
-    t.resumeCheck(false)
+    t.resumeCheck(false, false)
     assert.equal(spy.n('pubLost'), 1, 'SD-ENTRY-LINK-PUB-LOST — 발행 상태기의 resume_unlisted 이음매가 그 서버 ENTRY.pubLost 하나')
     assert.equal(x.link.state, 'rebuilding')
     await x.r.c.close()

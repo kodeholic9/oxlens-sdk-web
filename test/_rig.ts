@@ -71,7 +71,7 @@ export async function drain(r: Rig, sc: ServerConfig = SA, ok = true): Promise<v
   for (let i = 0; i < 6; i++) { r.peers.get(sc.sfu_id)?.settle(ok); await tick() }
 }
 
-export interface JB { sc?: ServerConfig; me?: Permission; meSelect?: boolean; hidden?: boolean; others?: MemberInfo[]; pub?: string | null; subs?: string[]; epoch?: string; seq?: number; tracks?: TrackEntry[]; mlines?: MlineEntry[]; arev?: number }
+export interface JB { sc?: ServerConfig; me?: Permission; meSelect?: boolean; hidden?: boolean; others?: MemberInfo[]; pub?: string | null; subs?: string[]; epoch?: string; seq?: number; tracks?: TrackEntry[]; mlines?: MlineEntry[]; arev?: number; jid?: string }
 
 export const mem = (user_id: string, permission?: Permission, o: { select?: boolean; type?: 0 | 1 | 2 } = {}): MemberInfo => ({ user_id, select: o.select ?? false, participant_type: o.type ?? 0, ...(permission ? { permission } : {}) })
 
@@ -81,7 +81,7 @@ export function joinBody(r: Rig, id: string, o: JB = {}): RoomJoinRes {
   const subs = o.subs ?? [...new Set([...[...r.core.rooms.values()].filter((x) => x.sfuId === sc.sfu_id && x.st.rs === 'JOINED').map((x) => x.id), id])]
   const me = mem('u1', o.me, { select: o.meSelect ?? false })
   return {
-    room_id: id, participants: [...(o.hidden ? [] : [me]), ...(o.others ?? [])], me, affiliation: { sub_rooms: subs, pub_room: o.pub ?? null },
+    room_id: id, join_id: o.jid ?? `j-${id}`, participants: [...(o.hidden ? [] : [me]), ...(o.others ?? [])], me, affiliation: { sub_rooms: subs, pub_room: o.pub ?? null },
     server_config: sc, tracks: o.tracks ?? [], version: { epoch: o.epoch ?? 'e1', seq: o.seq ?? 1 }, media_codecs: { audio: 'opus', video: 'H264' },
     mline_table: { sfu_id: sc.sfu_id, arev: o.arev ?? 1, mlines: o.mlines ?? [] },
   }

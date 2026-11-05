@@ -188,6 +188,7 @@ export interface ExtMap {
 /** PUB.type.Publication — 발행 층 (§[SES.op]) */
 export interface Publication {
   readonly track_id: string
+  readonly mid: string
   readonly room_id: string
   readonly kind: "audio" | "video"
   readonly duplex: "full" | "half"
@@ -367,6 +368,8 @@ export interface TokenRes {
 export interface AffiliationReq {
   readonly pub_select?: string
   readonly pub_deselect?: string
+  readonly pub_select_join_id?: string
+  readonly pub_deselect_join_id?: string
   readonly change_id?: string
 }
 
@@ -429,8 +432,8 @@ export interface MlineEventBody {
 
 /** PUB.op.PUBLISH_TRACKS.req — 0x0301 보낼 트랙 발행 */
 export type PublishTracksReq =
-  | { readonly action?: "add" | "remove"; readonly room_id: string; readonly tracks: PublishTrack[]; readonly twcc_extmap_id?: number; readonly rid_extmap_id?: number; readonly repair_rid_extmap_id?: number; readonly mid_extmap_id?: number; readonly audio_level_extmap_id?: number }
-  | { readonly action: "remove"; readonly room_id: string; readonly track_ids: string[] }
+  | { readonly action?: "add" | "remove"; readonly join_id: string; readonly room_id: string; readonly tracks: PublishTrack[]; readonly twcc_extmap_id?: number; readonly rid_extmap_id?: number; readonly repair_rid_extmap_id?: number; readonly mid_extmap_id?: number; readonly audio_level_extmap_id?: number }
+  | { readonly action: "remove"; readonly room_id: string; readonly join_id: string; readonly track_ids: string[] }
 
 /** PUB.op.PUBLISH_TRACKS.res — 0x0301 보낼 트랙 발행 */
 export type PublishTracksRes =
@@ -440,6 +443,7 @@ export type PublishTracksRes =
 /** PUB.op.TRACK_SET.req — 0x0304 트랙 상태 바꾸기 */
 export interface TrackSetReq {
   readonly room_id: string
+  readonly join_id: string
   readonly track_id?: string
   readonly ssrc?: number
   readonly muted?: boolean
@@ -461,11 +465,13 @@ export interface RoomJoinReq {
   readonly select?: boolean
   readonly extmap?: ExtMap[]
   readonly codecs?: ({ readonly kind: "audio" | "video"; readonly pt: number; readonly name: string; readonly fmtp?: string; readonly rtx_pt?: number })[]
+  readonly join_id?: string
 }
 
 /** ROOM.op.ROOM_JOIN.res — 0x0201 방 입장 */
 export interface RoomJoinRes {
   readonly room_id: string
+  readonly join_id: string
   readonly participants: MemberInfo[]
   readonly me: MemberInfo
   readonly affiliation: Affiliation
@@ -479,6 +485,7 @@ export interface RoomJoinRes {
 /** ROOM.op.ROOM_LEAVE.req — 0x0202 방 퇴장 */
 export interface RoomLeaveReq {
   readonly room_id: string
+  readonly join_id?: string
 }
 
 /** ROOM.op.ROOM_LEAVE.res — 0x0202 방 퇴장 */
@@ -562,6 +569,7 @@ export interface LeaveBody {
 /** SUB.op.READY.req — 0x0302 준비 됐다 */
 export interface ReadyReq {
   readonly room_id: string
+  readonly join_id: string
   readonly arev: number
 }
 
@@ -571,6 +579,7 @@ export type ReadyRes = Record<string, never>
 /** SUB.op.SUBSCRIBE_LAYER.req — 0x0303 받을 레이어 고르기 */
 export interface SubscribeLayerReq {
   readonly room_id: string
+  readonly join_id: string
   readonly targets: { readonly track_id: string; readonly spatial?: number; readonly temporal?: number; readonly paused?: boolean; readonly priority?: number }[]
 }
 

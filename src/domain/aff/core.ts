@@ -121,12 +121,14 @@ export class AffCore {
 
   private send(tx: AFF.Tx): void {
     const body: Record<string, unknown> = {}
-    if (tx.pub_deselect !== undefined) body['pub_deselect'] = tx.pub_deselect
-    if (tx.pub_select !== undefined) body['pub_select'] = tx.pub_select
+    // 방 칸마다 그 방 지금 입장의 join_id(연:RULE-ROOM-JOIN-ID)
+    if (tx.pub_deselect !== undefined) { body['pub_deselect'] = tx.pub_deselect; const j = this.rooms.get(tx.pub_deselect)?.joinId; if (j) body['pub_deselect_join_id'] = j }
+    if (tx.pub_select !== undefined) { body['pub_select'] = tx.pub_select; const j = this.rooms.get(tx.pub_select)?.joinId; if (j) body['pub_select_join_id'] = j }
     // 응답할 서버 — 고르는 방의 서버(같은 서버 전환이면 빼는 방과 같다) · 빼기만이면 빼는 방의 서버
     const server = this.rooms.get(tx.pub_select ?? tx.pub_deselect ?? '')?.sfuId ?? null
-    this.rooms.request('AFFILIATION', body).then((r) => this.reply(r, server), () => {
-      this.enter('res', 'AFFILIATION.closed', [false, NONE, false, false, false], false, closedFault('TRANSPORT'))
+    // 기한 초과도 응답 실패와 같이 — 서버 값은 이어지는 RESUME 스냅샷의 소속이 준다(연:RULE-TRN-REQ-ABANDON)
+    this.rooms.request('AFFILIATION', body).then((r) => this.reply(r, server), (e: unknown) => {
+      this.enter('res', 'AFFILIATION.closed', [false, NONE, false, false, false], false, e instanceof Fault ? e : closedFault('TRANSPORT'))
     })
   }
 

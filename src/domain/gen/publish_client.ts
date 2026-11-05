@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/pub/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 78125d51524c9506 · 영역 PUB 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 540e8866d38d6355 · 영역 PUB 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -188,25 +188,25 @@ export function floorClose(s: St): Step {
   return done(s, s, 'PUB.C.any.floor_close_other', [], [], [], [])
 }
 
-/** RESUME 성공 — 응답의 publications[] 에 내 발행이 있나(listed)를 본다(RULE-SES-RES-RESUME-OK 2 ③ · 4) · 끊긴 동안 사라진 요청 · 응답도 이것으로 잡는다 */
-export function resumeCheck(s: St, listed: boolean): Step {
+/** RESUME 성공 — 응답의 publications[] 에 내 발행이 있나(listed) · 있으면 서버가 아는 반이중 여부(shalf — 그 항목의 duplex)를 본다(RULE-SES-RES-RESUME-OK 2 ③ · 4 · RULE-TRN-REQ-ABANDON 의 TRACK_SET 행) · 끊긴 동안 사라진 요청 · 응답도 이것으로 잡는다 */
+export function resumeCheck(s: St, listed: boolean, shalf: boolean): Step {
+  if (s.lost && (s.ps === 'REGISTERED' || s.ps === 'SENDING') && !listed) {
+    return done(s, { ...s, lost: false, ps: 'IDLE', nego: false }, 'PUB.C.any.resume_lost_drop', [], ['track.detach'], [], [])
+  }
+  if (s.lost && !s.dset && (s.ps === 'REGISTERED' || s.ps === 'SENDING')) {
+    return done(s, { ...s, lost: false, half: shalf, ps: shalf ? 'REGISTERED' : s.ps }, 'PUB.C.any.resume_lost_keep', [], ['track.detach', 'app.duplex'], [], [])
+  }
   if ((s.ps === 'REGISTERED' || s.ps === 'SENDING') && !listed) {
     return done(s, s, 'PUB.C.any.resume_unlisted', [], [], [{ fx: 'link.pub_lost', to: 'LINK', at: 'sameServer' }], [])
   }
-  if (s.ps === 'STAGED' && !s.nego && listed && !s.want) {
-    return done(s, { ...s, ps: 'IDLE' }, 'PUB.C.STAGED.resume_listed_unwanted', [{ ws: 'PUBLISH_TRACKS', part: 'req', action: 'remove' }], [], [], [])
+  if ((s.ps === 'REGISTERED' || s.ps === 'SENDING') && shalf && !s.half) {
+    return done(s, { ...s, half: true, ps: 'REGISTERED' }, 'PUB.C.any.resume_half', [], ['track.detach', 'app.duplex'], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
   }
-  if (s.ps === 'STAGED' && !s.nego && listed && s.half) {
-    return done(s, { ...s, ps: 'REGISTERED' }, 'PUB.C.STAGED.resume_listed_half', [], [], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
-  }
-  if (s.ps === 'STAGED' && !s.nego && listed) {
-    return done(s, { ...s, ps: 'REGISTERED' }, 'PUB.C.STAGED.resume_listed', [], [], [], [])
-  }
-  if (s.ps === 'STAGED' && !s.nego && s.want) {
-    return done(s, { ...s, rid: s.rid + 1, req: s.rid + 1 }, 'PUB.C.STAGED.resume_unlisted', [{ ws: 'PUBLISH_TRACKS', part: 'req', action: 'add', duplex: s.half ? 'half' : 'full' }], [], [], [])
+  if ((s.ps === 'REGISTERED' || s.ps === 'SENDING') && !shalf && s.half) {
+    return done(s, { ...s, half: false, ps: 'SENDING' }, 'PUB.C.any.resume_full', [], ['track.attach', 'app.duplex'], [], [])
   }
   if (s.ps === 'STAGED' && !s.nego) {
-    return done(s, { ...s, ps: 'IDLE' }, 'PUB.C.STAGED.resume_unlisted_unwanted', [], [], [], [])
+    return done(s, s, 'PUB.C.STAGED.resume_pending', [], [], [], [])
   }
   if ((s.ps === 'IDLE' || (s.ps === 'STAGED' && s.nego)) && listed) {
     return done(s, s, 'PUB.C.any.resume_orphan', [{ ws: 'PUBLISH_TRACKS', part: 'req', action: 'remove' }], [], [], [])
@@ -226,6 +226,9 @@ export function dropServer(s: St): Step {
 export function roomGone(s: St, self: boolean): Step {
   if (self && s.dset && (s.ps === 'REGISTERED' || s.ps === 'SENDING')) {
     return done(s, { ...s, lost: true }, 'PUB.C.any.room_gone_pending', [], [], [], [])
+  }
+  if (!self && s.dset && (s.ps === 'REGISTERED' || s.ps === 'SENDING')) {
+    return done(s, { ...s, lost: true }, 'PUB.C.any.room_gone_kicked_pending', [], [], [], [])
   }
   if (!s.half && (s.ps === 'REGISTERED' || s.ps === 'SENDING')) {
     return done(s, { ...s, ps: 'IDLE', nego: false, lost: false }, 'PUB.C.any.room_gone', [], ['track.detach'], [], [])
@@ -267,9 +270,21 @@ export function moveIn(s: St): Step {
   return done(s, s, 'PUB.C.any.move_in_other', [], [], [], [])
 }
 
+/** 응답 없이 버려진 발행 · 전환 요청 — 상태를 맞추고 앱에 알린다(§[RULE-TRN-REQ-ABANDON]) · remove 는 응답을 기다리지 않으니 버릴 것이 없다 (바깥: 이 트랙의 발행 · 전환 요청이 기한(T-req)을 넘겼다 — 응답 없이 버린다(운반 · RULE-TRN-REQ-LIFE 5)) — 받는 상태 밖이면 null(사건이 없던 것) */
+export function reqExpired(s: St): Step | null {
+  if (!((s.ps === 'STAGED' && !s.nego) || s.dset)) return null
+  if (s.ps === 'STAGED' && !s.nego) {
+    return done(s, { ...s, ps: 'IDLE', req: 0 }, 'PUB.C.STAGED.expired', [], ['app.publish_failed'], [], [])
+  }
+  if (s.lost) {
+    return done(s, { ...s, dset: false }, 'PUB.C.any.expired_lost', [], ['app.duplex_failed'], [], [])
+  }
+  return done(s, { ...s, dset: false, lost: false }, 'PUB.C.any.expired_set', [], ['app.duplex_failed'], [], [])
+}
+
 /** 무전 ↔ 회의 전환을 보낸다(TRACK_SET{duplex} — 이 경로로만 · RULE-PUB-SET-PROC) · 응답 전엔 아무것도 바꾸지 않는다 (앱: 앱이 트랙을 반이중 · 전이중으로 바꾸려 한다) — 받는 상태 밖이면 null(사건이 없던 것) */
 export function setDuplex(s: St, d: Duplex): Step | null {
-  if (!((s.ps === 'REGISTERED' || s.ps === 'SENDING') && !s.dset)) return null
+  if (!((s.ps === 'REGISTERED' || s.ps === 'SENDING') && !s.dset && !s.lost)) return null
   return done(s, { ...s, dset: true }, 'PUB.C.any.set_duplex', [{ ws: 'TRACK_SET', part: 'req', duplex: d }], [], [], [])
 }
 
@@ -287,7 +302,7 @@ export function setDuplexRes(s: St, m: { readonly code: number; readonly duplex:
   if (m.part !== 'res') {
     return done(s, { ...s, dset: false, lost: false }, 'PUB.C.any.set_fail', [], ['app.duplex_failed'], [], [])
   }
-  if (m.noop) {
+  if (m.noop && (m.duplex === 'half') === s.half) {
     return done(s, { ...s, dset: false, lost: false }, 'PUB.C.any.set_noop', [], ['app.duplex'], [], [])
   }
   if (m.duplex === 'half' && s.ps === 'SENDING') {

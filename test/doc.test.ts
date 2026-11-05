@@ -149,7 +149,7 @@ function serve(): Server {
         if (b['select'] === true) pub = id
         const me = { user_id: 'u1', select: b['select'] === true, participant_type: 0 as const, permission: { publish_audio: true, publish_video: true, publish_screen: true, floor_request: true } }
         const body: RoomJoinRes = {
-          room_id: id, participants: [me, { user_id: 'u2', select: true, participant_type: 0 }], me, affiliation: { sub_rooms: [...sub], pub_room: pub },
+          room_id: id, join_id: `j-${id}`, participants: [me, { user_id: 'u2', select: true, participant_type: 0 }], me, affiliation: { sub_rooms: [...sub], pub_room: pub },
           server_config: SA, tracks: [], version: { epoch: 'e1', seq: 1 }, media_codecs: { audio: 'opus', video: 'H264' }, mline_table: { sfu_id: SA.sfu_id, arev: 1, mlines: [] },
         }
         ws.answer(f, body); return

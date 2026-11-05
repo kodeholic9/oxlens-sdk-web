@@ -3,7 +3,7 @@
 import * as ROOM from '../gen/room_client.js'
 import * as RB from '../gen/room_binding.js'
 import type { RoomJoinRes, MemberInfo, TrackEntry, MediaCodecs, GetRoomRes, RoomSnapshot, Version } from '../../internal/wire/ws.js'
-import type { Reply } from '../../internal/ses/signaling.js'
+import { expired, REQ_EXPIRED, type Reply } from '../../internal/ses/signaling.js'
 import { Emitter } from '../../platform/emitter.js'
 import { Fault, fromFailure, closedFault, negotiationFault } from '../../platform/fault.js'
 import { Timer, sleep, nextTick } from '../../platform/clock.js'
@@ -13,6 +13,9 @@ import { LinkCore } from '../link/core.js'
 import { RoomTracks } from '../trk/tracks.js'
 import type { RemoteCore, RemoteInfo } from '../trk/remote.js'
 import { RoomStore, ALL_TRUE, type Participant, type Permission, type PermissionChange } from './store.js'
+
+/** join_id 칸 — 모르면 싣지 않는다(입장 응답 전 · 버려진 입장의 퇴장 — 연:RULE-ROOM-LEAVE-FORM) */
+const jidField = (j: string | undefined): { join_id?: string } => (j ? { join_id: j } : {})
 
 /** 방 통지의 종류 — 입구 delta 가 받는 wire(위 CDelta from.wire) */
 type DeltaKind = Parameters<typeof ROOM.delta>[1]['t']
@@ -119,6 +122,11 @@ export class RoomCore {
   }
 
   get link(): LinkCore | undefined { return this.core.linkFor(this.sfuId) }
+  /** 지금 이 방 입장의 join_id — 방 상태를 바꾸는 요청이 싣는다 · 입장 응답 전이면 없다(연:RULE-ROOM-JOIN-ID) */
+  get joinId(): string | undefined { return this.st.jsure ? this.jid(this.st.jid) : undefined }
+  /** 위 값을 요청 본문 칸으로 — 모르면 빈 칸 */
+  get joinIdField(): { join_id?: string } { return jidField(this.joinId) }
+  private jid(n: number): string | undefined { return n ? this.core.jids.str(n) : undefined }
 
   get permission(): Permission { return this.store.permission ?? ALL_TRUE }
 
@@ -142,7 +150,7 @@ export class RoomCore {
   }
 
   /** 이 방의 구독 요청 — READY · SUBSCRIBE_LAYER */
-  request(op: 'READY' | 'SUBSCRIBE_LAYER', body: Record<string, unknown>): Promise<Reply> { return this.core.sig.request(op, body) }
+  request(op: 'READY' | 'SUBSCRIBE_LAYER', body: Record<string, unknown>): Promise<Reply> { return this.core.sig.request(op, { ...body, ...jidField(this.joinId) }) }
 
   /** 장착 가능한 받는 트랙 — room.track 과 client.track(SDK:IMPL-TRK-RECEIVE) */
   announce(r: RemoteCore): void {
@@ -249,21 +257,25 @@ export class RoomCore {
   // ── 보낼 것 · 받은 응답 ───────────────────────────────────────────────
 
   private send(tx: ROOM.Tx): void {
-    if (tx.ws === 'ROOM_JOIN') void this.sendJoin()
+    if (tx.ws === 'ROOM_JOIN') void this.sendJoin(tx.join_id)
     else if (tx.ws === 'ROOM_LEAVE') {
       const ep = this.reqEpoch
-      this.core.sig.request('ROOM_LEAVE', { room_id: this.id }).then((r) => {
+      this.core.sig.request('ROOM_LEAVE', { room_id: this.id, ...jidField(this.jid(tx.join_id)) }).then((r) => {
         if (ep !== this.reqEpoch) return
         this.leaveReply(r)
-      }, () => { if (ep === this.reqEpoch) this.enter('leaveRes', 'ROOM_LEAVE.closed', [{ part: 'fail' }]) })
+      }, (e: unknown) => {
+        if (ep !== this.reqEpoch) return
+        if (expired(e)) this.enter('reqExpired', 'ROOM_LEAVE.expired', [])
+        else this.enter('leaveRes', 'ROOM_LEAVE.closed', [{ part: 'fail' }])
+      })
     } else if (tx.ws === 'GET_ROOM') void this.resync()
   }
 
-  /** 1pc 면 입장마다 새 연결로 번호표를 만든다(연:RULE-ROOM-JOIN-START 3) */
-  private async sendJoin(): Promise<void> {
+  /** 1pc 면 입장마다 새 연결로 번호표를 만든다(연:RULE-ROOM-JOIN-START 3) · jid = 갈아 끼울 입장의 join_id(재구축 — 연:RULE-ROOM-JOIN-REPLACE · 0 = 새 입장) */
+  private async sendJoin(jid: number): Promise<void> {
     const ep = this.reqEpoch
     const pcm = this.core.ses.pcm
-    const body: Record<string, unknown> = { room_id: this.id, role: this.role, select: false }
+    const body: Record<string, unknown> = { room_id: this.id, role: this.role, select: false, ...jidField(this.jid(jid)) }
     let fresh: LinkCore | null = null
     if (pcm === '1pc') {
       fresh = LinkCore.candidate(this.core)
@@ -274,7 +286,7 @@ export class RoomCore {
       } catch (e) {
         fresh.peer?.close()
         this.lastFault = negotiationFault('OFFER', e)
-        this.enter('joinRes', 'ROOM_JOIN.offer_fail', [{ code: 1002, part: 'fail', server_config: { pc_mode: pcm, sfu_id: 0 }, version: { epoch: 0, seq: 0 } }, pcm])
+        this.enter('joinRes', 'ROOM_JOIN.offer_fail', [{ code: 1002, join_id: 0, part: 'fail', server_config: { pc_mode: pcm, sfu_id: 0 }, version: { epoch: 0, seq: 0 } }, pcm])
         return
       }
     }
@@ -283,15 +295,17 @@ export class RoomCore {
     this.joinSel = this.rebuilding ? false : this.core.rooms.aff.joinSelect(this.id, this.mode === 'talk')
     body['select'] = this.joinSel
     let r: Reply
-    try { r = await this.core.sig.request('ROOM_JOIN', body) } catch {
+    try { r = await this.core.sig.request('ROOM_JOIN', body) } catch (e) {
       fresh?.peer?.close()
+      // 기한을 넘겨 응답 없이 버렸다 — 상태를 맞추고 앱에 알린다(연:RULE-TRN-REQ-ABANDON) · 새 세션 · 세션 끝은 세션 이음매가 방을 맞춘다
+      if (ep === this.reqEpoch && expired(e)) { this.lastFault = closedFault(REQ_EXPIRED); this.enter('reqExpired', 'ROOM_JOIN.expired', []) }
       return
     }
     if (ep !== this.reqEpoch) { fresh?.peer?.close(); return }
-    await this.joinReply(r, fresh)
+    await this.joinReply(r, fresh, jid)
   }
 
-  private async joinReply(r: Reply, fresh: LinkCore | null): Promise<void> {
+  private async joinReply(r: Reply, fresh: LinkCore | null, jid: number): Promise<void> {
     const pcm = this.core.ses.pcm
     if (!r.ok) {
       fresh?.peer?.close()
@@ -300,16 +314,16 @@ export class RoomCore {
       if (!f.permanent && !NO_RETRY.has(f.code) && f.code !== 4009 && f.code >= 2000 && this.retries < RETRY.length) {
         const wait = RETRY[this.retries++]!
         await sleep(wait)
-        if (this.st.rs === 'JOINING' && !this.st.quit) { void this.sendJoin(); return }
+        if (this.st.rs === 'JOINING' && !this.st.quit) { void this.sendJoin(jid); return }
       }
       if (f.code === 4009) this.retryAfterMs = Math.max(0, Number((f.details ?? {})['retry_after_ms'] ?? 1000))
-      this.enter('joinRes', `ROOM_JOIN.${f.code}`, [{ code: f.code, part: 'fail', server_config: { pc_mode: pcm, sfu_id: 0 }, version: { epoch: 0, seq: 0 } }, pcm])
+      this.enter('joinRes', `ROOM_JOIN.${f.code}`, [{ code: f.code, join_id: 0, part: 'fail', server_config: { pc_mode: pcm, sfu_id: 0 }, version: { epoch: 0, seq: 0 } }, pcm])
       return
     }
     const b = r.body as RoomJoinRes
     this.retries = 0
     const sc = b.server_config
-    const m = { code: 0, part: 'res' as const, server_config: { pc_mode: sc.pc_mode, sfu_id: this.core.epochs.id(sc.sfu_id) }, version: { epoch: this.core.epochs.id(b.version.epoch), seq: b.version.seq } }
+    const m = { code: 0, join_id: this.core.jids.id(b.join_id), part: 'res' as const, server_config: { pc_mode: sc.pc_mode, sfu_id: this.core.epochs.id(sc.sfu_id) }, version: { epoch: this.core.epochs.id(b.version.epoch), seq: b.version.seq } }
     if (sc.pc_mode !== pcm) this.lastFault = negotiationFault('PC_MODE')
     // 이 응답으로 들어가는가는 위 코드가 정한다(미리 보기 — 상태를 바꾸지 않는다) · 들어가면 그 서버 연결부터 세운다(이음매 link.table · sdp.rebuild 가 그 연결을 쓴다)
     if (ROOM.joinRes(this.st, m, pcm)?.s.rs === 'JOINED') {

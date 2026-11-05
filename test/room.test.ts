@@ -540,9 +540,9 @@ test('SD-API-CLIENT-JOIN — 기본은 listen(select:false) · talk 는 발언 �
   await tick(); await drain(r, SB)
   assert.equal((joinFrame(r.ws, 'rb').body as { select: boolean }).select, false, 'SD-API-CLIENT-JOIN — 발언 방이 있으면 입장이 가로채지 않는다(select:false)')
   const first = await affReply(r, { sub_rooms: ['r1', 'ra'], pub_room: null, cause: 'user' })
-  assert.deepEqual(first.body, { pub_deselect: 'ra' }, 'SD-API-CLIENT-JOIN — 다른 서버 발언 방을 먼저 내린다')
+  assert.deepEqual(first.body, { pub_deselect: 'ra', pub_deselect_join_id: 'j-ra' }, 'SD-API-CLIENT-JOIN — 다른 서버 발언 방을 먼저 내린다')
   const second = await affReply(r, { sub_rooms: ['rb'], pub_room: 'rb', cause: 'user' })
-  assert.deepEqual(second.body, { pub_select: 'rb' }, 'SD-API-CLIENT-JOIN — 내린 뒤 새 방을 고른다')
+  assert.deepEqual(second.body, { pub_select: 'rb', pub_select_join_id: 'j-rb' }, 'SD-API-CLIENT-JOIN — 내린 뒤 새 방을 고른다')
   const hb = await p
   assert.deepEqual([hb.mode, r.c.speakingRoom?.id], ['talk', 'rb'])
   await r.c.close()

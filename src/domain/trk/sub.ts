@@ -3,6 +3,7 @@
 import * as SUB from '../gen/sub_client.js'
 import * as UB from '../gen/sub_binding.js'
 import { Fault, fromFailure, closedFault } from '../../platform/fault.js'
+import { expired } from '../../internal/ses/signaling.js'
 import type { RoomCore } from '../room/core.js'
 
 /** 입구 표의 입구 — 위 결합(sub_binding)의 ENTRY 열쇠 그대로 */
@@ -56,7 +57,7 @@ export class Subscription {
       if (this.room.closed) return
       this.readyFault = r.ok ? null : fromFailure(r.body)
       this.enter('readyRes', r.ok ? 'READY.res' : 'READY.fail', [{ part: r.ok ? 'res' : 'fail' }])
-    }, () => undefined)
+    }, (e: unknown) => { if (expired(e) && !this.room.closed) this.sendReady() })
   }
 
   /** 받을 레이어 상한 하나를 싣고 입구 layer — 범위는 부르는 쪽(RemoteTrack)이 이미 잘랐다 · 내 요청이라 실패는 reject */
@@ -80,6 +81,13 @@ export class Subscription {
       const f = r.ok ? null : fromFailure(r.body)
       for (const w of waiters) { if (f) w.reject(f); else w.resolve() }
     }, (e: unknown) => {
+      // 기한을 넘겼다 — 마지막 값으로 다시 보낸다(멱등 · 연:RULE-TRN-REQ-ABANDON) · 기다리던 setLayer 는 그 응답이 정한다
+      if (expired(e) && !this.room.closed) {
+        for (const t of targets) if (!this.queue.has(t.track_id)) this.queue.set(t.track_id, t)
+        this.waiters.unshift(...waiters)
+        this.flushLayers()
+        return
+      }
       const f = e instanceof Fault ? e : closedFault('TRANSPORT')
       for (const w of waiters) w.reject(f)
     })

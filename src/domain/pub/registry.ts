@@ -104,6 +104,9 @@ export class MediaRegistry {
   /** 그 방에 들어가 있다(JOINED) */
   joinedIn(roomId: string): boolean { return this.rooms.get(roomId)?.st.rs === 'JOINED' }
 
+  /** 그 방 지금 입장의 join_id — 발행 · 전환 요청이 싣는다(연:RULE-ROOM-JOIN-ID) */
+  joinIdIn(roomId: string): { join_id?: string } { return this.rooms.get(roomId)?.joinIdField ?? {} }
+
   /** 그 서버에서 들어가 있는 방 — 발언 방이 그 서버면 그 방 · 아니면 들어가 있는 아무 방(방을 잃고 남은 반이중의 remove 가 지목한다 — 연:RULE-PUB-REMOVE-FORM) */
   joinedOn(sfuId: string | null): string | null {
     if (sfuId === null) return null
@@ -177,9 +180,12 @@ export class MediaRegistry {
     for (const t of [...this.tracks]) t.moveIn(room)
   }
 
-  /** 이어받기 응답 대조 — 읽는 값 listed = 응답의 발행 목록에 내 트랙이 있다 */
+  /** 이어받기 응답 대조 — 읽는 값 listed = 응답의 발행 목록에 내 트랙이 있다 · shalf = 그 항목의 duplex 가 half(서버가 아는 반이중 여부) */
   resumeCheck(pubs: readonly Publication[]): void {
-    for (const t of [...this.tracks]) t.resumeCheck(t.trackId !== null && pubs.some((p) => p.track_id === t.trackId))
+    for (const t of [...this.tracks]) {
+      const p = t.trackId === null ? undefined : pubs.find((x) => x.track_id === t.trackId)
+      t.resumeCheck(p !== undefined, p?.duplex === 'half')
+    }
   }
 
   // ── Source — 획득(SDK:RULE-SRC-PROFILE 프로필 = duplex 기본) ─────────────

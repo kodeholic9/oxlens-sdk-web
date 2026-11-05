@@ -86,6 +86,8 @@ export class Core {
   readonly diag: Diag
   readonly sids = new Interner()
   readonly epochs = new Interner()
+  /** 방 입장 식별자 join_id(연:RULE-ROOM-JOIN-ID) — 방 상태기는 같은지만 본다 */
+  readonly jids = new Interner()
   readonly clock: SesClock
   token: string
   ses: SES.St = SES.initial()
@@ -238,6 +240,9 @@ export class Core {
     this.record('SES', 'session', prev.cs, this.ses.cs, plan.label, cause, { attempt: this.ses.tries })
     for (const tx of plan.send) this.send(tx)
     this.sockFollow(prev)
+    // 대기표 — 같은 세션이 이어졌으면(app.resumed) 들고 있던 요청이 이음매가 낼 새 요청보다 먼저 · 새 세션이면 버린다 · 끝났으면 closed(연:RULE-TRN-REQ-LIFE 3 · 4)
+    if (this.ses.cs === 'ACTIVE' && prev.cs !== 'ACTIVE') this.sig.sessionUp(step.fx.includes('app.resumed'))
+    if (this.ses.cs === 'DISCONNECTED' && prev.cs !== 'DISCONNECTED') this.sig.sessionEnd(closedFault('CLOSED'))
     this.clock.follow(entry, prev, plan.timers)
     for (const sm of plan.seams) this.seam(sm.fx)
     for (const f of step.fx) this.effect(f, entry)

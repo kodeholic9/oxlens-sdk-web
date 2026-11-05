@@ -1,8 +1,8 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/signaling(SES 의 연결 — internal/ses) · 연:TRN.frame.WS · 연:RULE-TRN-FLOW-CONTROL · 연:RULE-TRN-NOTIFY-ACK-STEPS · 연:RULE-LINK-RECOVERY-WS-FIRST · model: claude-opus-5-5
+// spec: v1.2 @d626fda · SDK:IMPL-MOD-TABLE internal/signaling(SES 의 연결 — internal/ses) · SDK:IMPL-SES-CLOCK · 연:TRN.frame.WS · 연:RULE-TRN-FLOW-CONTROL · 연:RULE-TRN-NOTIFY-ACK-STEPS · 연:RULE-TRN-REQ-LIFE · 연:RULE-LINK-RECOVERY-WS-FIRST · model: claude-opus-5-5
 import { Op, Lane, type OpName, type LeaveBody } from '../wire/ws.js'
 import { openSocket, wsUrl } from '../../platform/net.js'
-import { closedFault, type Fault } from '../../platform/fault.js'
+import { closedFault, Fault } from '../../platform/fault.js'
 import { Queue } from '../../platform/queue.js'
 import { now, sleep, Every } from '../../platform/clock.js'
 import type { Logger } from '../../platform/log.js'
@@ -27,15 +27,24 @@ interface Pending {
   readonly body: unknown
   readonly resolve: (r: Reply) => void
   readonly reject: (f: Fault) => void
+  /** 처음 보낼 때 매긴다 · 다시 보내도 그대로(연:RULE-TRN-REQ-LIFE 3 · 6) */
   pid: number
+  /** 처음 보낸 시각 — 기한(T-req)은 여기서 센다 · 끊긴 동안에도 간다(연:RULE-TRN-REQ-LIFE 1 · 2) */
   sentAt: number
 }
+
+/** 소켓에 묶인 op — 세션이 서기 전에 가고 끊기면 버린다(대기표 밖) */
+const SOCKET_OPS: ReadonlySet<OpName> = new Set<OpName>(['BIND', 'RESUME', 'HEARTBEAT'])
+
+/** 기한을 넘겨 응답 없이 버린 요청의 reject 이름 — 낸 영역이 입구 reqExpired 로 상태를 맞춘다(연:RULE-TRN-REQ-ABANDON) */
+export const REQ_EXPIRED = 'REQ_EXPIRED'
+export const expired = (f: unknown): boolean => f instanceof Fault && f.name === REQ_EXPIRED
 
 export interface SignalingOpts {
   readonly base: string
   /** 동시에 응답을 기다릴 수 있는 개수 — 1~10 · 기본 1(연:RULE-TRN-FLOW-CONTROL) */
   readonly window?: number
-  /** 요청 하나의 시한 — 넘으면 소켓을 닫는다 · 재전송하지 않는다(연:RULE-SES-TIMERS-CONN T-req) */
+  /** 요청 하나의 기한 — 넘으면 그 요청만 버리고 소켓을 닫는다(연:RULE-SES-TIMERS-CONN T-req · 연:RULE-TRN-REQ-LIFE 5) */
   readonly reqTimeoutMs: number
 }
 
@@ -93,8 +102,9 @@ function frame(flags: number, op: number, pid: number, body: unknown): Uint8Arra
 }
 
 /**
- * WS 소켓 · pid 카운터 · 윈도우 · inflight 표 · ACK 응답(SDK:IMPL-MOD-TABLE).
+ * WS 소켓 · pid 카운터 · 윈도우 · 대기표 · ACK 응답(SDK:IMPL-MOD-TABLE · SDK:IMPL-SES-CLOCK).
  * 받은 통지는 ACK 을 먼저 보내고 통(inbox)에 넣는다 — 처리 결과를 따로 보내지 않는다.
+ * ★대기표는 소켓이 아니라 세션에 묶인다 — 끊겨도 기한 전이면 들고 있다가 같은 세션이 이어지면(sessionUp(true)) 처음 차례 · 처음 pid 로 다시 보내고, 새 세션이면 버린다(연:RULE-TRN-REQ-LIFE).
  */
 export class Signaling {
   readonly inbox = new Queue<Inbound>()
@@ -104,6 +114,11 @@ export class Signaling {
   private readonly window: number
   private readonly waiting: Pending[] = []
   private readonly inflight = new Map<number, Pending>()
+  /** 보냈는데 응답 전에 소켓이 끊긴 요청 — pid 차례 */
+  private held: Pending[] = []
+  /** 이 소켓 위에 세션이 섰다 — 대기표의 요청이 나간다(BIND · RESUME 은 그 전에 간다) */
+  private up = false
+  private ended = false
   private leave: LeaveBody | null = null
   private lastRx = 0
   private readonly reqTimer = new Every()
@@ -117,12 +132,13 @@ export class Signaling {
   /** WS 생존 = 마지막으로 무엇이든 받은 뒤 흐른 시간 하나(연:RULE-LINK-RECOVERY-WS-FIRST) */
   get sinceRx(): number { return this.lastRx === 0 ? Infinity : now() - this.lastRx }
 
-  /** 새 소켓을 연다 — 옛 소켓 핸들러는 떼고 보내다 만 프레임은 버린다(연:RULE-SES-RES-BACKOFF-END) */
+  /** 새 소켓을 연다 — 옛 소켓 핸들러는 떼고 소켓에 묶인 요청은 버린다 · 대기표는 남긴다(연:RULE-SES-RES-BACKOFF-END 2 · 연:RULE-TRN-REQ-LIFE 2) */
   connect(): void {
     const old = this.ws
-    this.detach(null)
+    this.detach()
     if (old) { try { old.close(1000) } catch { /* 이미 닫혔다 */ } }
     const g = ++this.gen
+    this.ended = false
     this.leave = null
     let ws: WebSocket
     try { ws = openSocket(wsUrl(this.opts.base)) } catch (e) {
@@ -131,7 +147,6 @@ export class Signaling {
       return
     }
     this.ws = ws
-    if (!this.reqTimer.armed) this.reqTimer.start(1000, () => this.checkTimeouts())
     ws.onopen = () => { if (g === this.gen) { this.lastRx = now(); this.inbox.push({ t: 'open', gen: g }) } }
     ws.onmessage = (ev) => { if (g === this.gen) this.receive(ev.data) }
     ws.onclose = () => { if (g === this.gen) this.dropped() }
@@ -152,19 +167,57 @@ export class Signaling {
     if (ws && ws.readyState === 1) {
       try { ws.send(frame(0, Op.LEAVE, this.nextPid(), undefined)) } catch { /* 보장 없음 */ }
     }
-    this.detach(closedFault('CLOSED'))
+    this.detach()
+    this.sessionEnd(closedFault('CLOSED'))
+    this.ended = true
     if (ws) { try { ws.close(1000) } catch { /* 이미 닫혔다 */ } }
   }
 
-  /** 요청 — 성공 · 실패 응답 모두 resolve, 소켓이 끝나면 closed 로 reject */
+  /**
+   * 요청 — 성공 · 실패 응답 모두 resolve.
+   * 소켓에 묶인 op(BIND · RESUME · HEARTBEAT)는 소켓이 끝나면 closed(TRANSPORT)로 reject ·
+   * 그 밖은 세션이 끝나면 closed · 새 세션이면 closed(TRANSPORT) · 기한을 넘기면 closed(REQ_EXPIRED)로 reject.
+   */
   request(op: OpName, body: unknown): Promise<Reply> {
     return new Promise((resolve, reject) => {
       const p: Pending = { op, lane: Lane[op], body, resolve, reject, pid: 0, sentAt: 0 }
-      if (!this.open) { reject(closedFault('TRANSPORT')); return }
+      if (this.ended) { reject(closedFault('CLOSED')); return }
+      if (SOCKET_OPS.has(op) && !this.open) { reject(closedFault('TRANSPORT')); return }
       if (op === 'HEARTBEAT') { this.transmit(p); return }
       this.waiting.push(p)
       this.pump()
     })
+  }
+
+  /**
+   * 세션이 섰다 — same = 같은 세션이 이어졌다(RESUME 성공): 끊긴 동안 들고 있던 요청을 처음 차례 · 처음 pid 로 다시 보내고 그 뒤에 새 요청(연:RULE-TRN-REQ-LIFE 3) ·
+   * 새 세션이면 옛 세션의 요청은 버린다(연:RULE-TRN-REQ-LIFE 4 — 세션 재구축이 방 · 발행을 다시 세운다)
+   */
+  sessionUp(same: boolean): void {
+    const held = this.held.sort((a, b) => a.pid - b.pid)
+    this.held = []
+    if (!same) {
+      const f = closedFault('TRANSPORT')
+      for (const p of held) p.reject(f)
+      for (const p of this.waiting.splice(0)) p.reject(f)
+    } else {
+      for (const p of held) this.transmit(p)
+    }
+    this.up = true
+    this.pump()
+    this.watch()
+  }
+
+  /** 세션이 끝났다 — 대기표 전부 closed 로 reject */
+  sessionEnd(f: Fault): void {
+    for (const p of this.held) p.reject(f)
+    for (const p of this.waiting) p.reject(f)
+    for (const p of this.inflight.values()) p.reject(f)
+    this.held = []
+    this.waiting.length = 0
+    this.inflight.clear()
+    this.up = false
+    this.watch()
   }
 
   /** WS 점검 — HEARTBEAT 를 곧바로 보내고 시한 안에 무엇이든 받으면 산 것이다 */
@@ -187,9 +240,15 @@ export class Signaling {
   }
 
   private pump(): void {
-    while (this.inflight.size < this.window && this.waiting.length) {
-      let best = 0
-      for (let i = 1; i < this.waiting.length; i++) if (this.waiting[i]!.lane < this.waiting[best]!.lane) best = i
+    if (!this.open) return
+    while (this.inflight.size < this.window) {
+      let best = -1
+      for (let i = 0; i < this.waiting.length; i++) {
+        const w = this.waiting[i]!
+        if (!this.up && !SOCKET_OPS.has(w.op)) continue
+        if (best < 0 || w.lane < this.waiting[best]!.lane) best = i
+      }
+      if (best < 0) return
       const [p] = this.waiting.splice(best, 1)
       this.transmit(p!)
     }
@@ -197,12 +256,17 @@ export class Signaling {
 
   private transmit(p: Pending): void {
     const ws = this.ws
-    if (!ws || ws.readyState !== 1) { p.reject(closedFault('TRANSPORT')); return }
-    p.pid = this.nextPid()
-    p.sentAt = now()
+    if (!ws || ws.readyState !== 1) {
+      if (SOCKET_OPS.has(p.op)) p.reject(closedFault('TRANSPORT'))
+      else if (p.pid) this.held.push(p)
+      else this.waiting.unshift(p)
+      return
+    }
+    if (!p.pid) { p.pid = this.nextPid(); p.sentAt = now() }
     this.inflight.set(p.pid, p)
+    this.watch()
     this.log.debug(`→ ${p.op}`, { pid: p.pid, body: p.body })
-    try { ws.send(frame(0, Op[p.op], p.pid, p.body)) } catch (e) { this.inflight.delete(p.pid); p.reject(closedFault('TRANSPORT')); this.log.warn('ws send 실패', { err: String(e) }) }
+    try { ws.send(frame(0, Op[p.op], p.pid, p.body)) } catch (e) { this.log.warn('ws send 실패 — 끊김을 기다린다', { err: String(e) }) }
   }
 
   private sendRaw(flags: number, op: number, pid: number, body: unknown): void {
@@ -236,42 +300,68 @@ export class Signaling {
     this.log.debug(`← ${op} ${flags === 1 ? 'ok' : 'fail'}`, { pid, body })
     p.resolve({ ok: flags === 1, op, pid, body })
     this.pump()
+    this.watch()
   }
 
+  /** 기한(T-req) — 넘긴 요청만 버리고(낸 영역이 상태를 맞춘다) 소켓을 닫는다 · 들고 있는 요청도 끊긴 동안 센다(연:RULE-TRN-REQ-LIFE 2 · 5) */
   private checkTimeouts(): void {
-    if (!this.ws) return
     const t = now()
-    for (const p of this.inflight.values()) {
-      if (t - p.sentAt > this.opts.reqTimeoutMs) {
-        this.log.warn(`T-req 만료 — ${p.op} 응답이 없다 · 소켓을 닫는다`, { pid: p.pid })
-        this.close()
-        return
-      }
+    const over = (p: Pending): boolean => t - p.sentAt > this.opts.reqTimeoutMs
+    let cut = false
+    for (const p of [...this.inflight.values()]) {
+      if (!over(p)) continue
+      this.log.warn(`T-req 만료 — ${p.op} 응답이 없다 · 버리고 소켓을 닫는다`, { pid: p.pid })
+      cut = true
+      if (SOCKET_OPS.has(p.op)) continue
+      this.inflight.delete(p.pid)
+      p.reject(closedFault(REQ_EXPIRED))
     }
+    for (const p of this.held.filter(over)) {
+      this.log.warn(`T-req 만료 — 끊긴 동안 들고 있던 ${p.op} 를 버린다`, { pid: p.pid })
+      this.held.splice(this.held.indexOf(p), 1)
+      p.reject(closedFault(REQ_EXPIRED))
+    }
+    if (cut && this.ws) this.close()
+    this.watch()
+  }
+
+  /** 기한 시계는 셀 요청(보낸 것 · 들고 있는 것)이 있을 때만 돈다 */
+  private watch(): void {
+    const any = this.inflight.size > 0 || this.held.length > 0
+    if (any && !this.reqTimer.armed) this.reqTimer.start(1000, () => this.checkTimeouts())
+    else if (!any && this.reqTimer.armed) this.reqTimer.stop()
   }
 
   private dropped(): void {
     const g = this.gen
     const leave = this.leave
-    this.detach(closedFault('TRANSPORT'))
+    this.detach()
     this.inbox.push({ t: 'close', gen: g, leave })
   }
 
-  private detach(f: Fault | null): void {
+  /** 소켓을 뗀다 — 소켓에 묶인 요청은 버리고 보낸 요청은 대기표에 남긴다(연:RULE-TRN-REQ-LIFE 2) */
+  private detach(): void {
     const ws = this.ws
     this.ws = null
+    this.up = false
     if (ws) { ws.onopen = null; ws.onmessage = null; ws.onclose = null; ws.onerror = null }
-    const fault = f ?? closedFault('TRANSPORT')
-    for (const p of this.inflight.values()) p.reject(fault)
-    for (const p of this.waiting) p.reject(fault)
+    const f = closedFault('TRANSPORT')
+    for (const p of this.inflight.values()) {
+      if (SOCKET_OPS.has(p.op)) p.reject(f)
+      else this.held.push(p)
+    }
     this.inflight.clear()
-    this.waiting.length = 0
-    this.reqTimer.stop()
+    for (let i = this.waiting.length - 1; i >= 0; i--) {
+      if (SOCKET_OPS.has(this.waiting[i]!.op)) this.waiting.splice(i, 1)[0]!.reject(f)
+    }
+    this.watch()
   }
 
   /** 소켓이 아예 끝났다 — 통을 닫는다 */
   dispose(): void {
-    this.detach(closedFault('CLOSED'))
+    this.detach()
+    this.sessionEnd(closedFault('CLOSED'))
+    this.ended = true
     this.reqTimer.stop()
     this.inbox.end()
   }
