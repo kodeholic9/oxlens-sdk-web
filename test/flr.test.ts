@@ -880,22 +880,6 @@ async function settlePublish(r: Rig, trackId: string): Promise<void> {
   await tick(); await tick()
 }
 
-test('SD-ENTRY-FLR-REGISTER-HALF — 그 서버 반이중 마이크 발행이 섬(ptt.enable) 하나에 그 서버 방마다 ENTRY.registerHalf 하나', () => spying(async (spy) => {
-  const r = await up()
-  const h = await enter(r, 'r1', { mode: 'talk', pub: 'r1' })
-  await enter(r, 'r2', { pub: 'r1' })
-  await enter(r, 'r3', { sc: SB })
-  wire(r)
-  const p = h.ptt.enable()
-  await settlePublish(r, 't-half')
-  await p
-  assert.equal(spy.n('registerHalf'), 2, 'SD-ENTRY-FLR-REGISTER-HALF — 그 서버 방(r1 · r2)마다 입구 registerHalf 하나 · 다른 서버 0')
-  assert.ok(spy.steps['registerHalf']!.every((s) => s?.label === 'FLR.C.any.reg_half'), 'SD-ENTRY-FLR-REGISTER-HALF — 결합 코드 ENTRY 를 지난다')
-  assert.deepEqual(['r1', 'r2', 'r3'].map((id) => floorOf(r, id).st.hasHalf), [true, true, false])
-  assert.equal(h.ptt.state.phase, 'no_permission', "반이중 마이크가 섰다 — 'off' 를 벗어난다")
-  await r.c.close()
-}))
-
 test('SD-ENTRY-FLR-RTP-TX — 허가(mic.open)로 게이트가 열려 반이중 송출이 시작되면 ENTRY.rtpTx 하나', () => spying(async (spy) => {
   const r = await up()
   const h = await enter(r, 'r1', { mode: 'talk', pub: 'r1' })

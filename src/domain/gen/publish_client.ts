@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/pub/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 443765d02eecc524 · 영역 PUB 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 ef3fbde580019854 · 영역 PUB 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -8,7 +8,7 @@ export type Part = 'req' | 'res' | 'fail' | 'body'
 export type PubAction = 'add' | 'remove'
 export type Duplex = 'full' | 'half'
 export type Fx = 'app.duplex' | 'app.duplex_failed' | 'app.publish_failed' | 'app.publishing' | 'app.revoked' | 'track.attach' | 'track.detach' | 'transceiver.inactive'
-export type SeamFx = 'floor.reg_half' | 'link.pub_lost' | 'sdp.rebuild'
+export type SeamFx = 'link.pub_lost' | 'sdp.rebuild'
 export type TimerName = never
 
 /** 클라 상태 — 원천 PUB K */
@@ -49,7 +49,6 @@ export interface Step { readonly s: St; readonly label: string; readonly out: re
 
 /** 이음매 — 이 영역이 내는 건너가는 효과와 그것을 받는 입구(위가 정한다 · IR seams) */
 export const SEAMS = {
-  'floor.reg_half': { to: 'FLR', react: ['CRegHalf'] },
   'link.pub_lost': { to: 'LINK', react: ['CPubLost'] },
   'sdp.rebuild': { to: 'LINK', react: ['CRenego'] },
 } as const
@@ -114,9 +113,6 @@ export function pubRes(s: St, m: { readonly action: PubAction; readonly code: nu
   }
   if (m.part === 'res' && !s.want) {
     return done(s, { ...s, ps: 'IDLE' }, 'PUB.C.STAGED.pub_ok_unwanted', [{ ws: 'PUBLISH_TRACKS', part: 'req', action: 'remove' }], [], [], [])
-  }
-  if (m.part === 'res' && s.half) {
-    return done(s, { ...s, ps: 'REGISTERED' }, 'PUB.C.STAGED.pub_ok_half', [], [], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
   }
   if (m.part === 'res') {
     return done(s, { ...s, ps: 'REGISTERED' }, 'PUB.C.STAGED.pub_ok', [], [], [], [])
@@ -200,7 +196,7 @@ export function resumeCheck(s: St, listed: boolean, shalf: boolean): Step {
     return done(s, s, 'PUB.C.any.resume_unlisted', [], [], [{ fx: 'link.pub_lost', to: 'LINK', at: 'sameServer' }], [])
   }
   if ((s.ps === 'REGISTERED' || s.ps === 'SENDING') && shalf && !s.half) {
-    return done(s, { ...s, half: true, ps: 'REGISTERED' }, 'PUB.C.any.resume_half', [], ['track.detach', 'app.duplex'], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
+    return done(s, { ...s, half: true, ps: 'REGISTERED' }, 'PUB.C.any.resume_half', [], ['track.detach', 'app.duplex'], [], [])
   }
   if ((s.ps === 'REGISTERED' || s.ps === 'SENDING') && !shalf && s.half) {
     return done(s, { ...s, half: false, ps: 'SENDING' }, 'PUB.C.any.resume_full', [], ['track.attach', 'app.duplex'], [], [])
@@ -306,10 +302,10 @@ export function setDuplexRes(s: St, m: { readonly code: number; readonly duplex:
     return done(s, { ...s, dset: false, lost: false }, 'PUB.C.any.set_noop', [], ['app.duplex'], [], [])
   }
   if (m.duplex === 'half' && s.ps === 'SENDING') {
-    return done(s, { ...s, dset: false, lost: false, half: true, ps: 'REGISTERED' }, 'PUB.C.SENDING.set_half', [], ['track.detach', 'app.duplex'], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
+    return done(s, { ...s, dset: false, lost: false, half: true, ps: 'REGISTERED' }, 'PUB.C.SENDING.set_half', [], ['track.detach', 'app.duplex'], [], [])
   }
   if (m.duplex === 'half' && s.ps === 'REGISTERED') {
-    return done(s, { ...s, dset: false, lost: false, half: true }, 'PUB.C.REGISTERED.set_half', [], ['app.duplex'], [{ fx: 'floor.reg_half', to: 'FLR', at: 'sameServer' }], [])
+    return done(s, { ...s, dset: false, lost: false, half: true }, 'PUB.C.REGISTERED.set_half', [], ['app.duplex'], [], [])
   }
   if (s.half && s.ps === 'REGISTERED') {
     return done(s, { ...s, dset: false, lost: false, half: false, ps: 'SENDING' }, 'PUB.C.REGISTERED.set_full', [], ['track.attach', 'app.duplex'], [], [])

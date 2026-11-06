@@ -867,7 +867,7 @@ test('SD-ENTRY-PUB-SET-DUPLEX-RES — TRACK_SET 응답마다 ENTRY.setDuplexRes 
     answerLast(x, Op.TRACK_SET, { ssrc: 1000, duplex: 'half' }); await d1
     assert.deepEqual([spy.n('setDuplexRes'), spy.calls['setDuplexRes']![0]], [1, [{ duplex: 'half', noop: false, part: 'res', code: 0 }]], 'SD-ENTRY-PUB-SET-DUPLEX-RES① — 응답 하나에 입구 하나')
     assert.equal(planOf(spy, 'setDuplexRes').label, 'PUB.C.SENDING.set_half', '결합 코드 ENTRY 를 지난다')
-    assert.deepEqual([t.state, t.core.gateOpen, s.replaced.at(-1), x.room.core.floor.st.hasHalf], ['registered', false, null, true], 'SD-ENTRY-PUB-SET-DUPLEX-RES② — 게이트 닫힘 · registered · 발언권에 반이중 발행(floor.reg_half)')
+    assert.deepEqual([t.state, t.core.gateOpen, s.replaced.at(-1)], ['registered', false, null], 'SD-ENTRY-PUB-SET-DUPLEX-RES② — 게이트 닫힘 · registered')
     const d2 = t.setDuplex('full'); await tick()
     answerLast(x, Op.TRACK_SET, { ssrc: 1000, duplex: 'full' }); await d2; await tick()
     assert.equal(planOf(spy, 'setDuplexRes').label, 'PUB.C.REGISTERED.set_full')

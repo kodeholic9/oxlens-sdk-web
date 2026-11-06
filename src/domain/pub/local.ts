@@ -269,7 +269,6 @@ export class LocalCore {
     switch (fx) {
       case 'sdp.rebuild': this.link?.renego(); return
       case 'link.pub_lost': this.link?.pubLost(); return
-      case 'floor.reg_half': for (const f of this.media.floorsOn(this.sfuId)) f.registerHalf(); return
       default: {
         const missing: never = fx
         throw new Error(`이음매 표에 없는 위 이음매: ${String(missing)}`)

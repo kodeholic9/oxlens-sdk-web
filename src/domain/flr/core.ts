@@ -225,7 +225,6 @@ export class FloorCore {
 
   /** 재동기 때 대기 중이면 한 번(앱 API 없음) */
   queuePosition(): void { this.enter('queuePosition', 'resync', [], { quiet: true }) }
-  registerHalf(): void { this.enter('registerHalf', 'pub', []) }
   pubSelect(): void { this.enter('pubSelect', 'aff', []) }
   pubAway(): void { this.enter('pubAway', 'aff', [], { end: this.holding('moved') }) }
   leave(): void { this.enter('leave', 'room', [], { end: this.holding('left') }) }

@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/floor_client.mts 가 원천(context/spec/protocol · areas/flr/behavior/client.ts)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 443765d02eecc524 · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
+// IR sha256 ef3fbde580019854 · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
 // 집행은 부르는 쪽 몫이다 — out(DC 로 보낼 것) · ack(ACK 으로 답할 것) · fx(마이크 · 화면 · 앱 알림) · start(다시 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -30,14 +30,12 @@ export interface Cl {
   readonly grant: number
   /** 이 방이 발행 방인가(전환 응답을 받았다) */
   readonly isPub: boolean
-  /** 반이중 발행 트랙을 발행했나 */
-  readonly hasHalf: boolean
   /** 방을 나갔다 */
   readonly left: boolean
   /** 화자 표시 — 화면에 보이는 화자(내가 말하는 중이면 없음) */
   readonly shown: string | null
 }
-export const initial = (): Cl => ({ cs: 'NOPERM', sub: 'WAIT', want: false, c101: 0, c100: 0, c104: 0, presses: 0, prio: 0, grant: 0, isPub: false, hasHalf: false, left: false, shown: null })
+export const initial = (): Cl => ({ cs: 'NOPERM', sub: 'WAIT', want: false, c101: 0, c100: 0, c104: 0, presses: 0, prio: 0, grant: 0, isPub: false, left: false, shown: null })
 
 /** 서버 → 클라 메시지(wire 이름 · 방 칸은 입구가 거른다 · ack = 머리의 A 비트 — 서야 ACK 으로 답한다) */
 export type Rx =
@@ -79,7 +77,7 @@ export function armed(s: Cl): TimerName[] {
 }
 
 /** 원천 절차 → 입구 이름 — 다른 영역의 이음매가 부르는 입구를 찾을 때(위 IR seams 의 react 는 절차 이름이다) */
-export const PROC_ENTRY = { CPress: 'press', CRelease: 'release', CIntent: 'intent', CQpos: 'queuePosition', CRtpTx: 'rtpTx', CRtpRx: 'rtpRx', CRegHalf: 'registerHalf', CPubSel: 'pubSelect', CAway: 'pubAway', CLeave: 'leave', CJoin: 'join', CDown: 'down', CDcDown: 'dcDown', CDcUp: 'dcUp' } as const
+export const PROC_ENTRY = { CPress: 'press', CRelease: 'release', CIntent: 'intent', CQpos: 'queuePosition', CRtpTx: 'rtpTx', CRtpRx: 'rtpRx', CPubSel: 'pubSelect', CAway: 'pubAway', CLeave: 'leave', CJoin: 'join', CDown: 'down', CDcDown: 'dcDown', CDcUp: 'dcUp' } as const
 
 /** 누름 */
 export function press(s: Cl, p: number): Step {
@@ -135,11 +133,6 @@ export function rtpRx(s: Cl): Step {
   return done(s, s, 'FLR.C.QUEUED.rtp_rx', [], [], ['media.render'], [])
 }
 
-/** WS PUBLISH_TRACKS{duplex:half} */
-export function registerHalf(s: Cl): Step {
-  return done(s, { ...s, hasHalf: true }, 'FLR.C.any.reg_half', [], [], [], [])
-}
-
 /** WS AFFILIATION{pub_select} */
 export function pubSelect(s: Cl): Step {
   return done(s, { ...s, isPub: true }, 'FLR.C.any.pub_select', [], [], [], [])
@@ -162,7 +155,7 @@ export function join(s: Cl): Step {
 
 /** 재구축으로 그 방 발언권을 내린다(세션 전체 · 그 서버) */
 export function down(s: Cl): Step {
-  return done(s, { ...s, cs: 'NOPERM', want: false, isPub: false, hasHalf: false, shown: null }, 'FLR.C.any.down', [], [], ['app.speaker_none', 'mic.close'], [])
+  return done(s, { ...s, cs: 'NOPERM', want: false, isPub: false, shown: null }, 'FLR.C.any.down', [], [], ['app.speaker_none', 'mic.close'], [])
 }
 
 /** DC 만 끊김 */

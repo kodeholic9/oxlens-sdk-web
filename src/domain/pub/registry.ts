@@ -116,7 +116,7 @@ export class MediaRegistry {
     return null
   }
 
-  /** 그 서버 방들의 발언권 — 발행 이음매 floor.reg_half(sameServer) · 게이트 · 해체가 닿는 곳 */
+  /** 그 서버 방들의 발언권 — 게이트 · 해체가 닿는 곳 */
   floorsOn(sfuId: string | null): FloorCore[] {
     return sfuId === null ? [] : [...this.rooms.values()].filter((r) => r.sfuId === sfuId).map((r) => r.floor)
   }
