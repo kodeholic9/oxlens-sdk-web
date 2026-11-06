@@ -922,7 +922,7 @@ test('연:RULE-TRN-REQ-LIFE ②③④⑥ — 끊긴 동안 보낸 요청을 들�
   await r.c.close()
 })
 
-test('연:RULE-TRN-REQ-LIFE ⑤ · 연:RULE-TRN-REQ-ABANDON · ROOM.C.JOINING.expired — 기한을 넘긴 입장은 그것만 버리고 소켓을 끊는다 · join() 은 closed(REQ_EXPIRED) · join_id 없는 ROOM_LEAVE', async () => {
+test('SD-ENTRY-ROOM-REQ-EXPIRED · 연:RULE-TRN-REQ-LIFE ⑤ · 연:RULE-TRN-REQ-ABANDON · ROOM.C.JOINING.expired — 기한을 넘긴 입장은 그것만 버리고 소켓을 끊는다 · join() 은 closed(REQ_EXPIRED) · join_id 없는 ROOM_LEAVE', async () => {
   const r = rig()
   const ws = await up(r)
   ;(r.core.sig as unknown as { opts: { reqTimeoutMs: number } }).opts.reqTimeoutMs = 30

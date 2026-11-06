@@ -972,7 +972,7 @@ test('연:RULE-ROOM-JOIN-ID — 발행 add · remove · READY · SUBSCRIBE_LAYER
   assert.equal(jidOf(pubReqs(x, 'remove').at(-1)), 'j-r1', 'PUBLISH_TRACKS remove')
 })
 
-test('연:RULE-TRN-REQ-ABANDON 발행 add — 기한을 넘기면 발행 전으로 · enable* 는 closed(REQ_EXPIRED) · PUB.C.STAGED.expired', async () => {
+test('SD-ENTRY-PUB-REQ-EXPIRED · 연:RULE-TRN-REQ-ABANDON 발행 add — 기한을 넘기면 발행 전으로 · enable* 는 closed(REQ_EXPIRED) · PUB.C.STAGED.expired', async () => {
   const x = await pubUp()
   shortReq(x)
   let err: unknown = null
