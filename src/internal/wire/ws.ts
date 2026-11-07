@@ -291,6 +291,7 @@ export interface TrackEntry {
   readonly codec?: string
   readonly fmtp?: string
   readonly user_id?: string
+  readonly csrc?: number
   readonly source?: "camera" | "screen"
   readonly active?: boolean
   readonly muted?: boolean
@@ -527,6 +528,7 @@ export interface BindReq {
   readonly session_id?: string
   readonly client_ver?: number
   readonly pc_mode?: "1pc" | "2pc"
+  readonly source_tag?: boolean
 }
 
 /** SES.op.BIND.res — 0x0101 접속한다 */
@@ -537,6 +539,7 @@ export interface BindRes {
   readonly session_id: string
   readonly resume_window_ms: number
   readonly pc_mode: "1pc" | "2pc"
+  readonly source_tag: boolean
 }
 
 /** SES.op.RESUME.req — 0x0102 시그널만 끊겼다 다시 붙었다 */

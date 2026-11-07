@@ -2,7 +2,7 @@
 // ★생성 파일 — 원천 areas/flr/model/messages.ts 에서 gen/codec.py 가 지었다. 손으로 고치지 않는다.
 
 export const Type = {REQUEST: 0, GRANTED: 1, TAKEN: 2, DENY: 3, RELEASE: 4, IDLE: 5, REVOKE: 6, QPOS_REQ: 8, QINFO: 9, ACK: 10} as const
-export const TlvId = {PRIORITY: 0, DURATION: 1, CAUSE: 2, QINFO: 3, SPEAKER: 4, SEQ: 8, ACKTYPE: 12, PREV: 26, REASON: 27, ROOM: 29} as const
+export const TlvId = {PRIORITY: 0, DURATION: 1, CAUSE: 2, QINFO: 3, SPEAKER: 4, SEQ: 8, ACKTYPE: 12, PREV: 26, REASON: 27, ROOM: 29, SOURCES: 31} as const
 export const RETIRED: readonly number[] = [7, 28, 30]
 export const MAX_VALUE = 255
 
@@ -18,8 +18,11 @@ const u8 = (v: number): Uint8Array => Uint8Array.of(v & 0xff)
 const u8spare = (v: number): Uint8Array => Uint8Array.of(v & 0xff, 0)
 const u16be = (v: number): Uint8Array => Uint8Array.of((v >> 8) & 0xff, v & 0xff)
 const utf8 = (v: string): Uint8Array => enc.encode(v)
+const u32list = (v: readonly number[]): Uint8Array => Uint8Array.from(v.flatMap((x) => [(x >>> 24) & 0xff, (x >>> 16) & 0xff, (x >>> 8) & 0xff, x & 0xff]))
 const rd8 = (b: Uint8Array): number => b[0]!
 const rd16 = (b: Uint8Array): number => (b[0]! << 8) | b[1]!
+/** 4바이트씩 — 남는 바이트는 버린다 */
+const rd32list = (b: Uint8Array): number[] => Array.from({ length: b.length >> 2 }, (_, i) => ((b[4 * i]! << 24) | (b[4 * i + 1]! << 16) | (b[4 * i + 2]! << 8) | b[4 * i + 3]!) >>> 0)
 /** 값 + 예비 — 길이가 2 가 아니면 그 칸은 없는 것이다(원문 8.1.4) */
 const rd8spare = (b: Uint8Array): number | undefined => (b.length === 2 ? b[0]! : undefined)
 function cat(...p: Uint8Array[]): Uint8Array {
@@ -97,24 +100,26 @@ export function readGranted(msg: Message): { value: { priority?: number | undefi
   return { value: { priority, duration, room }, missing }
 }
 
-/** 2 Floor Taken(원문 8.2.9) · S→C · A 세운다 — 필수 speaker, seq, room · 선택 없음 */
-export function buildTaken(a: { speaker: string; seq: number; room: string }): Message {
+/** 2 Floor Taken(원문 8.2.9) · S→C · A 세운다 — 필수 speaker, seq, room · 선택 sources */
+export function buildTaken(a: { speaker: string; seq: number; room: string; sources?: number[] }): Message {
   const fields: Field[] = [{ id: TlvId.SPEAKER, value: utf8(a.speaker) }, { id: TlvId.SEQ, value: u16be(a.seq) }, { id: TlvId.ROOM, value: utf8(a.room) }]
+  if (a.sources !== undefined) fields.push({ id: TlvId.SOURCES, value: u32list(a.sources) })
   return { type: Type.TAKEN, ack: true, fields }
 }
-export function readTaken(msg: Message): { value: { speaker?: string | undefined; seq?: number | undefined; room?: string | undefined }; missing: string[] } {
+export function readTaken(msg: Message): { value: { speaker?: string | undefined; seq?: number | undefined; room?: string | undefined; sources?: number[] | undefined }; missing: string[] } {
   const missing: string[] = []
   const get = <T>(id: number, f: (b: Uint8Array) => T | undefined): T | undefined => {
     const x = msg.fields.find((y) => y.id === id)
     return x ? f(x.value) : undefined
   }
   const speaker = get(TlvId.SPEAKER, (b) => dec.decode(b))
+  const sources = get(TlvId.SOURCES, (b) => rd32list(b))
   const seq = get(TlvId.SEQ, (b) => rd16(b))
   const room = get(TlvId.ROOM, (b) => dec.decode(b))
   if (speaker === undefined) missing.push('speaker')
   if (seq === undefined) missing.push('seq')
   if (room === undefined) missing.push('room')
-  return { value: { speaker, seq, room }, missing }
+  return { value: { speaker, sources, seq, room }, missing }
 }
 
 /** 3 Floor Deny(원문 8.2.6) · S→C · A 세운다 — 필수 cause, room · 선택 reason */

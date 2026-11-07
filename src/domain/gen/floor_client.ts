@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/floor_client.mts 가 원천(context/spec/protocol · areas/flr/behavior/client.ts)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 ef3fbde580019854 · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
+// IR sha256 8ede3bb190c1f4ab · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
 // 집행은 부르는 쪽 몫이다 — out(DC 로 보낼 것) · ack(ACK 으로 답할 것) · fx(마이크 · 화면 · 앱 알림) · start(다시 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -39,7 +39,7 @@ export const initial = (): Cl => ({ cs: 'NOPERM', sub: 'WAIT', want: false, c101
 
 /** 서버 → 클라 메시지(wire 이름 · 방 칸은 입구가 거른다 · ack = 머리의 A 비트 — 서야 ACK 으로 답한다) */
 export type Rx =
-  | { t: 'TAKEN'; ack?: boolean; speaker: string; seq: number }
+  | { t: 'TAKEN'; ack?: boolean; speaker: string; sources?: number[]; seq: number }
   | { t: 'IDLE'; ack?: boolean; prev?: string; seq: number }
   | { t: 'GRANTED'; ack?: boolean; priority: number; duration: number }
   | { t: 'DENY'; ack?: boolean; cause: number; reason?: string }
