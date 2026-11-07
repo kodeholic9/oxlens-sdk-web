@@ -359,8 +359,9 @@ const qa = {
       }
       out.push({
         id, roomId, kind: track.kind, active: track.active,
-        muted: track.mediaStreamTrack.muted,
-        readyState: track.mediaStreamTrack.readyState,
+        // ★줄이 비면(발행자가 나감 — 연:RULE-SUB-TABLE-SERVER 「줄은 지우지 않는다」) 원격 트랙의 receiver 가 없어 null 이다.
+        muted: track.mediaStreamTrack?.muted ?? null,
+        readyState: track.mediaStreamTrack?.readyState ?? null,
         packets, bytes, framesDecoded, freezeCount, pauseCount,
         concealed, silentConcealed, inserted, removed, samplesReceived, freezeMs, keyFramesDecoded, pliCount, nackCount, frameWidth,
         ...(el ? { videoWidth: el.videoWidth, videoHeight: el.videoHeight, currentTime: el.currentTime } : {}),
