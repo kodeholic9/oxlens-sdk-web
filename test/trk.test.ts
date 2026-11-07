@@ -447,6 +447,7 @@ test('SD-API-REMOTE-TRACK-ON-ENDED①②③④ — remove 는 ended · 항목 �
   // ① remove
   await note(r, Op.TRACK_EVENT, trackEvent('remove', [tr('t3', { kind: 'audio' })], 2))
   assert.equal(ended, 1, 'SD-API-REMOTE-TRACK-ON-ENDED① — remove 에 ended 하나')
+  assert.equal(t3.mediaStreamTrack, null, 'SD-API-REMOTE-TRACK — ended 뒤 mediaStreamTrack 은 null(줄의 다음 주인 트랙을 들고 있지 않는다)')
   // ② 항목 교체 — 쉼 → 복귀(새 mid)
   const act: { active: boolean; mediaStreamTrack: MediaStreamTrack | null }[] = []
   t2.on('active', (x) => act.push(x))
@@ -454,6 +455,7 @@ test('SD-API-REMOTE-TRACK-ON-ENDED①②③④ — remove 는 ended · 항목 �
   assert.deepEqual(act.map((x) => x.active), [false], 'SD-API-REMOTE-TRACK-ON-ENDED② — 쉼: 같은 핸들의 active 하나')
   await table(r, 2, [row('0', undefined), row('1', undefined, 'audio')])
   await drain(r)
+  assert.equal(t2.mediaStreamTrack, null, 'SD-API-REMOTE-TRACK — 쉬는 트랙의 줄이 빠지면 mediaStreamTrack 은 null')
   const fresh = rx(r, '2')
   await note(r, Op.TRACK_EVENT, trackEvent('add', [tr('t2')], 4))
   assert.equal(act.length, 1, 'SD-API-REMOTE-TRACK-ON-ENDED② — 복귀했는데 줄이 아직 없으면 active 를 미룬다(트랙 없는 payload 0)')

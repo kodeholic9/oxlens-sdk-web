@@ -266,6 +266,7 @@ export class RemoteCore {
   end(): void {
     if (this.ended) return
     this.ended = true
+    this.receiver = null
     this.settle.stop()
     this.io?.disconnect()
     this.ro?.disconnect()

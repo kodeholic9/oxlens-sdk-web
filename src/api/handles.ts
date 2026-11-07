@@ -199,7 +199,7 @@ export class RemoteTrack {
   get muted(): boolean | undefined { return this.core.muted }
   get scalability(): string | undefined { return this.core.scalability }
   get receiving(): boolean { return this.core.receiving }
-  get mediaStreamTrack(): MediaStreamTrack { return this.core.mediaStreamTrack as MediaStreamTrack }
+  get mediaStreamTrack(): MediaStreamTrack | null { return this.core.mediaStreamTrack }
   get volume(): number { return this.core.volume }
   set volume(v: number) { this.core.setVolume(v) }
 
