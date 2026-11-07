@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/room/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 8ede3bb190c1f4ab · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 2483d3bca9e87f67 · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -155,9 +155,9 @@ export function leaveRes(s: St, m: { readonly part: Part }): Step {
     return done(s, s, 'ROOM.C.any.leave_res_stale', [], [], [], [])
   }
   if (m.part === 'res') {
-    return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, jid: 0, jsure: false }, 'ROOM.C.LEAVING.leave_ok', [], ['app.left'], [{ fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'link.room_left', to: 'LINK', at: 'sameServer' }], [])
+    return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, jid: 0, jsure: false }, 'ROOM.C.LEAVING.leave_ok', [], ['app.left'], [{ fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'link.room_left', to: 'LINK', at: 'sameServer' }], [])
   }
-  return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, jid: 0, jsure: false }, 'ROOM.C.LEAVING.leave_fail', [], ['app.left'], [{ fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'link.room_left', to: 'LINK', at: 'sameServer' }], [])
+  return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, jid: 0, jsure: false }, 'ROOM.C.LEAVING.leave_fail', [], ['app.left'], [{ fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'link.room_left', to: 'LINK', at: 'sameServer' }], [])
 }
 
 /** version 을 실은 통지를 받았다 — ACK · 판정(§[RULE-ROOM-VERSION-CLIENT-RULES] 규칙 3~5) · 반영(§[RULE-ROOM-NOTE-ORDER]) (받음: PARTICIPANT_EVENT · PARTICIPANT_STATE · TRACK_EVENT · TRACK_STATE) */
@@ -192,7 +192,7 @@ export function roomEvent(s: St, m: { readonly type: RoomEv }): Step {
     return done(s, s, 'ROOM.C.any.room_event_not_joined', [], [], [], [])
   }
   if (m.type === 'affiliation') {
-    return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, ahead: 0, jid: 0, jsure: false }, 'ROOM.C.JOINED.kicked', [], ['http.abandon', 'app.room_gone'], [{ fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'floor.leave', to: 'FLR', at: 'self' }, { fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'sub.drop', to: 'SUB', at: 'self' }, { fx: 'link.room_left', to: 'LINK', at: 'sameServer' }, { fx: 'pub.room_gone', to: 'PUB', at: 'sameRoom' }], [])
+    return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, ahead: 0, jid: 0, jsure: false }, 'ROOM.C.JOINED.kicked', [], ['http.abandon', 'app.room_gone'], [{ fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'floor.leave', to: 'FLR', at: 'self' }, { fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'sub.drop', to: 'SUB', at: 'self' }, { fx: 'link.room_left', to: 'LINK', at: 'sameServer' }, { fx: 'pub.room_gone', to: 'PUB', at: 'sameRoom' }], [])
   }
   if (s.rsync) {
     return done(s, s, 'ROOM.C.JOINED.sync_required_inflight', [], [], [], [])
@@ -245,7 +245,7 @@ export function reqExpired(s: St): Step | null {
   if (s.rs === 'JOINING') {
     return done(s, { ...s, rs: 'NONE', jid: 0, jsure: false }, 'ROOM.C.JOINING.expired', [{ ws: 'ROOM_LEAVE', part: 'req', join_id: 0 }], ['ws.abandon', 'app.join_failed'], [{ fx: 'aff.join_failed', to: 'AFF', at: 'self' }, { fx: 'link.room_left', to: 'LINK', at: 'sameServer' }], [])
   }
-  return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, jid: 0, jsure: false }, 'ROOM.C.LEAVING.expired', [{ ws: 'ROOM_LEAVE', part: 'req', join_id: s.jsure ? s.jid : 0 }], ['ws.abandon', 'app.left'], [{ fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'link.room_left', to: 'LINK', at: 'sameServer' }], [])
+  return done(s, { ...s, rs: 'NONE', cseq: 0, cepoch: 0, rsync: false, jid: 0, jsure: false }, 'ROOM.C.LEAVING.expired', [{ ws: 'ROOM_LEAVE', part: 'req', join_id: s.jsure ? s.jid : 0 }], ['ws.abandon', 'app.left'], [{ fx: 'store.drop', to: 'TRK', at: 'self' }, { fx: 'link.room_left', to: 'LINK', at: 'sameServer' }], [])
 }
 
 /** 세션이 끝났다 — 방을 전부 내리고 다시 들어갈 방 표시를 지운다(DEV-SES-FRESH-REJOIN · 앱이 다시 들어간다) */
