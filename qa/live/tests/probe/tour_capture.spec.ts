@@ -1,5 +1,6 @@
 // author: kodeholic (powered by Claude)
 // ★실측 탐침 — 학습 문서(oxlens-sfu docs/learn)의 콜 플로우 재료를 장마다 한 번에 거둔다. 판정하지 않는다.
+//   이름 = 학습 문서의 장 번호(context guide/learn · 20261109 다섯 부 구성) — TOUR-02 · 02P · 02T · 06 · 07 · 08 · 09 · 10 · 11 · 13.
 //   거두는 것: 브라우저 WS 프레임(보냄 · 받음) · SDP 두 벌(setLocal · setRemote) · ICE · DC 상태와 DC 바이트 · SDK 전이 · 서버 표면(/admin).
 //   서버 로그는 정리(LEAVE)까지 본 뒤 이 회차의 시각 창으로 자른다(개발 형상 로그 위치 /tmp/oxlens/<node>/ox.log.<날짜> · stat 줄 뺌).
 //   산출: <저장소>/.archive/tour/tour-<시각>/<장>.json(TOUR_OUT 으로 바꾼다).
@@ -103,7 +104,7 @@ function hookPc(): void {
 
 interface Frame { at: string; who: string; dir: 'send' | 'recv'; data: string }
 interface Http { at: string; who: string; data: string }
-type OpenExtra = { iceTcp?: boolean; dropUdpCandidate?: boolean; adaptiveStream?: boolean }
+type OpenExtra = { iceTcp?: boolean; dropUdpCandidate?: boolean; adaptiveStream?: boolean; pcMode?: '1pc' | '2pc' }
 interface IcePair { state: string | null; nominated: boolean | null; requestsSent: number; responsesReceived: number; bytesSent: number; localProtocol: string | null; remoteProtocol: string | null; remotePort: number | null; remoteTcpType: string | null }
 
 /** 한 장의 회차 — 사람마다 브라우저 문맥 하나(끊김 시험이 한 사람만 끊을 수 있게). */
@@ -204,7 +205,7 @@ test.afterEach(async () => { for (const s of scopes) await s.teardown() })
 
 const S1 = new Scope('tour')
 scopes.push(S1)
-test('TOUR-01 입장 → 발행 → 구독 → 영상이 보이기까지', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+test('TOUR-02 입장 → 발행 → 구독 → 영상이 보이기까지', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ids = await sfuIds()
   const ROOM = roomOn('tour', 'node-a', ids)
   const c = new Capture(S1, browser)
@@ -224,12 +225,61 @@ test('TOUR-01 입장 → 발행 → 구독 → 영상이 보이기까지', { ann
   c.mark('A.videoDecoded')
   await sleep(2_500)
   c.mark('collect')
-  await c.finish('01', { room: ROOM, node: 'node-a', sfus: ids, server: { room: await snapshot(ROOM), encodings: await b.call('encodings') } }, ids)
+  await c.finish('02', { room: ROOM, node: 'node-a', sfus: ids, server: { room: await snapshot(ROOM), encodings: await b.call('encodings') } }, ids)
+})
+
+const S2P = new Scope('tour2pc')
+scopes.push(S2P)
+test('TOUR-02P 같은 길을 2pc 로 — 연결 둘(발행 · 구독)', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+  const ids = await sfuIds()
+  const ROOM = roomOn('tour2pc', 'node-a', ids)
+  const c = new Capture(S2P, browser)
+  c.mark('ensureRoom')
+  await ensureRoom(ROOM)
+  const a = await c.open('A', undefined, { pcMode: '2pc' })
+  c.mark('A.join')
+  await a.call('join', ROOM, 'talk')
+  const b = await c.open('B', undefined, { pcMode: '2pc' })
+  c.mark('B.join')
+  await b.call('join', ROOM, 'talk')
+  c.mark('B.enableMic')
+  await b.call('enableMic')
+  c.mark('B.enableCamera')
+  await b.call('enableCamera')
+  await expect.poll(() => videoOf(a).then((v) => v?.videoWidth ?? 0), { timeout: 20_000 }).toBeGreaterThan(0)
+  c.mark('A.videoDecoded')
+  await sleep(2_500)
+  c.mark('collect')
+  await c.finish('02P', { room: ROOM, node: 'node-a', sfus: ids, server: { room: await snapshot(ROOM) } }, ids)
+})
+
+const S9 = new Scope('touridle')
+scopes.push(S9)
+test('TOUR-09 무전 상시 대기 비용 — 1pc 와 2pc 를 같은 방에서 60초', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+  test.setTimeout(150_000)
+  const ids = await sfuIds()
+  const ROOM = roomOn('touridle', 'node-a', ids)
+  const c = new Capture(S9, browser)
+  c.mark('ensureRoom')
+  await ensureRoom(ROOM)
+  const one = await c.open('ONE', undefined, { pcMode: '1pc' })
+  const two = await c.open('TWO', undefined, { pcMode: '2pc' })
+  c.mark('join')
+  await one.call('join', ROOM, 'listen')
+  await two.call('join', ROOM, 'listen')
+  await sleep(5_000)
+  const t0 = Date.now()
+  c.mark('idle.start')
+  const before = { ONE: await pairsOf(one), TWO: await pairsOf(two) }
+  await sleep(60_000)
+  const after = { ONE: await pairsOf(one), TWO: await pairsOf(two) }
+  c.mark('idle.end')
+  await c.finish('09', { room: ROOM, node: 'node-a', sfus: ids, idle: { ms: Date.now() - t0, before, after } }, ids)
 })
 
 const S3 = new Scope('tourptt')
 scopes.push(S3)
-test('TOUR-03 무전 — 누름 · 허가 · 줄 · 놓음 · 넘겨받음', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+test('TOUR-07 무전 — 누름 · 허가 · 줄 · 놓음 · 넘겨받음', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ids = await sfuIds()
   const ROOM = roomOn('tourptt', 'node-a', ids)
   const c = new Capture(S3, browser)
@@ -264,12 +314,12 @@ test('TOUR-03 무전 — 누름 · 허가 · 줄 · 놓음 · 넘겨받음', { a
   await b.call('release', ROOM).catch(() => {})
   await sleep(1_500)
   c.mark('collect')
-  await c.finish('03', { room: ROOM, node: 'node-a', sfus: ids, server: { room: await snapshot(ROOM) } }, ids)
+  await c.finish('07', { room: ROOM, node: 'node-a', sfus: ids, server: { room: await snapshot(ROOM) } }, ids)
 })
 
 const S4 = new Scope('tourmulti')
 scopes.push(S4)
-test('TOUR-04 다방 청취 · 발언 방 바꾸기', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+test('TOUR-08 다방 청취 · 발언 방 바꾸기', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ids = await sfuIds()
   const R1 = roomOn('tourmulti', 'node-a', ids, 0)
   const R2 = roomOn('tourmulti', 'node-a', ids, 1)
@@ -310,12 +360,12 @@ test('TOUR-04 다방 청취 · 발언 방 바꾸기', { annotation: { type: 'spe
   await a.call('release', R2)
   await sleep(1_000)
   c.mark('collect')
-  await c.finish('04', { rooms: [R1, R2], node: 'node-a', sfus: ids, server: { r1: await snapshot(R1), r2: await snapshot(R2) } }, ids)
+  await c.finish('08', { rooms: [R1, R2], node: 'node-a', sfus: ids, server: { r1: await snapshot(R1), r2: await snapshot(R2) } }, ids)
 })
 
 const S5 = new Scope('tourcut')
 scopes.push(S5)
-test('TOUR-05 신호 연결이 끊겼다 돌아온다 — RESUME', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+test('TOUR-10 신호 연결이 끊겼다 돌아온다 — RESUME', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ids = await sfuIds()
   const ROOM = roomOn('tourcut', 'node-a', ids)
   const relay = new Relay(19_740)
@@ -344,7 +394,7 @@ test('TOUR-05 신호 연결이 끊겼다 돌아온다 — RESUME', { annotation:
     c.mark('A.recovered')
     await sleep(2_500)
     c.mark('collect')
-    await c.finish('05', { room: ROOM, node: 'node-a', sfus: ids, server: { room: await snapshot(ROOM) } }, ids)
+    await c.finish('10', { room: ROOM, node: 'node-a', sfus: ids, server: { room: await snapshot(ROOM) } }, ids)
   } finally {
     await relay.stop()
   }
@@ -352,7 +402,7 @@ test('TOUR-05 신호 연결이 끊겼다 돌아온다 — RESUME', { annotation:
 
 const S6 = new Scope('tournode')
 scopes.push(S6)
-test('TOUR-06 다른 node 의 방 — hub 사이 oxmesh', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+test('TOUR-13 다른 node 의 방 — hub 사이 oxmesh', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ids = await sfuIds()
   const ROOM = roomOn('tournode', 'node-b', ids)
   const c = new Capture(S6, browser)
@@ -371,12 +421,12 @@ test('TOUR-06 다른 node 의 방 — hub 사이 oxmesh', { annotation: { type: 
   c.mark('A.hearsB')
   await sleep(1_500)
   c.mark('collect')
-  await c.finish('06', { room: ROOM, node: 'node-b', sfus: ids, server: { room: await snapshot(ROOM) } }, ids)
+  await c.finish('13', { room: ROOM, node: 'node-b', sfus: ids, server: { room: await snapshot(ROOM) } }, ids)
 })
 
 const S1T = new Scope('tourtcp')
 scopes.push(S1T)
-test('TOUR-01T 길이 둘일 때 — UDP 와 TCP 후보를 함께 내면 · TCP 만 남기면', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+test('TOUR-02T 길이 둘일 때 — UDP 와 TCP 후보를 함께 내면 · TCP 만 남기면', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ids = await sfuIds()
   const ROOM = roomOn('tourtcp', 'node-a', ids)
   const c = new Capture(S1T, browser)
@@ -403,12 +453,12 @@ test('TOUR-01T 길이 둘일 때 — UDP 와 TCP 후보를 함께 내면 · TCP 
   await sleep(12_500)
   c.mark('A.after12s')
   const ice = async (p: Participant) => ({ candidates: await p.call<string[]>('remoteCandidateLines'), pairs: await pairsOf(p) })
-  await c.finish('01T', { room: ROOM, node: 'node-a', sfus: ids, ice: { A: await ice(a), B: await ice(b) }, server: { room: await snapshot(ROOM) } }, ids)
+  await c.finish('02T', { room: ROOM, node: 'node-a', sfus: ids, ice: { A: await ice(a), B: await ice(b) }, server: { room: await snapshot(ROOM) } }, ids)
 })
 
 const S10 = new Scope('tourstall')
 scopes.push(S10)
-test('TOUR-10 전달 정체 — 발행자 장치가 죽으면 서버가 알리고 SDK 가 방을 다시 받는다', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+test('TOUR-11 전달 정체 — 발행자 장치가 죽으면 서버가 알리고 SDK 가 방을 다시 받는다', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   const ids = await sfuIds()
   const ROOM = roomOn('tourstall', 'node-a', ids)
   const c = new Capture(S10, browser)
@@ -431,12 +481,12 @@ test('TOUR-10 전달 정체 — 발행자 장치가 죽으면 서버가 알리�
   c.mark('B.resynced')
   await sleep(1_500)
   c.mark('collect')
-  await c.finish('10', { room: ROOM, node: 'node-a', sfus: ids, server: { room: await snapshot(ROOM) } }, ids)
+  await c.finish('11', { room: ROOM, node: 'node-a', sfus: ids, server: { room: await snapshot(ROOM) } }, ids)
 })
 
 const S11 = new Scope('tourattr')
 scopes.push(S11)
-test('TOUR-11 트랙 속성을 산 채로 — 음소거 · 영상 멈춤 · 회의↔무전 · 마이크 전원', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+test('TOUR-06 트랙 속성을 산 채로 — 음소거 · 영상 멈춤 · 회의↔무전 · 마이크 전원', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
   test.setTimeout(240_000) // cold 30초 둘 + keepWarm 32초
   const ids = await sfuIds()
   const R1 = roomOn('tourattr', 'node-a', ids, 0)
@@ -531,5 +581,5 @@ test('TOUR-11 트랙 속성을 산 채로 — 음소거 · 영상 멈춤 · 회�
     clearInterval(watch)
   }
   c.mark('collect')
-  await c.finish('11', { rooms: [R1, R2], node: 'node-a', sfus: ids, tracks: { mic: mic.id, cam: cam.id }, server: { r1: await snapshot(R1), r2: await snapshot(R2) } }, ids)
+  await c.finish('06', { rooms: [R1, R2], node: 'node-a', sfus: ids, tracks: { mic: mic.id, cam: cam.id }, server: { r1: await snapshot(R1), r2: await snapshot(R2) } }, ids)
 })
