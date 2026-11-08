@@ -27,6 +27,7 @@ export class Session {
   get reason(): { code: number; name: string } | null { return this.core.reason }
   get userId(): string | null { return this.core.userId }
   get pcMode(): '1pc' | '2pc' | null { return this.core.info().pcMode }
+  get fingerprint(): string | null { return this.core.fingerprint }
   get quality(): Quality { return this.core.quality }
 }
 

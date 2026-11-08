@@ -408,7 +408,7 @@ const qa = {
 
   session() {
     const s = state.client.session
-    return { state: s.state, recovering: s.recovering, userId: s.userId, pcMode: s.pcMode }
+    return { state: s.state, recovering: s.recovering, userId: s.userId, pcMode: s.pcMode, fingerprint: s.fingerprint }
   },
 
   /** ★진단 — SDK 로그 · 전이 기록(판정하지 않는다) */

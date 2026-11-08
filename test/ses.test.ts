@@ -18,6 +18,8 @@ import type { Core } from '../src/domain/ses/core.js'
 import * as FC from '../src/internal/wire/floor_codec.js'
 import * as Mbcp from '../src/internal/flr/mbcp.js'
 import { SC } from './_fixtures.js'
+import { createHash } from 'node:crypto'
+import { sha256Hex } from '../src/platform/sha256.js'
 
 class FakeWS {
   static made: FakeWS[] = []
@@ -964,4 +966,27 @@ test('연:RULE-TRN-REQ-LIFE 4 — 세션이 끝난 뒤(앱 close 가 아닌 길)
   r.core.sig.request('MESSAGE', { room_id: 'r1', content: 'x' }).then(() => { out = 'answered' }, (f: { name: string }) => { out = f.name })
   await tick(20)
   assert.equal(out, 'CLOSED')
+})
+
+test('SD-API-SESSION-FINGERPRINT — 세션 지문(통화 번호) = SHA-256(session_id) 앞 8자 · 접속 전 null · 이어받으면 그대로 · 새 세션이면 바뀌고 session 이벤트 · 원값은 표면 0(연:RULE-SES-FINGERPRINT)', async () => {
+  const node = (x: string): string => createHash('sha256').update(x, 'utf8').digest('hex')
+  for (const x of ['', 'abc', 's-1', 'a'.repeat(55), 'a'.repeat(56), 'a'.repeat(64), 'a'.repeat(1000), '세션-번호 ✓']) assert.equal(sha256Hex(x), node(x), `SD-API-SESSION-FINGERPRINT② SHA-256 동치 — 길이 ${x.length}`)
+  const fp = (sid: string): string => node(sid).slice(0, 8)
+  const r = rig()
+  assert.equal(r.c.session.fingerprint, null, 'SD-API-SESSION-FINGERPRINT① 접속 전 null')
+  let ws = await up(r)
+  assert.equal(r.c.session.fingerprint, fp('s-1'), 'SD-API-SESSION-FINGERPRINT② 16진 소문자 8자 · 서버와 같은 식')
+  assert.match(r.c.session.fingerprint!, /^[0-9a-f]{8}$/)
+  assert.equal(r.sessions.at(-1)!.fingerprint, fp('s-1'), 'SD-API-SESSION-FINGERPRINT② session 이벤트도 싣는다')
+  ws.close(); await tick(5)
+  ws = await bind({ ...BIND_OK, session_id: 's-1' })
+  assert.equal(r.c.session.fingerprint, fp('s-1'), 'SD-API-SESSION-FINGERPRINT③ 이어받으면(같은 session_id) 그대로')
+  const before = r.sessions.length
+  ws.close(); await tick(5)
+  ws = await bind({ ...BIND_OK, session_id: 's-2' })
+  assert.equal(r.c.session.fingerprint, fp('s-2'), 'SD-API-SESSION-FINGERPRINT③ 새 세션이면 바뀐다')
+  assert.ok(r.sessions.slice(before).some((s) => s.fingerprint === fp('s-2')), 'SD-API-SESSION-FINGERPRINT③ 바뀌면 session 이벤트')
+  const surface = JSON.stringify({ events: r.sessions, getters: Object.getOwnPropertyNames(Object.getPrototypeOf(r.c.session)).filter((k) => k !== 'constructor').map((k) => (r.c.session as unknown as Record<string, unknown>)[k]) })
+  assert.ok(!surface.includes('"s-1"') && !surface.includes('"s-2"'), 'SD-API-SESSION-FINGERPRINT④ session_id 원값이 공개 표면 어디에도 없다')
+  await r.c.close()
 })

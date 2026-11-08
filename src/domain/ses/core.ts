@@ -1,11 +1,12 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-SES-API · SDK:IMPL-SES-EVENTS · SDK:IMPL-SES-CLOCK · SDK:IMPL-LINK-PROJECTION 출입구 하나 · SDK:RULE-MOD-AREA-MIRROR domain/ses · model: claude-opus-5-5
+// spec: v1.2 @d626fda · SDK:IMPL-SES-API · SDK:IMPL-SES-EVENTS · SDK:IMPL-SES-CLOCK · SDK:IMPL-LINK-PROJECTION 출입구 하나 · SDK:RULE-MOD-AREA-MIRROR domain/ses · 연:RULE-SES-FINGERPRINT · model: claude-opus-5-5
 import * as SES from '../gen/session_client.js'
 import * as SB from '../gen/session_binding.js'
 import type { ResumeRes, LeaveBody, MlineTable, RoomSnapshot } from '../../internal/wire/ws.js'
 import { Code } from '../../internal/wire/ws.js'
 import { Signaling, type Inbound, type Reply } from '../../internal/ses/signaling.js'
 import { Emitter } from '../../platform/emitter.js'
+import { sessionFingerprint } from '../../platform/sha256.js'
 import { LogBook, type Logger } from '../../platform/log.js'
 import { Timer } from '../../platform/clock.js'
 import { Fault, fromFailure, closedFault } from '../../platform/fault.js'
@@ -31,6 +32,7 @@ export interface SessionInfo {
   readonly reason: { readonly code: number; readonly name: string } | null
   readonly userId: string | null
   readonly pcMode: '1pc' | '2pc' | null
+  readonly fingerprint: string | null
   readonly health: Health
   readonly quality: Quality
 }
@@ -93,6 +95,7 @@ export class Core {
   ses: SES.St = SES.initial()
   userId: string | null = null
   sessionId: string | null = null
+  fingerprint: string | null = null
   reason: { code: number; name: string } | null = null
   quality: Quality = 'excellent'
   /** 이번 접속 시도가 실패한 사실 — 기다리는 connect() 를 이것으로 reject 한다 */
@@ -373,7 +376,7 @@ export class Core {
       resume_window_ms: Number(b['resume_window_ms'] ?? 0),
       session_id: r.ok ? this.sids.id(sid) : 0,
     }
-    if (r.ok) { this.userId = String(b['user_id'] ?? ''); this.sessionId = sid }
+    if (r.ok) { this.userId = String(b['user_id'] ?? ''); this.sessionId = sid; this.fingerprint = sid ? sessionFingerprint(sid) : null }
     else { this.failure = fromFailure(r.body); this.reason = { code: 0, name: 'BIND_FAILED' } }
     const marked = [...this.rooms.values()].some((x) => x.st.rejoin)
     this.enter('bindRes', r.ok ? 'BIND.res' : `BIND.${code}`, [m, marked])
@@ -523,7 +526,7 @@ export class Core {
   }
 
   info(): SessionInfo {
-    return { state: this.sessionState, recovering: this.recovering, reason: this.reason, userId: this.userId, pcMode: this.ses.cs === 'ACTIVE' || this.sessionId ? this.ses.pcm : null, health: this.health, quality: this.quality }
+    return { state: this.sessionState, recovering: this.recovering, reason: this.reason, userId: this.userId, pcMode: this.ses.cs === 'ACTIVE' || this.sessionId ? this.ses.pcm : null, fingerprint: this.fingerprint, health: this.health, quality: this.quality }
   }
 
   /** 상태 · recovering · reason · health · quality 가 바뀔 때마다 session 이벤트 */
