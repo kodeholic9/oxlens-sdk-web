@@ -312,6 +312,37 @@ test('SD-ENTRY-LINK-LINK-EVENT①②③ — LINK_EVENT{suspect} 가 ENTRY.linkEv
   } finally { spy.restore() }
 })
 
+test('SD-ENTRY-LINK-ONLINE①② — 브라우저 online 이 연결마다 ENTRY.online 하나 · ①쉬는 연결 → WS 점검(HEARTBEAT) 뒤 restarting ②복구 중 → 흡수(새 복구 0)', async () => {
+  const g = globalThis as unknown as { window?: unknown }
+  const prev = g.window
+  const win = new EventTarget()
+  g.window = win
+  const spy = spyOn()
+  try {
+    const x = await upLink()
+    spy.reset()
+    const hb0 = heartbeats(x)
+    win.dispatchEvent(new Event('online'))
+    await tick()
+    assert.equal(spy.n('online'), 1, 'SD-ENTRY-LINK-ONLINE — 사건 하나에 ENTRY.online 하나')
+    await until(() => heartbeats(x) > hb0)
+    await until(() => x.link.state === 'restarting')
+    assert.equal(x.link.state, 'restarting', 'SD-ENTRY-LINK-ONLINE① — 쉬던 연결은 WS 부터 확인하고 재시작으로 간다')
+    await x.r.c.close()
+
+    const y = await upLink()
+    spy.reset()
+    const hb1 = heartbeats(y)
+    y.pc.ice('disconnected'); await tick()
+    win.dispatchEvent(new Event('online'))
+    await tick()
+    assert.equal(spy.n('online'), 1)
+    assert.equal(y.link.state, 'wobbly', 'SD-ENTRY-LINK-ONLINE② — 복구(기다림) 중이면 흡수')
+    assert.equal(heartbeats(y), hb1, 'SD-ENTRY-LINK-ONLINE② — 흡수 — 새 복구 0')
+    await y.r.c.close()
+  } finally { spy.restore(); g.window = prev }
+})
+
 test('SD-ENTRY-LINK-HB-RES — 재시작 앞 WS 점검의 하트비트 응답이 ENTRY.hbRes 하나 · ICE_RESTART 를 낸다', async () => {
   const spy = spyOn()
   try {

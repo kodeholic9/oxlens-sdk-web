@@ -267,6 +267,9 @@ export class LinkCore {
     if (!this.negotiating && this.st.rows === prev.rows) this.sdpArev = t.arev
   }
 
+  /** 브라우저 `online` — 망이 바뀌었다(위 입구 `online` — 연결이 쉬면 WS 부터 확인 · 복구 중이면 흡수) */
+  online(): void { this.enter('online', 'online', []) }
+
   /** LINK_EVENT{suspect} — ufrag 가 그 연결의 지금 자격 둘 중 하나면 지금 세대, 아니면 옛 세대 */
   linkEvent(ufrag: string): void {
     const sc = this.sc

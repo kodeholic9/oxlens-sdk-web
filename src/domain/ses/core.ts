@@ -129,10 +129,15 @@ export class Core {
 
   /** 클라이언트를 붙잡는 전역 리스너(pagehide · 재생 visibilitychange · 핫플러그 devicechange)는 connect() 에 달고 close() 에 뗀다 — 닫힌 클라이언트가 남지 않는다(SDK:RULE-API-HANDLES) */
   private readonly onPageHide = (): void => { if (this.ses.cs !== 'DISCONNECTED') void this.close() }
+  /** 브라우저 `online` — 망이 바뀌었다 · 그 세션의 모든 연결에 넣는다(위 입구 `online` · 연:RULE-LINK-RECOVERY-WS-FIRST · SDK:IMPL-LINK-PROJECTION) */
+  private readonly onOnline = (): void => { for (const l of this.links.values()) l.online() }
   private watchPage(on: boolean): void {
     const w = this.cfg.disconnectOnPageLeave ? pageTarget() : null
     if (on) w?.addEventListener('pagehide', this.onPageHide)
     else w?.removeEventListener('pagehide', this.onPageHide)
+    const n = pageTarget()
+    if (on) n?.addEventListener('online', this.onOnline)
+    else n?.removeEventListener('online', this.onOnline)
     this.rooms.playback.watch(on)
     this.media.watchDevices(on)
   }
