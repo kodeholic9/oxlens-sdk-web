@@ -85,6 +85,7 @@ export class PeerLink {
   private restartPending = false
   private pubDirty = true
   private subDirty = false
+  private rowsSet = false
   private lastIce: RTCIceConnectionState = 'new'
   private closed = false
 
@@ -217,11 +218,16 @@ export class PeerLink {
 
   /** 배정표 줄 — 바뀌었으면 구독 쪽이 다시 짓는다 */
   setRows(rows: MlineEntry[]): void {
-    this.rows = [...rows].sort((a, b) => Number(a.mid) - Number(b.mid))
+    const next = [...rows].sort((a, b) => Number(a.mid) - Number(b.mid))
+    // ★줄이 그대로면 구독 쪽을 다시 짓지 않는다(연:R-LINK-SDP-WHY-2PC 「pub 을 고칠 때 sub SDP 를 아예 열지 않는다」) —
+    //   종전엔 발행 협상마다 같은 줄로 불려 2pc 구독 연결이 같은 offer 로 한 번 더 협상했다(3층 TOUR-02P · context 202611/20261109a S6)
+    const same = this.rowsSet && JSON.stringify(next) === JSON.stringify(this.rows)
+    this.rows = next
+    this.rowsSet = true
     if (this.mode === '1pc') {
       for (const r of this.rows) if (!this.book.some((e) => e.t === 'recv' && e.mid === r.mid)) this.book.push({ t: 'recv', mid: r.mid })
     }
-    this.subDirty = true
+    if (!same) this.subDirty = true
   }
 
   /** 발행 자리를 얻는다 — 같은 kind · 같은 구조의 쉬는 자리를 먼저 되쓴다(BUNDLE 천장 — SDK:IMPL-SRC-BLOCKS) · fresh 면 새 트랜시버(1pc SSRC 충돌 3008 의 재발행 — 새 SSRC 는 새 트랜시버가 만든다) */
