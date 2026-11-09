@@ -13,9 +13,9 @@ import { BASE } from './env.js'
 export const PEER_REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'oxlens-sdk-peer')
 const BIN = (name: string): string => join(PEER_REPO, 'target', 'debug', 'examples', name)
 
-/** 예제 둘을 짓는다 — 옛 바이너리로 넘어가지 않는다 */
+/** 예제를 짓는다 — 옛 바이너리로 넘어가지 않는다. ★녹화기 · rawtool 은 기능 `record` 가 있어야 지어진다(oxpeer Cargo `required-features` — 202611/20261110b) */
 export function buildPeer(): void {
-  execFileSync('cargo', ['build', '--offline', '--example', 'agent', '--example', 'recorder'], { cwd: PEER_REPO, stdio: 'pipe' })
+  execFileSync('cargo', ['build', '--offline', '--features', 'record', '--example', 'agent', '--example', 'recorder', '--example', 'rawtool'], { cwd: PEER_REPO, stdio: 'pipe' })
 }
 
 /** ffmpeg 로 진짜 표본 — Opus(20ms) · H264(baseline · AUD 경계 · GOP 30) · VP8(IVF) */
@@ -71,3 +71,9 @@ export function decode(file: string): { errors: string; frames: number } {
 }
 
 export const readJson = (f: string): unknown => JSON.parse(readFileSync(f, 'utf8'))
+
+/** rawtool 하위 명령 하나 — 표준 출력 JSON(원시 파트 읽기 · SDK:RULE-PLAT-REC-RAW) */
+export function rawtool(args: string[]): Record<string, unknown> {
+  return JSON.parse(execFileSync(BIN('rawtool'), args, { maxBuffer: 256 * 1024 * 1024 }).toString()) as Record<string, unknown>
+}
+
