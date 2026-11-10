@@ -7,7 +7,7 @@
 import { test, type Page } from '@playwright/test'
 import { Scope, ensureRoom, expect } from '../fixtures/scope.js'
 import { PEER_REPO, buildPeer, runPeer } from '../fixtures/oxpeer.js'
-import { cpSync, mkdirSync, rmSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join, relative, resolve } from 'node:path'
 
@@ -86,7 +86,14 @@ test('PEER-MIX-03 브라우저 발행을 oxpeer 녹화기가 HLS 로 쓰고 기�
   expect(mine!.keyframe_requests, '조각 경계마다 키프레임을 요청했다').toBeGreaterThanOrEqual(mine!.segments.length - 1)
   const p = await (await browser.newContext()).newPage()
   const r = await play(p, mine!.event, 30_000)
-  console.log('[PEER-MIX-03]', JSON.stringify(r))
+  // ★재생 목록을 회차 보고에 붙여 남긴다 — 「해상도가 바뀔 때마다 새 init + 끊김」을 그 판으로 대조한다(김대리 검토 #10 · 202611/20261110e)
+  await test.info().attach('event.m3u8', { path: mine!.event, contentType: 'application/vnd.apple.mpegurl' })
+  const pl = readFileSync(mine!.event, 'utf8')
+  const discs = (pl.match(/^#EXT-X-DISCONTINUITY$/gm) ?? []).length
+  const maps = (pl.match(/^#EXT-X-MAP:/gm) ?? []).length
+  console.log('[PEER-MIX-03]', JSON.stringify({ ...r, discs, maps }))
+  expect(maps, 'init 은 처음 하나 + 끊김마다 하나').toBe(discs + 1)
+  expect(discs, '재생 중 본 화면 크기가 바뀐 횟수만큼은 끊김이 있다(SPS 가 바뀌면 새 init — SDK:RULE-PLAT-REC-HLS 끊김)').toBeGreaterThanOrEqual(r.widths.length - 1)
   expect(r.error, '재생기 오류 — fMP4 · 목록을 재생기가 거부했다').toBeNull()
   expect(r.ended, 'ENDLIST 까지 재생했다').toBe(true)
   expect(r.width, '폭이 0 이면 검은 화면이다').toBeGreaterThan(0)
