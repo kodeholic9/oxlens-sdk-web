@@ -6,7 +6,7 @@
 import { test } from '@playwright/test'
 import { Scope, ensureRoom, expect } from '../fixtures/scope.js'
 import { flowOf, TrackStat } from '../fixtures/delta.js'
-import { buildPeer, decode, makeSamples, runPeer } from '../fixtures/oxpeer.js'
+import { buildPeer, decode, decodeStream, makeSamples, runPeer } from '../fixtures/oxpeer.js'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,7 +16,7 @@ const S = new Scope('peer_mixed')
 test.beforeAll(() => { buildPeer() })
 test.afterEach(async () => { await S.teardown() })
 
-interface FileRow { file: string; kind: string; who?: string; frames?: number }
+interface FileRow { file: string; who?: string; tracks: Array<{ kind: string; frames: number }> }
 
 test('PEER-MIX-01 브라우저 발행을 oxpeer 녹화기가 받아 쓴 파일이 디코드된다', { annotation: { type: 'spec', description: 'SDK:RULE-PLAT-SERVER' } }, async ({ browser }) => {
   const ROOM = S.room('rec')
@@ -32,12 +32,14 @@ test('PEER-MIX-01 브라우저 발행을 oxpeer 녹화기가 받아 쓴 파일�
   const summary = await rec.done
   const files = (summary.files as FileRow[] | undefined) ?? []
   const mine = files.filter((f) => f.who === S.user('U01'))
-  expect(mine.map((f) => f.kind).sort(), '브라우저의 오디오 · 영상 트랙마다 파일이 하나씩 — 없으면 받지도 못했다').toEqual(['audio', 'video'])
-  for (const f of mine) {
-    const d = decode(f.file)
-    expect(d.errors, `${f.kind} 파일 디코드 오류 — 정리층 조립 · MKV 가 실 인코더 프레임을 깨뜨렸다`).toBe('')
-    expect(d.frames, `${f.kind} 파일에 프레임이 있다(6초 녹화)`).toBeGreaterThan(f.kind === 'video' ? 60 : 150)
-  }
+  // ★사람마다 영상 · 음성 한 파일(SDK:RULE-PLAT-REC-MKV · context 202611/20261110e) — 파일 하나 · 트랙 둘
+  expect(mine.length, '브라우저 사람의 파일이 하나 — 없으면 받지도 못했다').toBe(1)
+  expect(mine[0].tracks.map((t) => t.kind).sort(), '한 파일에 오디오 · 영상').toEqual(['audio', 'video'])
+  const d = decode(mine[0].file)
+  expect(d.errors, '파일 디코드 오류 — 정리층 조립 · MKV 가 실 인코더 프레임을 깨뜨렸다').toBe('')
+  expect(d.frames, '영상 스트림에 프레임이 있다(6초 녹화)').toBeGreaterThan(60)
+  const audio = decodeStream(mine[0].file, 'a')
+  expect(audio, '음성 스트림에 프레임이 있다(6초 녹화 · Opus 20ms)').toBeGreaterThan(150)
 })
 
 test('PEER-MIX-02 oxpeer 에이전트의 진짜 코덱 발행을 브라우저가 디코드한다', { annotation: { type: 'spec', description: 'SDK:RULE-PLAT-SERVER · SDK:IMPL-PUB-API' } }, async ({ browser }) => {

@@ -70,6 +70,12 @@ export function decode(file: string): { errors: string; frames: number } {
   return { errors: errors.trim(), frames: Number.parseInt(n, 10) || 0 }
 }
 
+/** 그 파일의 한 종류 스트림(`v` · `a`) 디코드 프레임 수 — 사람마다 영상 · 음성 한 파일(202611/20261110e) */
+export function decodeStream(file: string, kind: 'v' | 'a'): number {
+  const n = execFileSync('ffprobe', ['-v', 'error', '-count_frames', '-select_streams', kind, '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', file]).toString().trim()
+  return Number.parseInt(n, 10) || 0
+}
+
 export const readJson = (f: string): unknown => JSON.parse(readFileSync(f, 'utf8'))
 
 /** rawtool 하위 명령 하나 — 표준 출력 JSON(원시 파트 읽기 · SDK:RULE-PLAT-REC-RAW) */
