@@ -1,7 +1,7 @@
 // author: kodeholic (powered by Claude)
 // 서버사이드 SDK(oxpeer) 를 3층에 섞는다(context 202611/20261108d R9) — 브라우저와 서버사이드 참가자가 한 방에서 주고받는다.
 // ★3층의 몫만 본다 — 실 인코더(크로뮴 가짜 장치)의 프레임을 oxpeer 가 받아 파일로 쓰면 그 파일이 디코드되나 · oxpeer 가 낸 진짜 코덱 표본(ffmpeg)을 브라우저가 디코드하나.
-// oxpeer 예제(녹화기 · 에이전트)는 하네스가 짓고 띄워 ★결과물만 읽는다(2층 labs 와 같은 출처 분리). cargo · ffmpeg 가 없으면 건너뛰지 않고 실패한다(값이 0 ≠ 못 쟀다).
+// oxpeer 실행 파일 · 예제(녹화기 oxrec · 에이전트 예제 agent_echo · AI 브리지 oxbridge-ai — 워크스페이스 crates/ 꼴 context 202611/20261112g)는 하네스가 짓고 띄워 ★결과물만 읽는다(2층 labs 와 같은 출처 분리). cargo · ffmpeg 가 없으면 건너뛰지 않고 실패한다(값이 0 ≠ 못 쟀다).
 import { execFileSync, spawn } from 'node:child_process'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -11,13 +11,13 @@ import { BASE } from './env.js'
 
 /** `oxlens/oxlens-sdk-peer` — 이 저장소(`oxlens/oxlens-sdk-web`) 옆 */
 export const PEER_REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'oxlens-sdk-peer')
-const BIN = (name: string): string => join(PEER_REPO, 'target', 'debug', 'examples', name)
+const EXAMPLE = (name: string): string => join(PEER_REPO, 'target', 'debug', 'examples', name)
 
-/** 예제를 짓는다 — 옛 바이너리로 넘어가지 않는다. ★녹화기 · rawtool 은 기능 `record` 가 있어야 지어진다(oxpeer Cargo `required-features` — 202611/20261110b) */
+/** 실행 파일 · 예제를 짓는다 — 옛 바이너리로 넘어가지 않는다. ★rawtool 은 기능 `record` 가 있어야 지어진다(oxpeer Cargo `required-features` — 202611/20261110b) */
 export function buildPeer(): void {
-  execFileSync('cargo', ['build', '--offline', '--features', 'record', '--example', 'agent', '--example', 'recorder', '--example', 'rawtool'], { cwd: PEER_REPO, stdio: 'pipe' })
-  // AI 에이전트 브리지(SDK:RULE-PLAT-AGENT — oxpeer 저장소 워크스페이스 멤버 · context 202611/20261112a)
-  execFileSync('cargo', ['build', '--offline', '-p', 'oxbridge'], { cwd: PEER_REPO, stdio: 'pipe' })
+  execFileSync('cargo', ['build', '--offline', '-p', 'oxpeer', '--features', 'record', '--example', 'agent_echo', '--example', 'rawtool'], { cwd: PEER_REPO, stdio: 'pipe' })
+  // 녹음 · 녹화(oxrec) · AI 에이전트 브리지(oxbridge-ai — SDK:RULE-PLAT-AGENT · context 202611/20261112a) — 워크스페이스 멤버 실행 파일
+  execFileSync('cargo', ['build', '--offline', '-p', 'oxrec', '-p', 'oxbridge-ai'], { cwd: PEER_REPO, stdio: 'pipe' })
 }
 
 /** ffmpeg 로 진짜 표본 — Opus(20ms) · H264(baseline · AUD 경계 · GOP 30) · VP8(IVF) */
@@ -38,9 +38,9 @@ export interface PeerRun {
   readonly done: Promise<Record<string, unknown>>
 }
 
-/** 예제 하나를 띄운다 — `[agent]`/`[recorder]`/`[oxbridge]` 의 「들어왔다」 줄을 기다리고 · 끝나면 요약 JSON */
-export function runPeer(name: 'agent' | 'recorder' | 'oxbridge', args: string[]): PeerRun {
-  const bin = name === 'oxbridge' ? join(PEER_REPO, 'target', 'debug', 'oxbridge') : BIN(name)
+/** 실행 파일 · 예제 하나를 띄운다 — `[agent_echo]`/`[oxrec]`/`[oxbridge-ai]` 의 「들어왔다」 줄을 기다리고 · 끝나면 요약 JSON */
+export function runPeer(name: 'agent_echo' | 'oxrec' | 'oxbridge-ai', args: string[]): PeerRun {
+  const bin = name === 'agent_echo' ? EXAMPLE(name) : join(PEER_REPO, 'target', 'debug', name)
   const p = spawn(bin, ['--base', BASE, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
   let out = ''
   let err = ''
@@ -83,6 +83,6 @@ export const readJson = (f: string): unknown => JSON.parse(readFileSync(f, 'utf8
 
 /** rawtool 하위 명령 하나 — 표준 출력 JSON(원시 파트 읽기 · SDK:RULE-PLAT-REC-RAW) */
 export function rawtool(args: string[]): Record<string, unknown> {
-  return JSON.parse(execFileSync(BIN('rawtool'), args, { maxBuffer: 256 * 1024 * 1024 }).toString()) as Record<string, unknown>
+  return JSON.parse(execFileSync(EXAMPLE('rawtool'), args, { maxBuffer: 256 * 1024 * 1024 }).toString()) as Record<string, unknown>
 }
 

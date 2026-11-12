@@ -27,7 +27,7 @@ test('PEER-MIX-01 브라우저 발행을 oxpeer 녹화기가 받아 쓴 파일�
   await a.call('enableMic')
   await a.call('enableCamera')
   const out = mkdtempSync(join(tmpdir(), 'oxpeer-rec-'))
-  const rec = runPeer('recorder', ['--room', ROOM, '--out', out, '--secs', '6', '--user', S.user('REC'), '--video'])
+  const rec = runPeer('oxrec', ['--room', ROOM, '--out', out, '--secs', '6', '--user', S.user('REC'), '--video'])
   await rec.joined
   const summary = await rec.done
   const files = (summary.files as FileRow[] | undefined) ?? []
@@ -49,7 +49,7 @@ test('PEER-MIX-02 oxpeer 에이전트의 진짜 코덱 발행을 브라우저가
   const ctx = await browser.newContext()
   const b = await S.open(ctx, { userId: S.user('U02') })
   await b.call('join', ROOM, 'talk')
-  const ag = runPeer('agent', ['--room', ROOM, '--secs', '12', '--user', S.user('AGENT'), '--mode', 'file', '--opus', sm.opus, '--h264', sm.h264])
+  const ag = runPeer('agent_echo', ['--room', ROOM, '--secs', '12', '--user', S.user('AGENT'), '--mode', 'file', '--opus', sm.opus, '--h264', sm.h264])
   await ag.joined
   const video = (t: TrackStat): boolean => t.kind === 'video' && !t.id.startsWith('ptt-')
   const audio = (t: TrackStat): boolean => t.kind === 'audio' && !t.id.startsWith('ptt-')

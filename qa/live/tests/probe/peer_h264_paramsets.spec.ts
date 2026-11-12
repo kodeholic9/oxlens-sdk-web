@@ -2,7 +2,7 @@
 // ★실측(probe) M4(context 202611/20261109b §12 · 20261110b) — H264 SPS · PPS 가 ★따로 오는가 · 프레임 안(in-band)에만 실리나 · 키프레임마다 오나.
 //   HLS init 세그먼트(avcC)를 무엇으로 짓는지가 여기서 정해진다. 두 인코더를 같은 길로 본다:
 //   ① 브라우저(크로미움 가짜 장치 — 실 인코더)가 H264 방에 발행 ② oxpeer 에이전트가 ffmpeg(x264 baseline · GOP 30)가 지은 표본을 발행.
-//   녹화기(oxpeer 예제)가 원시 파트로 받아 적고 · `rawtool nals` 가 조립한 프레임마다 NAL 종류를 낸다(파이프라인 — SDK:RULE-PLAT-REC-PIPE).
+//   녹화기(oxrec)가 원시 파트로 받아 적고 · `rawtool nals` 가 조립한 프레임마다 NAL 종류를 낸다(파이프라인 — SDK:RULE-PLAT-REC-PIPE).
 //   판정이 아니라 수치다 — 정규 게이트 밖(chromium-probe). 결과는 `test-results/probe/m4_paramsets.json`.
 import { test } from '@playwright/test'
 import { Scope, ensureRoom, expect } from '../../fixtures/scope.js'
@@ -37,7 +37,7 @@ function tally(frames: Nal[]): Record<string, unknown> {
 async function recordH264(room: string, label: string, publish: () => Promise<unknown>): Promise<Record<string, unknown>> {
   const out = mkdtempSync(join(tmpdir(), `oxpeer-m4-${label}-`))
   const user = S.user(`REC${label}`)
-  const rec = runPeer('recorder', ['--room', room, '--out', out, '--secs', '8', '--user', user, '--video', '--raw', join(out, 'raw')])
+  const rec = runPeer('oxrec', ['--room', room, '--out', out, '--secs', '8', '--user', user, '--video', '--raw', join(out, 'raw')])
   await rec.joined
   await publish()
   await rec.done
@@ -62,7 +62,7 @@ test('M4 H264 SPS · PPS 위치 — 브라우저 · x264', { annotation: { type:
   await ensureRoom(R2)
   const sm = makeSamples(3)
   res.x264 = await recordH264(R2, 'X', async () => {
-    const ag = runPeer('agent', ['--room', R2, '--secs', '7', '--user', S.user('AGENT'), '--mode', 'file', '--opus', sm.opus, '--h264', sm.h264])
+    const ag = runPeer('agent_echo', ['--room', R2, '--secs', '7', '--user', S.user('AGENT'), '--mode', 'file', '--opus', sm.opus, '--h264', sm.h264])
     await ag.joined
   })
 

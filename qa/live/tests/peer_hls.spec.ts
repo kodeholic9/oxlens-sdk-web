@@ -74,7 +74,7 @@ test('PEER-MIX-03 브라우저 발행을 oxpeer 녹화기가 HLS 로 쓰고 기�
   const out = join(OUT, 'mix03')
   rmSync(out, { recursive: true, force: true })
   mkdirSync(out, { recursive: true })
-  const rec = runPeer('recorder', ['--room', ROOM, '--out', out, '--secs', '14', '--user', S.user('REC'), '--hls'])
+  const rec = runPeer('oxrec', ['--room', ROOM, '--out', out, '--secs', '14', '--user', S.user('REC'), '--hls'])
   await rec.joined
   const summary = await rec.done
   const streams = (summary.hls as Array<{ owner?: string; refused?: string | null; event: string; segments: unknown[]; keyframe_requests: number; over_target: number }>) ?? []

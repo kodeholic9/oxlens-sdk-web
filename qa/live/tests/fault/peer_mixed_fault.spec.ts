@@ -18,7 +18,7 @@ test('PEER-MIX-B1 코덱이 아닌 본문이면 패킷은 와도 디코드한 �
   const ctx = await browser.newContext()
   const b = await S.open(ctx, { userId: S.user('U02') })
   await b.call('join', ROOM, 'talk')
-  const ag = runPeer('agent', ['--room', ROOM, '--secs', '9', '--user', S.user('AGENT'), '--mode', 'beacon', '--video'])
+  const ag = runPeer('agent_echo', ['--room', ROOM, '--secs', '9', '--user', S.user('AGENT'), '--mode', 'beacon', '--video'])
   await ag.joined
   const video = (t: TrackStat): boolean => t.kind === 'video' && !t.id.startsWith('ptt-')
   await expect.poll(() => b.call<TrackStat[]>('trackStats').then((s) => s.filter(video).length), { message: '에이전트 영상 트랙이 붙는다' }).toBe(1)

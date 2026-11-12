@@ -1,6 +1,6 @@
 // author: kodeholic (powered by Claude)
 // ★실측(probe) M7(context 202611/20261109b §12 · 김대리 검토 #15) — 실 인코더 영상 한 사람의 시간당 원시 파트 크기.
-//   1단계 M7 은 합성 페이로드였다. 여기서는 브라우저(크로미움 가짜 장치 — 실 인코더 H264 · Opus)가 발행하고 녹화기(oxpeer 예제)가 원시 파트로 받아 적는다.
+//   1단계 M7 은 합성 페이로드였다. 여기서는 브라우저(크로미움 가짜 장치 — 실 인코더 H264 · Opus)가 발행하고 녹화기(oxrec)가 원시 파트로 받아 적는다.
 //   원시 크기 = 파트 파일 합(MCAP 머리 · 색인 포함) · 시간 = 조립한 영상 프레임의 RTP 시각 폭 · 종류마다 페이로드 합은 `rawtool frames`.
 //   판정이 아니라 수치다 — 정규 게이트 밖(chromium-probe). 결과는 `test-results/probe/m7_raw_size.json`.
 import { test } from '@playwright/test'
@@ -27,7 +27,7 @@ test('M7 실 인코더 영상 한 사람 — 시간당 원시 파트 크기', { 
   const out = mkdtempSync(join(tmpdir(), 'oxpeer-m7-'))
   const raw = join(out, 'raw')
   const user = S.user('REC')
-  const rec = runPeer('recorder', ['--room', room, '--out', out, '--secs', String(SECS), '--user', user, '--video', '--raw', raw])
+  const rec = runPeer('oxrec', ['--room', room, '--out', out, '--secs', String(SECS), '--user', user, '--video', '--raw', raw])
   await rec.joined
   const a = await S.open(await browser.newContext(), { userId: S.user('U01') })
   await a.call('join', room, 'talk')

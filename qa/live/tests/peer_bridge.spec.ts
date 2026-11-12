@@ -34,7 +34,7 @@ test('PEER-BRIDGE-01 누르고 말한 음성이 에이전트 목소리로 돌아
     await speaker.call('join', ROOM, 'talk')
     const listener = await S.open(ctx, { userId: S.user('U02') })
     await listener.call('join', ROOM, 'listen')
-    const br = runPeer('oxbridge', ['--room', ROOM, '--ai-url', ai.url, '--secs', '16', '--user', AGENT])
+    const br = runPeer('oxbridge-ai', ['--room', ROOM, '--ai-url', ai.url, '--secs', '16', '--user', AGENT])
     await br.joined
 
     await speaker.call('press', ROOM)
