@@ -16,6 +16,8 @@ const BIN = (name: string): string => join(PEER_REPO, 'target', 'debug', 'exampl
 /** 예제를 짓는다 — 옛 바이너리로 넘어가지 않는다. ★녹화기 · rawtool 은 기능 `record` 가 있어야 지어진다(oxpeer Cargo `required-features` — 202611/20261110b) */
 export function buildPeer(): void {
   execFileSync('cargo', ['build', '--offline', '--features', 'record', '--example', 'agent', '--example', 'recorder', '--example', 'rawtool'], { cwd: PEER_REPO, stdio: 'pipe' })
+  // AI 에이전트 브리지(SDK:RULE-PLAT-AGENT — oxpeer 저장소 워크스페이스 멤버 · context 202611/20261112a)
+  execFileSync('cargo', ['build', '--offline', '-p', 'oxbridge'], { cwd: PEER_REPO, stdio: 'pipe' })
 }
 
 /** ffmpeg 로 진짜 표본 — Opus(20ms) · H264(baseline · AUD 경계 · GOP 30) · VP8(IVF) */
@@ -36,9 +38,10 @@ export interface PeerRun {
   readonly done: Promise<Record<string, unknown>>
 }
 
-/** 예제 하나를 띄운다 — `[agent]`/`[recorder]` 의 「들어왔다」 줄을 기다리고 · 끝나면 요약 JSON */
-export function runPeer(name: 'agent' | 'recorder', args: string[]): PeerRun {
-  const p = spawn(BIN(name), ['--base', BASE, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+/** 예제 하나를 띄운다 — `[agent]`/`[recorder]`/`[oxbridge]` 의 「들어왔다」 줄을 기다리고 · 끝나면 요약 JSON */
+export function runPeer(name: 'agent' | 'recorder' | 'oxbridge', args: string[]): PeerRun {
+  const bin = name === 'oxbridge' ? join(PEER_REPO, 'target', 'debug', 'oxbridge') : BIN(name)
+  const p = spawn(bin, ['--base', BASE, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
   let out = ''
   let err = ''
   let joinedResolve: () => void = () => {}
