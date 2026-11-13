@@ -195,6 +195,10 @@ test('SD-ENTRY-TRK-NEGO-OK · SD-ENTRY-TRK-NEGO-FAIL — 그 서버 협상 결�
     assert.ok(failRes >= 1)
     assert.equal(spy.n('negoFail') - fail0, failRes * 2, 'SD-ENTRY-TRK-NEGO-FAIL — 협상 실패 하나에 그 서버의 방마다 ENTRY.negoFail 하나')
     assert.equal(r.ws.requests(Op.READY).length, ready1, 'SD-ENTRY-TRK-NEGO-FAIL — 실패했으면 READY 를 보내지 않는다')
+    const ready2 = r.ws.requests(Op.READY).length
+    await join(r, 'r3')
+    const owed = r.ws.requests(Op.READY).slice(ready2).map((f) => (f.body as { room_id: string }).room_id)
+    assert.deepEqual([...new Set(owed)].sort(), ['r1', 'r2', 'r3'], 'SD-ENTRY-TRK-NEGO-FAIL — 실패로 READY 빚을 지우지 않는다: 남이 연 협상(같은 서버 다른 방 입장)이 성공하면 실패한 방도 READY(연:RULE-SUB-READY-PROC · context 202611/20261113j ③-1)')
     await r.c.close()
   } finally { spy.restore() }
 })
