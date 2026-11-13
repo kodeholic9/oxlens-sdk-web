@@ -345,6 +345,11 @@ const qa = {
       let pliCount = null
       let nackCount = null
       let frameWidth = null
+      // 받는 쪽 지터 버퍼 — 누적 초 · 내보낸 표본 수. 두 번 읽은 차를 나누면 그 창의 평균 지연이다(최소 = 외부 요인 뺀 NetEQ 자체 하한)
+      let jbDelay = null
+      let jbTarget = null
+      let jbMinimum = null
+      let jbEmitted = null
       for (const row of (await track.getStats()).values()) {
         if (row.type !== 'inbound-rtp') continue
         packets = row.packetsReceived ?? null
@@ -362,6 +367,10 @@ const qa = {
         pliCount = row.pliCount ?? null
         nackCount = row.nackCount ?? null
         frameWidth = row.frameWidth ?? null
+        jbDelay = row.jitterBufferDelay ?? null
+        jbTarget = row.jitterBufferTargetDelay ?? null
+        jbMinimum = row.jitterBufferMinimumDelay ?? null
+        jbEmitted = row.jitterBufferEmittedCount ?? null
       }
       out.push({
         id, roomId, kind: track.kind, active: track.active,
@@ -370,6 +379,7 @@ const qa = {
         readyState: track.mediaStreamTrack?.readyState ?? null,
         packets, bytes, framesDecoded, freezeCount, pauseCount,
         concealed, silentConcealed, inserted, removed, samplesReceived, freezeMs, keyFramesDecoded, pliCount, nackCount, frameWidth,
+        jbDelay, jbTarget, jbMinimum, jbEmitted,
         ...(el ? { videoWidth: el.videoWidth, videoHeight: el.videoHeight, currentTime: el.currentTime } : {}),
       })
     }

@@ -31,6 +31,11 @@ export interface TrackStat {
   readonly removed?: number | null
   readonly samplesReceived?: number | null
   readonly freezeMs?: number | null
+  /** 받는 쪽 지터 버퍼 누적 초(지연 · 목표 · 최소)와 내보낸 표본 수 — 두 번 읽은 차의 비가 그 창의 평균 ms(× 1000) */
+  readonly jbDelay?: number | null
+  readonly jbTarget?: number | null
+  readonly jbMinimum?: number | null
+  readonly jbEmitted?: number | null
 }
 
 /** 48kHz 샘플 → ms. 오디오 계수는 전부 이 눈금이다. */
