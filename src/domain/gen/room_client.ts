@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/axis_client.mts 가 원천(context/spec/protocol · areas/room/behavior)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 2b1c11b92e31d09f · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
+// IR sha256 b500f2c633b6688f · 영역 ROOM 클라 상태기. 같은 원천의 검증 모형과 한 뿌리다.
 // 집행은 부르는 쪽 몫이다 — out(보낼 것) · fx(이 영역의 효과 — 앱 알림 등) · seams(다른 영역 입구로 — 받는 곳은 위가 정했다) · start(새로 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -117,7 +117,7 @@ export function joinRes(s: St, m: { readonly code: number; readonly join_id: num
     return done(s, { ...s, rs: 'LEAVING', sfu: m.server_config.sfu_id, jid: m.join_id, jsure: true }, 'ROOM.C.JOINING.join_pc_mismatch', [{ ws: 'ROOM_LEAVE', part: 'req', join_id: m.join_id }], ['app.join_failed'], [{ fx: 'aff.leave', to: 'AFF', at: 'self' }, { fx: 'room.sub_rooms', to: 'ROOM', at: 'sameServer' }], [])
   }
   if (m.part === 'res') {
-    return done(s, { ...s, rs: 'JOINED', cseq: m.version.seq, cepoch: m.version.epoch, sfu: m.server_config.sfu_id, jid: m.join_id, jsure: true }, 'ROOM.C.JOINING.join_ok', [], ['app.joined'], [{ fx: 'trk.snapshot', to: 'TRK', at: 'self' }, { fx: 'link.server_ice', to: 'LINK', at: 'sameServer' }, { fx: 'link.table', to: 'LINK', at: 'sameServer' }, { fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'ready.tracks', to: 'SUB', at: 'self' }, { fx: 'room.sub_rooms', to: 'ROOM', at: 'sameServer' }, { fx: 'aff.implicit', to: 'AFF', at: 'self' }, { fx: 'floor.join', to: 'FLR', at: 'self' }], [])
+    return done(s, { ...s, rs: 'JOINED', cseq: m.version.seq, cepoch: m.version.epoch, sfu: m.server_config.sfu_id, jid: m.join_id, jsure: true }, 'ROOM.C.JOINING.join_ok', [], ['app.joined'], [{ fx: 'trk.snapshot', to: 'TRK', at: 'self' }, { fx: 'link.server_ice', to: 'LINK', at: 'sameServer' }, { fx: 'link.table', to: 'LINK', at: 'sameServer' }, { fx: 'sdp.rebuild', to: 'LINK', at: 'sameServer' }, { fx: 'ready.tracks', to: 'SUB', at: 'self' }, { fx: 'room.sub_rooms', to: 'ROOM', at: 'sameServer' }, { fx: 'floor.join', to: 'FLR', at: 'self' }, { fx: 'aff.implicit', to: 'AFF', at: 'self' }], [])
   }
   if (m.code === 4009) {
     return done(s, { ...s, retry: true }, 'ROOM.C.JOINING.join_4009', [], [], [], [])

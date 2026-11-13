@@ -173,6 +173,7 @@ test('SD-ENTRY-AFF-JOIN-SELECT①② — 발언 방 · 전환이 없을 때 talk
     await p
     assert.deepEqual(spy.calls['implicit']!.at(-1)!.slice(0, 2), ['ra', true], 'SD-ENTRY-AFF-JOIN-SELECT① — 그 응답이 implicit(sel 참)')
     assert.deepEqual([r.core.rooms.aff.st.wait, r.c.speakingRoom?.id], ['NONE', 'ra'], 'SD-ENTRY-AFF-JOIN-SELECT① — implicit 가 기다림을 푼다 · 발언 방 = 그 방')
+    assert.equal(r.core.rooms.get('ra')!.floor.st.isPub, true, 'SD-ENTRY-AFF-JOIN-SELECT① — 그 방 발언권도 발행 방이다: 입장 응답 효과는 floor.join → aff.implicit 차례(거꾸로면 입장이 막 연 발행 방을 덮는다 · context 20261113j ③-6)')
     assert.equal(affs(r), 0, 'SD-ENTRY-AFF-JOIN-SELECT① — 소속 요청 0')
     // ② 발언 방 있음 — select:false 입장 뒤 setSpeakingRoom(rb) · 전환 실패에도 방에 남는다
     const failed: unknown[] = []
