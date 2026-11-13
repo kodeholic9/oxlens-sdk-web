@@ -1,5 +1,5 @@
 // ★생성 파일 — gen/floor_client.mts 가 원천(context/spec/protocol · areas/flr/behavior/client.ts)에서 짓는다. 손으로 고치지 않는다.
-// IR sha256 a20f88b2b4a7be13 · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
+// IR sha256 44f4e4316686c2a0 · 3GPP TS 24.380 §6.2.4 floor participant. 같은 원천의 검증 모형 out/floor/Floor.tla 와 실행 기록 재생으로 견준다(tools/replay_client.mts).
 // 집행은 부르는 쪽 몫이다 — out(DC 로 보낼 것) · ack(ACK 으로 답할 것) · fx(마이크 · 화면 · 앱 알림) · start(다시 걸 타이머). armed() 밖의 타이머는 멈춘다.
 /* eslint-disable */
 
@@ -41,10 +41,10 @@ export const initial = (): Cl => ({ cs: 'NOPERM', sub: 'WAIT', want: false, c101
 export type Rx =
   | { t: 'TAKEN'; ack?: boolean; speaker: string; sources?: number[]; seq: number }
   | { t: 'IDLE'; ack?: boolean; prev?: string; seq: number }
+  | { t: 'REVOKE'; ack?: boolean; cause: number; reason?: string }
   | { t: 'GRANTED'; ack?: boolean; priority: number; duration: number }
   | { t: 'DENY'; ack?: boolean; cause: number; reason?: string }
   | { t: 'QINFO'; ack?: boolean; info: { position: number; priority: number } }
-  | { t: 'REVOKE'; ack?: boolean; cause: number; reason?: string }
   | { t: 'ACK'; ack?: boolean; of: number }
 /** 클라 → 서버 메시지(이 상태기가 내는 것) */
 export type Tx =
@@ -206,6 +206,12 @@ export function receive(s: Cl, m: Rx): Step {
         }
         case 'IDLE': {
           return done(s, { ...s, shown: null }, 'FLR.C.NOPERM.rx_IDLE', [], [], ['app.speaker_none'], [])
+        }
+        case 'REVOKE': {
+          if (m.cause === 3) {
+            return done(s, s, 'FLR.C.NOPERM.rx_REVOKE_release', [{ t: 'RELEASE' }], [], [], [])
+          }
+          return done(s, s, 'FLR.C.NOPERM.rx_REVOKE_other', [], [], [], [])
         }
         default:
           return done(s, s, 'FLR.C.NOPERM.rx_other', [], [], [], [])

@@ -53,7 +53,7 @@ const LOG = { debug: () => undefined, info: () => undefined, warn: () => undefin
 interface U {
   f: FloorCore
   room: { id: string; sfuId: string; st: { rs: string }; permission: { floorRequest: boolean }; rebuilding: boolean; closed: boolean; sessionClosed: boolean; path: 'open' | 'transport' | 'recovering'; slots: string[]; rendered: number }
-  media: { half: boolean; cold: boolean; opened: number; closed: number; ensured: number; fail: Fault | null; hold: Promise<void> | null }
+  media: { half: boolean; cold: boolean; opened: number; closed: number; ensured: number; fail: Fault | null; hold: Promise<void> | null; gate: Promise<void> | null }
   aff: { speakingRoom: string | null; selects: string[] }
   sent: C.Message[]
   labels: string[]
@@ -78,13 +78,14 @@ function unit(o: { half?: boolean } = {}): U {
     impossible(_l: string, _k: string, _f: string, entry: string) { impossible.push(entry) },
   }
   const media = {
-    half: o.half ?? true, cold: false, opened: 0, closed: 0, ensured: 0, fail: null as Fault | null, hold: null as Promise<void> | null,
+    half: o.half ?? true, cold: false, opened: 0, closed: 0, ensured: 0, fail: null as Fault | null, hold: null as Promise<void> | null, gate: null as Promise<void> | null,
     hasHalfMic: () => media.half,
     halfMicCold: () => media.cold,
     ensureHalfMic: async () => { media.ensured++; if (media.hold) await media.hold; if (media.fail) throw media.fail; media.half = true },
     warmHalf: async () => undefined,
     floorOpen: () => { media.opened++ },
     floorClose: () => { media.closed++ },
+    floorClosed: () => media.gate ?? Promise.resolve(),
     floorIdle: () => undefined,
   }
   const aff = {
@@ -504,12 +505,13 @@ test('SD-API-PTT-PRESS①③④⑤ — 상태표 6 갈래 · arming 중 release 
   g.f.dispose()
 }))
 
-test('K-sym-RULE-FLR-ROOM-SWITCH-1 — release 를 안 부르면(주입) 상한 회수 사유 2 · T9 동안 canRequest 거짓 · 끝나면 state 로 다시 참', () => {
+test('K-sym-RULE-FLR-ROOM-SWITCH-1 — release 를 안 부르면(주입) 상한 회수 사유 2 · T9 동안 canRequest 거짓 · 끝나면 state 로 다시 참', async () => {
   mock.timers.enable({ apis: ['setTimeout'] })
   try {
     const u = unit()
     set(u, { cs: 'PERM', want: true })
     u.rx(revoke(2))
+    await Promise.resolve()   // RELEASE 는 송출을 멈춘 뒤 나간다(연:RULE-FLR-MSG-RELEASE)
     assert.deepEqual([u.f.st.cs, msgs(u.sent)], ['PREL', [C.Type.RELEASE]])
     u.rx(idle())
     const s = u.states.at(-1)!
@@ -1100,6 +1102,47 @@ test('재발 20261102d-9 — arming 중 release 뒤 다시 press 하면 그 누�
   assert.deepEqual([msgs(c.sent), spy.n('press')], [[C.Type.REQUEST], 1], '재발 9 — 둘째 누름이 REQUEST 하나로 간다(유실 0)')
   c.f.dispose()
 }))
+
+test('연:RULE-FLR-MSG-RELEASE — 놓기는 송출을 멈춘 뒤 — 게이트 닫기가 끝나기 전에는 RELEASE 0 · 끝나면 하나(뗌 · 회수 둘 다 · 202611/20261113h)', async () => {
+  for (const how of ['release', 'revoke'] as const) {
+    const u = unit()
+    await pressed(u)
+    u.rx(granted())
+    let done!: () => void
+    u.media.gate = new Promise<void>((r) => { done = r })
+    const n = u.sent.length
+    if (how === 'release') await u.f.release()
+    else u.rx(revoke(2))
+    assert.deepEqual([u.f.st.cs, u.media.closed, msgs(u.sent.slice(n))], ['PREL', 1, []], `${how} — 게이트가 아직 닫히는 중이면 RELEASE 를 보내지 않는다`)
+    done()
+    await u.media.gate
+    await Promise.resolve()
+    assert.deepEqual(msgs(u.sent.slice(n)), [C.Type.RELEASE], `${how} — 송출이 멈춘 뒤 RELEASE 하나`)
+    u.f.dispose()
+  }
+})
+
+test('연:DEV-FLR-NOPERM-REVOKE-RELEASE — 허가 없음에서 사유 3 회수를 받으면 RELEASE 하나 · 다른 사유 · 요청 중은 버린다(놓기 뒤 꼬리 RTP 로 서버가 NPSENDS 에 든 판 · 202611/20261113h)', async () => {
+  const u = unit()
+  await pressed(u)
+  u.rx(granted())
+  await u.f.release()
+  await Promise.resolve()
+  u.rx(C.buildAck({ of: C.Type.RELEASE, room: R }))
+  assert.equal(u.f.st.cs, 'NOPERM')
+  let n = u.sent.length
+  u.rx(revoke(3))
+  assert.deepEqual([u.f.st.cs, msgs(u.sent.slice(n))], ['NOPERM', [C.Type.RELEASE]], 'NOPERM 사유 3 — RELEASE 하나로 서버를 꺼낸다')
+  n = u.sent.length
+  u.rx(revoke(2))
+  assert.deepEqual([u.f.st.cs, msgs(u.sent.slice(n))], ['NOPERM', []], 'NOPERM 다른 사유 — 지난 허가의 늦은 회수라 버린다')
+  await pressed(u)
+  assert.equal(u.f.st.cs, 'PREQ')
+  n = u.sent.length
+  u.rx(revoke(3))
+  assert.deepEqual([u.f.st.cs, msgs(u.sent.slice(n))], ['PREQ', []], 'PREQ — 아직 못 받은 허가의 정상 회수와 가를 수 없어 놓기를 보내지 않는다(모형 core H7)')
+  u.f.dispose()
+})
 
 test('FLR.C.PREL.rx_ACK_release — RELEASE 는 A 비트를 세운다 · ACK(of RELEASE) 하나에 no_permission · 곧바로 다시 누르면 REQUEST(연:DEV-FLR-RELEASE-ACK)', async () => {
   const u = unit()

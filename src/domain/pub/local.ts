@@ -485,8 +485,11 @@ export class LocalCore {
     if (!this.gate) return
     this.gate = false
     const sender = this.sender
-    if (sender) void sender.replaceTrack(null).catch((e) => this.media.log.warn('replaceTrack 실패', { err: String(e) }))
+    if (sender) this.gateClosed = sender.replaceTrack(null).catch((e) => this.media.log.warn('replaceTrack 실패', { err: String(e) }))
   }
+
+  /** 게이트 닫기가 끝났다(송출이 멈췄다) — 발언권 RELEASE 는 이것 뒤에 나간다(연:RULE-FLR-MSG-RELEASE · 202611/20261113h) */
+  floorClosed(): Promise<void> { return this.gateClosed }
 
   // ── 이음매가 부르는 입구(위 REACTS) ────────────────────────────────────
 
@@ -498,6 +501,7 @@ export class LocalCore {
   floorOpen(): void { this.enter('floorOpen', 'mic.open', []); this.coldTimer.stop() }
   /** FLR mic.close */
   floorClose(): void { this.enter('floorClose', 'mic.close', []); this.armCold() }
+  private gateClosed: Promise<void> = Promise.resolve()
   /** 발언권이 no_permission 으로 돌아왔다(거절 · 철회 · 놓음 끝) — 무발화 30초를 그때부터 다시 센다(SDK:RULE-FLR-MIC-POWER) */
   floorIdle(): void { this.armCold() }
   /** LINK pub.drop_server — 그 서버 연결이 닫혔다 · 협상 · 발행을 기다리던 발행은 closed 로 reject(SDK:IMPL-PUB-API 효과 표 app.publish_failed) */

@@ -282,11 +282,15 @@ export class FloorCore {
     const plan = PB.plan(step)
     this.st = plan.state
     this.room.record('FLR', this.room.id, prev.cs, this.st.cs, plan.label, cause)
-    for (const tx of plan.send) this.send(tx)
+    // ★놓기는 송출을 멈춘 뒤 — 같은 걸음에 mic.close 가 있으면 RELEASE 는 게이트가 닫힌 뒤에 보낸다(연:RULE-FLR-MSG-RELEASE · 원문은 발언권 메시지와 RTP 가 같은 미디어 평면이라 차례가 저절로 서지만 우리는 DC 라 클라가 세운다)
+    const closing = step.fx.includes('mic.close')
+    const later: FLR.Tx[] = closing ? plan.send.filter((tx) => tx.t === 'RELEASE') : []
+    for (const tx of plan.send) if (!later.includes(tx)) this.send(tx)
     for (const a of plan.ack) this.room.sendFloor(Mbcp.ack(this.room.id, a.of))
     this.timersFollow(plan.timers)
     const extras: Extra[] = []
     for (const f of step.fx) this.effect(f, extras)
+    if (later.length) void this.media.floorClosed(this.room.sfuId).then(() => { if (!this.disposed) for (const tx of later) this.send(tx) })
     if (this.st.cs === 'NOPERM' && prev.cs !== 'NOPERM' && this.lastEnd === 'released' && extras.length === 0) extras.push('released')
     if (this.st.cs === 'NOPERM' && prev.cs !== 'NOPERM') this.media.floorIdle(this.room.sfuId)
     if (this.st.cs !== 'PERM' && this.st.cs !== 'QUEUED') this.remainingSec = undefined

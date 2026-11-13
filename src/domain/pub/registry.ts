@@ -160,6 +160,10 @@ export class MediaRegistry {
 
   floorOpen(sfuId: string | null): void { for (const t of this.on(sfuId)) if (t.duplex === 'half') t.floorOpen() }
   floorClose(sfuId: string | null): void { for (const t of this.on(sfuId)) if (t.duplex === 'half') t.floorClose() }
+  /** 반이중 송출이 다 멈췄다 — 발언권 RELEASE 를 그 뒤에 보낸다(연:RULE-FLR-MSG-RELEASE) */
+  floorClosed(sfuId: string | null): Promise<void> {
+    return Promise.all(this.on(sfuId).filter((t) => t.duplex === 'half').map((t) => t.floorClosed())).then(() => undefined)
+  }
   floorIdle(sfuId: string | null): void { for (const t of this.on(sfuId)) if (t.duplex === 'half') t.floorIdle() }
 
   // ── 이음매가 부르는 무리 입구(LINK · SES) ──────────────────────────────

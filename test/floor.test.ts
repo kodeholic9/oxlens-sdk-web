@@ -30,7 +30,7 @@ function rig(): Rig {
     linkFor: () => ({ peer }),
     ses: { cs: 'ACTIVE' },
     log: { debug: () => undefined, warn: () => undefined, error: () => undefined },
-    media: { hasHalfMic: () => true, halfMicCold: () => false, floorClose: () => undefined, floorOpen: () => undefined, floorIdle: () => undefined },
+    media: { hasHalfMic: () => true, halfMicCold: () => false, floorClose: () => undefined, floorClosed: () => Promise.resolve(), floorOpen: () => undefined, floorIdle: () => undefined },
     rooms: { playback: {}, aff: {} },
   } as unknown as Core
   const room = new RoomCore(core, 'ch-3', {})
@@ -186,7 +186,7 @@ test('연:RACE-FLR-LATE-GRANTED — 다시 누른 뒤 닿은 옛 GRANTED 를 새
   r.room.floor.dispose()
 })
 
-test('연:RACE-FLR-T132-PREEMPT — 승계 의지 대기 중 REVOKE 는 버리고(원문 6.2.4.9 에 절 없음) · 수락 뒤 다시 온 REVOKE 로 반환한다', () => {
+test('연:RACE-FLR-T132-PREEMPT — 승계 의지 대기 중 REVOKE 는 버리고(원문 6.2.4.9 에 절 없음) · 수락 뒤 다시 온 REVOKE 로 반환한다', async () => {
   const r = rig()
   r.room.floor.st = { ...r.room.floor.st, cs: 'QUEUED', sub: 'GRANTED', want: true }
   r.rx(revoke())
@@ -195,6 +195,7 @@ test('연:RACE-FLR-T132-PREEMPT — 승계 의지 대기 중 REVOKE 는 버리�
   assert.equal(r.room.floor.st.cs, 'PERM')
   r.rx(revoke())
   assert.equal(r.room.floor.st.cs, 'PREL', 'T8 재전송 REVOKE 가 닿으면 반환한다(ASM-FLR-T8-OVER-T132 — 마지막 재전송은 T132 뒤)')
+  await Promise.resolve()   // RELEASE 는 송출을 멈춘 뒤 나간다(연:RULE-FLR-MSG-RELEASE)
   assert.equal(r.sent.at(-1), C.Type.RELEASE)
   r.room.floor.dispose()
 })
