@@ -127,7 +127,7 @@ const qa = {
           id: t.trackId, rid: row.rid ?? null, ssrc: row.ssrc,
           framesEncoded: row.framesEncoded ?? null, keyFramesEncoded: row.keyFramesEncoded ?? null,
           pliCount: row.pliCount ?? null, nackCount: row.nackCount ?? null, frameWidth: row.frameWidth ?? null,
-          active: row.active ?? null, limit: row.qualityLimitationReason ?? null, bytesSent: row.bytesSent ?? null,
+          active: row.active ?? null, limit: row.qualityLimitationReason ?? null, bytesSent: row.bytesSent ?? null, packetsSent: row.packetsSent ?? null,
         })
       }
     }
