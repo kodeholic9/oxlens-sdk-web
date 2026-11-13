@@ -26,9 +26,24 @@
   #pttBtn.has_permission { background: #2e7d32; color: #fff; border-color: #2e7d32; }
   #pttBtn.pending_request, #pttBtn.queued, #pttBtn.pending_release { background: #e9a600; color: #000; border-color: #e9a600; }
   #pttState, #speaker { font-family: ui-monospace, monospace; font-size: 13px; margin-top: 6px; }
-  #log { font-family: ui-monospace, monospace; font-size: 11px; height: 180px; overflow: auto; border: 1px solid #8884; border-radius: 6px; padding: 6px; margin-top: 12px; white-space: pre; }
+  #pttBtn { -webkit-touch-callout: none; -webkit-user-select: none; }
+  #logBar { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 13px; }
+  #logBar label { margin-left: auto; display: flex; gap: 4px; align-items: center; }
+  #log { font-family: ui-monospace, monospace; font-size: 11px; height: 180px; overflow: auto; border: 1px solid #8884; border-radius: 6px; padding: 6px; margin-top: 6px; white-space: pre; }
   #log .warn { color: #e9a600; } #log .error { color: #d32f2f; }
+  #log.hideBeat .beat { display: none; }
   #leave { display: none; }
+  @media (max-width: 720px) {
+    #stage { grid-template-columns: 1fr; }
+    aside { order: -1; }
+    #pttBtn { padding: 0; height: 30vh; font-size: 24px; }
+  }
+  @media (max-width: 600px) {
+    body { padding: 12px; }
+    form > * { flex: 1 1 100%; }
+    #tiles { grid-template-columns: 1fr; }
+    #log { height: 150px; }
+  }
 </style>
 </head>
 <body>
@@ -38,7 +53,8 @@
   <input id="roomId" placeholder="방 (예: demo)" value="demo" required>
   <select id="mode">
     <option value="conf">회의 — 마이크 · 카메라 · 영상 타일</option>
-    <option value="ptt">무전 — 누르고 말하기</option>
+    <option value="ptt-hold">무전 — 누르고 말하기</option>
+    <option value="ptt-toggle">무전 — 토글(눌러 켜고 다시 눌러 끔)</option>
   </select>
   <button type="submit" id="join">입장</button>
   <button type="button" id="leave">나가기</button>
@@ -57,7 +73,12 @@
     <ul id="roster"></ul>
   </aside>
 </div>
-<div id="log"></div>
+<div id="logBar">
+  <button type="button" id="logCopy">복사</button>
+  <button type="button" id="logClear">지우기</button>
+  <label><input type="checkbox" id="hideBeat" checked> 하트비트 숨김</label>
+</div>
+<div id="log" class="hideBeat"></div>
 <script type="module" src="./app.js"></script>
 </body>
 </html>

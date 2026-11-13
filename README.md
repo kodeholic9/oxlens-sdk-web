@@ -92,7 +92,13 @@ button.onpointerup = () => { void ch.ptt.release() }
 npm run build && node examples/web/server.mjs
 ```
 
-브라우저 탭 둘로 `http://localhost:5590` 을 열고 이름을 달리해 같은 방에 들어가면 회의(서로의 영상) · 무전(누르고 말하기 · 화자 표시)을 볼 수 있다. 카메라 · 마이크는 `localhost` 에서만 열린다(다른 기기에서 붙이려면 https 가 필요하다). 접속점 · 계정은 환경 변수 `OXLENS_BASE` · `OXLENS_API_KEY` · `OXLENS_API_SECRET` 로 바꾼다.
+브라우저 탭 둘로 `http://localhost:5590` 을 열고 이름을 달리해 같은 방에 들어가면 회의(서로의 영상) · 무전(누르고 말하기 또는 토글 · 화자 표시)을 볼 수 있다. 화면은 폰 폭에 맞춰 한 단으로 쌓이고, 로그는 복사할 수 있다(상태가 그대로인 하트비트 줄은 기본으로 숨긴다). 접속점 · 계정은 환경 변수 `OXLENS_BASE` · `OXLENS_API_KEY` · `OXLENS_API_SECRET` 로 바꾼다.
+
+카메라 · 마이크는 `localhost` 또는 https 에서만 열린다. 폰 같은 다른 기기에서 붙이려면 `--https` 로 띄운다 — LAN IP 인증서([mkcert](https://github.com/FiloSottile/mkcert) · 또는 `OXLENS_TLS_CERT` · `OXLENS_TLS_KEY`)로 https 를 열고 hub 접속점(HTTP · WebSocket)을 같은 주소 아래로 중계한다. 미디어는 서버로 곧장 가므로 같은 네트워크여야 한다.
+
+```bash
+node examples/web/server.mjs --https     # 찍히는 https://<LAN IP>:5590 을 폰에서 연다 · 경고가 뜨면 /ca.crt 로 CA 를 깔거나 한 번 넘긴다
+```
 
 ## 표면 한눈에
 

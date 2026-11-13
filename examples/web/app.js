@@ -1,7 +1,8 @@
 // author: kodeholic (powered by Claude)
 // 샘플 앱 — README 「빠른 시작」의 실행판. SDK 는 dist/index.js 의 공개 표면만 쓴다.
 // 회의: 말하기 모드로 들어가 마이크 · 카메라를 켜고 남의 영상을 타일로 붙인다.
-// 무전: 말하기 모드로 들어가 ptt.enable() 로 마이크를 데우고, 버튼을 누른 동안 press · 떼면 release.
+// 무전: 말하기 모드로 들어가 ptt.enable() 로 마이크를 데우고, 누르고 말하기(hold)는 버튼을 누른 동안 press · 떼면 release ·
+//       토글(toggle)은 한 번 눌러 press · 다시 눌러 release(큐에서 차례가 오면 다시 눌러 받는다).
 import { createClient, OxLensError } from '/dist/index.js'
 
 const $ = (id) => document.getElementById(id)
@@ -9,15 +10,46 @@ const ui = {
   form: $('enter'), userId: $('userId'), roomId: $('roomId'), mode: $('mode'), join: $('join'), leave: $('leave'),
   status: $('status'), banner: $('banner'), tiles: $('tiles'), roster: $('roster'),
   ptt: $('ptt'), pttBtn: $('pttBtn'), pttState: $('pttState'), speaker: $('speaker'), log: $('log'),
+  logCopy: $('logCopy'), logClear: $('logClear'), hideBeat: $('hideBeat'),
 }
 
-function log(level, text) {
+const LOG_MAX = 2000
+
+// beat = 상태가 그대로인 전이(하트비트 등) — 「하트비트 숨김」이 켜져 있으면 보이지도 복사되지도 않는다
+function log(level, text, beat = false) {
   const line = document.createElement('div')
-  line.className = level
+  line.className = beat ? `${level} beat` : level
   line.textContent = `${new Date().toLocaleTimeString('ko-KR', { hour12: false })}.${String(Date.now() % 1000).padStart(3, '0')} ${text}`
   ui.log.append(line)
+  while (ui.log.childElementCount > LOG_MAX) ui.log.firstElementChild.remove()
   ui.log.scrollTop = ui.log.scrollHeight
 }
+
+// 클립보드 API 는 보안 문맥(https · localhost)에서만 있다 — 없으면 예전 방식으로
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return true } catch { /* 아래로 */ }
+  }
+  const ta = document.createElement('textarea')
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0'
+  document.body.append(ta); ta.select()
+  const ok = document.execCommand('copy')
+  ta.remove()
+  return ok
+}
+
+ui.logCopy.addEventListener('click', async () => {
+  const hide = ui.hideBeat.checked
+  const lines = [...ui.log.children].filter((el) => !(hide && el.classList.contains('beat'))).map((el) => el.textContent)
+  const ok = await copyText(lines.join('\n'))
+  ui.logCopy.textContent = ok ? `복사됨 ${lines.length}줄` : '복사 실패'
+  setTimeout(() => { ui.logCopy.textContent = '복사' }, 1500)
+})
+ui.logClear.addEventListener('click', () => ui.log.replaceChildren())
+ui.hideBeat.addEventListener('change', () => {
+  ui.log.classList.toggle('hideBeat', ui.hideBeat.checked)
+  ui.log.scrollTop = ui.log.scrollHeight
+})
 
 // 토큰은 백엔드(server.mjs)가 발급한다 — 페이지는 API 비밀을 모른다.
 async function fetchToken(userId, roomId) {
@@ -44,8 +76,10 @@ function tile(key, label, mediaStreamTrack, muted) {
 }
 
 let client = null
+let entered = new AbortController()
 
 async function enter(userId, roomId, mode) {
+  entered.abort(); entered = new AbortController()
   const { token, base } = await fetchToken(userId, roomId)
   client = createClient({ base, token })
 
@@ -57,7 +91,7 @@ async function enter(userId, roomId, mode) {
   client.on('link', (l) => log('info', `link ${l.server ?? ''} ${l.state}`))
   client.on('audioPlayback', (ok) => { ui.banner.style.display = ok ? 'none' : 'block' })   // 브라우저 자동재생 정책
   client.diagnostics.on('log', (e) => { if (e.level === 'warn' || e.level === 'error') log(e.level, `[sdk ${e.ns}] ${e.msg}`) })
-  client.diagnostics.on('transition', (t) => log('info', `[sdk ${t.layer}] ${t.key} ${t.from} → ${t.to} (${t.label})`))
+  client.diagnostics.on('transition', (t) => log('info', `[sdk ${t.layer}] ${t.key} ${t.from} → ${t.to} (${t.label})`, t.from === t.to))
 
   // ★받는 트랙은 join 전에 client 에 건다 — 입장 직후 오는 트랙을 놓치지 않는다. 오디오는 SDK 가 재생한다.
   client.on('track', (room, t) => {
@@ -108,22 +142,46 @@ async function enter(userId, roomId, mode) {
   } else {
     ui.ptt.style.display = 'block'
     const ptt = room.ptt
-    ptt.input = 'hold'
+    const toggle = mode === 'ptt-toggle'
+    ptt.input = toggle ? 'toggle' : 'hold'                 // 큐에서 차례가 오면 hold 는 버튼을 쥔 채라 바로 열리고 · toggle 은 다시 눌러야 열린다
     await ptt.enable()                                     // 마이크를 미리 데운다(무전 프로필)
+    let want = false                                       // 토글 — 지금 말하겠다고 눌러 둔 상태
+    let prev = ptt.state.phase
+    const label = (s) => {
+      if (!toggle) return s.phase === 'has_permission' ? '말하는 중' : s.phase === 'queued' ? `대기 ${s.queue?.position ?? ''}` : '누르고 말하기'
+      if (s.acceptPending) return `차례 — 눌러서 말하기${s.remainingSec != null ? ` ${s.remainingSec}s` : ''}`
+      if (s.phase === 'has_permission') return '말하는 중 — 눌러서 끝'
+      if (s.phase === 'queued') return `대기 ${s.queue?.position ?? ''} — 눌러서 취소`
+      if (want) return '요청 중 — 눌러서 취소'
+      return '눌러서 말하기'
+    }
     const show = (s) => {
+      if (s.phase === 'no_permission' && prev !== 'no_permission' && prev !== 'off') want = false   // 끝 · 거절 · 회수 — 토글을 내린다
+      prev = s.phase
       ui.pttBtn.className = s.phase
-      ui.pttBtn.textContent = s.phase === 'has_permission' ? '말하는 중' : s.phase === 'queued' ? `대기 ${s.queue?.position ?? ''}` : '누르고 말하기'
-      ui.pttState.textContent = `phase: ${s.phase}${s.remainingSec != null ? ` · ${s.remainingSec}s` : ''}${s.lastDeny ? ` · deny ${s.lastDeny.cause}` : ''}${s.lastRevoke ? ` · revoke ${s.lastRevoke.cause}` : ''}`
+      ui.pttBtn.textContent = label(s)
+      ui.pttState.textContent = `phase: ${s.phase} · ${toggle ? 'toggle' : 'hold'}${s.remainingSec != null ? ` · ${s.remainingSec}s` : ''}${s.lastDeny ? ` · deny ${s.lastDeny.cause}` : ''}${s.lastRevoke ? ` · revoke ${s.lastRevoke.cause}` : ''}`
     }
     show(ptt.state)
     ptt.on('state', show)
     ptt.on('denied', (s) => log('warn', `denied cause=${s.lastDeny?.cause} ${s.lastDeny?.text ?? ''}`))
     ptt.on('revoked', (s) => log('warn', `revoked cause=${s.lastRevoke?.cause}`))
-    const down = (ev) => { ev.preventDefault(); ui.pttBtn.setPointerCapture(ev.pointerId); void ptt.press() }
-    const up = () => { void ptt.release() }
-    ui.pttBtn.addEventListener('pointerdown', down)
-    ui.pttBtn.addEventListener('pointerup', up)
-    ui.pttBtn.addEventListener('pointercancel', up)
+    const sig = { signal: entered.signal }                 // 나가면 버튼 리스너를 함께 뗀다 — 다시 들어와도 겹치지 않는다
+    ui.pttBtn.addEventListener('contextmenu', (ev) => ev.preventDefault(), sig)   // 폰 길게 누름 메뉴
+    if (toggle) {
+      ui.pttBtn.addEventListener('click', () => {
+        if (ptt.state.acceptPending) { void ptt.press(); return }   // 큐에서 차례가 왔다 — 받는다
+        want = !want
+        void (want ? ptt.press() : ptt.release())
+        ui.pttBtn.textContent = label(ptt.state)
+      }, sig)
+    } else {
+      const down = (ev) => { ev.preventDefault(); ui.pttBtn.setPointerCapture(ev.pointerId); void ptt.press() }
+      const up = () => { void ptt.release() }
+      ui.pttBtn.addEventListener('pointerdown', down, sig)
+      ui.pttBtn.addEventListener('pointerup', up, sig)
+      ui.pttBtn.addEventListener('pointercancel', up, sig)
+    }
   }
   return room
 }
@@ -133,13 +191,25 @@ ui.leave.addEventListener('click', () => { void client?.close(); client = null; 
 window.addEventListener('pagehide', () => { void client?.close() })
 
 function reset() {
+  entered.abort()
+  ui.pttBtn.className = ''; ui.pttBtn.textContent = '누르고 말하기'
   ui.tiles.replaceChildren(); ui.roster.replaceChildren()
   ui.ptt.style.display = 'none'; ui.leave.style.display = 'none'; ui.join.disabled = false
   ui.status.textContent = 'disconnected'; ui.speaker.textContent = 'speaker: —'
 }
 
+// 고른 것은 이 브라우저에만 기억한다(사생활 창 · 막힌 저장소면 그냥 넘어간다)
+const PREF = 'oxlens-sample'
+try {
+  const p = JSON.parse(localStorage.getItem(PREF) ?? '{}')
+  if (p.userId) ui.userId.value = p.userId
+  if (p.roomId) ui.roomId.value = p.roomId
+  if ([...ui.mode.options].some((o) => o.value === p.mode)) ui.mode.value = p.mode
+} catch { /* 기억 없음 */ }
+
 ui.form.addEventListener('submit', async (ev) => {
   ev.preventDefault()
+  try { localStorage.setItem(PREF, JSON.stringify({ userId: ui.userId.value.trim(), roomId: ui.roomId.value.trim(), mode: ui.mode.value })) } catch { /* 저장 못 함 */ }
   ui.join.disabled = true; ui.leave.style.display = 'inline-block'
   try {
     await enter(ui.userId.value.trim(), ui.roomId.value.trim(), ui.mode.value)
