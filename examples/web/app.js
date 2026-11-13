@@ -2,7 +2,8 @@
 // 샘플 앱 — README 「빠른 시작」의 실행판. SDK 는 dist/index.js 의 공개 표면만 쓴다.
 // 회의: 말하기 모드로 들어가 마이크 · 카메라를 켜고 남의 영상을 타일로 붙인다.
 // 무전: 말하기 모드로 들어가 ptt.enable() 로 마이크를 데우고, 누르고 말하기(hold)는 버튼을 누른 동안 press · 떼면 release ·
-//       토글(toggle)은 한 번 눌러 press · 다시 눌러 release(큐에서 차례가 오면 다시 눌러 받는다).
+//       토글(toggle)은 한 번 눌러 press · 다시 눌러 release(큐에서 차례가 오면 다시 눌러 받는다 — 원문 T132 · 기본 2초 안에 PTT 를 눌러야 한다).
+//       차례가 오면 진동 · 삑 소리로 알린다(원문 6.2.4.9.4 「floor granted notification」).
 import { createClient, OxLensError } from '/dist/index.js'
 
 const $ = (id) => document.getElementById(id)
@@ -147,36 +148,45 @@ async function enter(userId, roomId, mode) {
     await ptt.enable()                                     // 마이크를 미리 데운다(무전 프로필)
     let want = false                                       // 토글 — 지금 말하겠다고 눌러 둔 상태
     let prev = ptt.state.phase
+    let talker = null                                      // 남이 말하는 중(TAKEN) — speaker 이벤트의 화자 · 나면 비운다
+    const listening = (s) => s.phase === 'no_permission' && talker !== null
     const label = (s) => {
-      if (!toggle) return s.phase === 'has_permission' ? '말하는 중' : s.phase === 'queued' ? `대기 ${s.queue?.position ?? ''}` : '누르고 말하기'
-      if (s.acceptPending) return `차례 — 눌러서 말하기${s.remainingSec != null ? ` ${s.remainingSec}s` : ''}`
+      if (!toggle) return s.phase === 'has_permission' ? '말하는 중' : s.phase === 'queued' ? `대기 ${s.queue?.position ?? ''}` : listening(s) ? `듣는 중 · ${talker}` : '누르고 말하기'
+      if (s.acceptPending) return '차례 — 지금 눌러서 말하기'
       if (s.phase === 'has_permission') return '말하는 중 — 눌러서 끝'
       if (s.phase === 'queued') return `대기 ${s.queue?.position ?? ''} — 눌러서 취소`
       if (want) return '요청 중 — 눌러서 취소'
+      if (listening(s)) return `듣는 중 · ${talker} — 눌러서 대기`
       return '눌러서 말하기'
     }
+    let pending = false
     const show = (s) => {
       if (s.phase === 'no_permission' && prev !== 'no_permission' && prev !== 'off') want = false   // 끝 · 거절 · 회수 — 토글을 내린다
+      if (s.acceptPending && !pending) { navigator.vibrate?.([200, 100, 200]); beep(); log('info', '큐 차례 — 지금 누르면 말한다') }
+      if (!s.acceptPending && pending && s.lastEnd === 't132_expired') log('warn', '큐 차례를 놓침 (t132_expired)')
+      pending = s.acceptPending
       prev = s.phase
-      ui.pttBtn.className = s.phase
+      ui.pttBtn.className = listening(s) && !want ? 'listening' : s.phase
       ui.pttBtn.textContent = label(s)
-      ui.pttState.textContent = `phase: ${s.phase} · ${toggle ? 'toggle' : 'hold'}${s.remainingSec != null ? ` · ${s.remainingSec}s` : ''}${s.lastDeny ? ` · deny ${s.lastDeny.cause}` : ''}${s.lastRevoke ? ` · revoke ${s.lastRevoke.cause}` : ''}`
+      ui.pttState.textContent = `phase: ${s.phase} · ${toggle ? 'toggle' : 'hold'}${s.remainingSec != null && !s.acceptPending ? ` · ${s.remainingSec}s` : ''}${s.lastDeny ? ` · deny ${s.lastDeny.cause}` : ''}${s.lastRevoke ? ` · revoke ${s.lastRevoke.cause}` : ''}`
     }
     show(ptt.state)
     ptt.on('state', show)
+    ptt.on('speaker', (e) => { talker = e.userId && e.userId !== userId ? e.userId : null; show(ptt.state) })
     ptt.on('denied', (s) => log('warn', `denied cause=${s.lastDeny?.cause} ${s.lastDeny?.text ?? ''}`))
     ptt.on('revoked', (s) => log('warn', `revoked cause=${s.lastRevoke?.cause}`))
     const sig = { signal: entered.signal }                 // 나가면 버튼 리스너를 함께 뗀다 — 다시 들어와도 겹치지 않는다
     ui.pttBtn.addEventListener('contextmenu', (ev) => ev.preventDefault(), sig)   // 폰 길게 누름 메뉴
     if (toggle) {
       ui.pttBtn.addEventListener('click', () => {
+        unlockBeep()
         if (ptt.state.acceptPending) { void ptt.press(); return }   // 큐에서 차례가 왔다 — 받는다
         want = !want
         void (want ? ptt.press() : ptt.release())
         ui.pttBtn.textContent = label(ptt.state)
       }, sig)
     } else {
-      const down = (ev) => { ev.preventDefault(); ui.pttBtn.setPointerCapture(ev.pointerId); void ptt.press() }
+      const down = (ev) => { ev.preventDefault(); unlockBeep(); ui.pttBtn.setPointerCapture(ev.pointerId); void ptt.press() }
       const up = () => { void ptt.release() }
       ui.pttBtn.addEventListener('pointerdown', down, sig)
       ui.pttBtn.addEventListener('pointerup', up, sig)
@@ -184,6 +194,16 @@ async function enter(userId, roomId, mode) {
     }
   }
   return room
+}
+
+// 차례 알림 소리 — 폰 브라우저는 사용자 손짓 안에서 만든 AudioContext 만 소리를 낸다(버튼을 누를 때 연다)
+let ac = null
+function unlockBeep() { try { ac ??= new AudioContext(); void ac.resume() } catch { /* 소리 없음 */ } }
+function beep() {
+  if (!ac) return
+  const o = ac.createOscillator(), g = ac.createGain()
+  o.frequency.value = 880; g.gain.value = 0.2
+  o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.15)
 }
 
 ui.banner.addEventListener('click', () => { void client?.media.startAudio() })
