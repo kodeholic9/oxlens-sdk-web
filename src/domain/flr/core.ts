@@ -282,7 +282,7 @@ export class FloorCore {
     const plan = PB.plan(step)
     this.st = plan.state
     this.room.record('FLR', this.room.id, prev.cs, this.st.cs, plan.label, cause)
-    // ★놓기는 송출을 멈춘 뒤 — 같은 걸음에 mic.close 가 있으면 RELEASE 는 게이트가 닫힌 뒤에 보낸다(연:RULE-FLR-MSG-RELEASE · 원문은 발언권 메시지와 RTP 가 같은 미디어 평면이라 차례가 저절로 서지만 우리는 DC 라 클라가 세운다)
+    // ★놓기는 송출을 멈춘 뒤 — 같은 걸음에 mic.close 가 있으면 RELEASE 는 게이트가 닫힌 뒤에 보낸다(연:RULE-FLR-MSG-RELEASE — 놓기 뒤 꼬리 RTP 를 줄인다 · 원문도 RTP 와 발언권 메시지의 차례는 보장하지 않는다 — 남는 꼬리의 회수는 연:DEV-FLR-NOPERM-REVOKE-RELEASE 가 받는다)
     const closing = step.fx.includes('mic.close')
     const later: FLR.Tx[] = closing ? plan.send.filter((tx) => tx.t === 'RELEASE') : []
     for (const tx of plan.send) if (!later.includes(tx)) this.send(tx)
