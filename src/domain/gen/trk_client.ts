@@ -12,7 +12,7 @@ export type TimerName = never
 
 /** 클라 상태 — 원천 TRK K */
 export interface St {
-  /** 트랙 층 — 받은 항목으로 통째 교체한다 */
+  /** 트랙 층 — 받은 항목으로 통째 교체한다 · ★받을 트랙만 — 내 개인 트랙은 넣지 않는다(델타 길 mine_other · 스냅샷은 내 것을 빼고 넘긴다 — 202611/20261113j ③-2) */
   readonly lay: Readonly<Record<TrackId, Layer>>
   /** 트랙 층의 muted — TRACK_STATE 와 항목 교체가 고친다 */
   readonly muted: Readonly<Record<TrackId, boolean>>
@@ -80,7 +80,7 @@ export function trackState(s: St, m: { readonly muted: boolean; readonly t: 'TRA
   return done(s, { ...s, muted: { ...s.muted, [m.track_id]: m.muted } }, 'TRK.C.any.track_state', [], ['app.track_state'], [], [])
 }
 
-/** 스냅샷(입장 응답 · RESUME · GET)의 tracks 를 받았다 — 그 방 트랙 목록 전부다(보기용 · RULE-TRK-FOUR-PATHS · RULE-TRK-PER-PATH) · ★배정표는 실려 오지 않는다(입장 응답 · RESUME 의 표는 MLINE_EVENT 와 같은 길로 받는다) */
+/** 스냅샷(입장 응답 · RESUME · GET)의 tracks 를 받았다 — 그 방 트랙 목록 전부다(보기용 · RULE-TRK-FOUR-PATHS · RULE-TRK-PER-PATH) · ★sLay · sMuted 는 내 개인 트랙을 뺀 것이다 — 받을 트랙이 아니다(델타 길 mine_other 와 같은 보관본 · 202611/20261113j ③-2) · ★배정표는 실려 오지 않는다(입장 응답 · RESUME 의 표는 MLINE_EVENT 와 같은 길로 받는다) */
 export function snapshot(s: St, sLay: Readonly<Record<TrackId, Layer>>, sMuted: Readonly<Record<TrackId, boolean>>): Step {
   if (!recEq(sLay, s.lay) || !recEq(sMuted, s.muted)) {
     return done(s, { ...s, lay: sLay, muted: sMuted }, 'TRK.C.any.snapshot', [], ['app.tracks'], [], [])

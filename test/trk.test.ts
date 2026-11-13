@@ -105,6 +105,15 @@ test('SD-ENTRY-TRK-TRACK-EVENT — 방 상태기가 받은 트랙 통지의 항�
   } finally { spy.restore() }
 })
 
+test('SD-ENTRY-TRK-TRACK-EVENT · 스냅샷 — 내 개인 트랙은 스냅샷으로 와도 트랙 층에 넣지 않는다(델타 mine_other 와 같은 보관본 · 연:TRK.C.any.snapshot · context 202611/20261113j ③-2)', async () => {
+  const r = await up()
+  await join(r, 'r1', { tracks: [tr('t2'), tr('t-own', { user_id: 'u1' })] })
+  const lay = r.core.rooms.get('r1')!.trk.st.lay as unknown as Record<string, string>
+  assert.equal(lay['t2'], 'ACTIVE', '남의 트랙은 트랙 층에')
+  assert.equal(lay['t-own'], undefined, '내 개인 트랙은 받을 트랙이 아니다 — 스냅샷 길도 넣지 않는다')
+  await r.c.close()
+})
+
 test('SD-ENTRY-TRK-TRACK-STATE — 방 상태기가 받은 트랙 상태 통지 하나에 ENTRY.trackState 하나 · 인자는 track_id · muted', async () => {
   const spy = spyOn(TB.ENTRY)
   try {
