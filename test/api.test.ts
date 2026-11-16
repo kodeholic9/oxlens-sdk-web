@@ -40,7 +40,7 @@ function appEvents(r: Rig, rooms: Room[]): string[] {
   const seen: string[] = []
   for (const n of ['session', 'tokenRequired', 'closed', 'rebuilt', 'link', 'speakingRoom', 'speakingRoomFailed', 'track', 'audioPlayback'] as const) r.c.on(n as 'rebuilt', () => seen.push(`client.${n}`))
   for (const h of rooms) {
-    for (const n of ['track', 'trackUnreachable', 'participants', 'permission', 'message', 'error', 'joinFailed', 'forced', 'joined', 'left', 'resync', 'state'] as const) h.on(n as 'joined', () => seen.push(`${h.id}.${n}`))
+    for (const n of ['track', 'trackUnreachable', 'participants', 'permission', 'error', 'joinFailed', 'forced', 'joined', 'left', 'resync', 'state'] as const) h.on(n as 'joined', () => seen.push(`${h.id}.${n}`))
   }
   return seen
 }
@@ -174,17 +174,48 @@ test('SD-EVENT-RESYNC — 갭 뒤 재동기를 반영한 뒤에 resync 하나 ·
   } finally { http.restore() }
 })
 
-test('SD-EVENT-MESSAGE — 방 문자 통지는 그 방 핸들의 message 하나({ userId, content }) · 다른 방 0', async () => {
-  const r = await rig()
-  const h1 = await enter(r, 'r1')
-  const h2 = await enter(r, 'r2')
-  const m1: unknown[] = []
-  const m2: unknown[] = []
-  h1.on('message', (m) => m1.push(m))
-  h2.on('message', (m) => m2.push(m))
-  await note(r, Op.MESSAGE, { room_id: 'r1', user_id: 'u2', content: 'hello', msg_id: 'm-1' })
-  assert.deepEqual([m1, m2], [[{ userId: 'u2', content: 'hello' }], []], '옛 방 문자 message 이벤트 — 1 · 그 방만(규격은 client.chat messages 로 옮김 · 채팅 SDK 코딩 때 다시 짠다)')
-  await r.c.close()
+test('SD-EVENT-MESSAGES — 채팅은 client.chat 의 messages(spaceId, 배열, 출처) · 실시간 live 길이 1 · history() 결과 history · 다시 붙은 뒤 catchup · t 오름차순 · 같은 msg_id 두 번 0 · spaces 는 spaceList 가 바뀔 때 1', async () => {
+  const msg = (id: string, t: number) => ({ space_id: 'c1', msg_id: `u2/${id}`, user_id: 'u2', t, content: id })
+  FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'c1', total: 5, read: 3, last_t: 101 }] })
+  try {
+    const r = await rig()
+    await enter(r, 'r1')
+    const ev: [string, string[], string][] = []
+    const sp: string[][] = []
+    r.c.chat.on('messages', (id, ms, src) => ev.push([id, ms.map((m) => `${m.content}@${m.t}`), src]))
+    r.c.chat.on('spaces', (l) => sp.push(l.map((x) => `${x.spaceId}:${x.total}-${x.read}=${x.unread}`)))
+    const list = await r.c.chat.spaces()
+    assert.deepEqual([list, sp], [[{ spaceId: 'c1', total: 5, read: 3, unread: 2, lastT: 101 }], [['c1:5-3=2']]], 'SD-EVENT-MESSAGES — spaces() 가 spaceList 를 갈아 끼우고 spaces 1')
+    r.c.chat.focus('c1')
+    const h = r.c.chat.history('c1')
+    await tick()
+    assert.deepEqual(r.ws.last(Op.SPACE_HISTORY).body, { space_id: 'c1' }, '인자 없음 — 최근 쪽')
+    r.ws.reply(Op.SPACE_HISTORY, { messages: [msg('a', 100), msg('b', 101)], more: false })
+    assert.deepEqual((await h).messages.map((m) => m.t), [100, 101])
+    assert.deepEqual(ev, [['c1', ['a@100', 'b@101'], 'history']], 'SD-EVENT-MESSAGES — history() 결과는 출처 history · t 오름차순')
+    ev.length = 0; sp.length = 0
+    await note(r, Op.MESSAGE, msg('d', 103))
+    assert.deepEqual(ev, [['c1', ['d@103'], 'live']], 'SD-EVENT-MESSAGES — 실시간 통지는 live 길이 1')
+    assert.deepEqual(sp, [['c1:6-3=3']], 'SD-EVENT-MESSAGES — 실시간 메시지가 그 공간 total +1 → spaces 1')
+    await note(r, Op.MESSAGE, msg('d', 103))
+    await note(r, Op.MESSAGE, msg('b', 101))
+    assert.deepEqual([ev.length, sp.length], [1, 1], 'SD-EVENT-MESSAGES — 같은 msg_id 두 번 0 · 이미 읽은 t 0 · spaceList 그대로면 spaces 0')
+    ev.length = 0; sp.length = 0
+    // 이어받기 — 놓친 것으로 본다: spaces() · focus 공간 하나 따라잡기
+    FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'c1', total: 7, read: 3, last_t: 103 }] })
+    r.ws.close(); await tick(5)
+    const ws2 = FakeWS.made.at(-1)!
+    ws2.open(); await tick()
+    ws2.reply(Op.BIND, BIND_OK); await tick()
+    ws2.reply(Op.RESUME, { snapshot: { r1: { participants: [mem('u1')], me: mem('u1'), tracks: [], version: vers(1) } }, publications: [], mline_tables: [] })
+    for (let i = 0; i < 20 && ws2.requests(Op.SPACE_HISTORY).length === 0; i++) await tick(1)
+    assert.deepEqual(ws2.last(Op.SPACE_HISTORY).body, { space_id: 'c1', after: 101 }, '따라잡기 — 마지막 서버 읽기의 끝 t 뒤')
+    ws2.reply(Op.SPACE_HISTORY, { messages: [msg('c', 102), msg('d', 103)], more: false })
+    await tick(); await tick()
+    assert.deepEqual(sp, [['c1:7-3=4']], 'SD-EVENT-MESSAGES — 다시 붙은 뒤 spaces() → spaces 1')
+    assert.deepEqual(ev, [['c1', ['c@102'], 'catchup']], 'SD-EVENT-MESSAGES — RESUME 뒤 출처 catchup · 실시간으로 낸 msg_id(103)는 두 번 0')
+    await r.c.close()
+  } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
 })
 
 test('SD-EVENT-DIAGNOSTICS-PROBE — 진단 과제 probe 는 앱 이벤트 0(진단 표면 diagnostics.probe 만) · report 송신 1(같은 req_id)', async () => {

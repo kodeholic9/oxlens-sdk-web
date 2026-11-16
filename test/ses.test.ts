@@ -31,7 +31,12 @@ class FakeWS {
   onclose: (() => void) | null = null
   onerror: (() => void) | null = null
   constructor(readonly url: string) { FakeWS.made.push(this) }
-  send(b: Uint8Array): void { this.sent.push(b) }
+  /** 다시 붙은 뒤 채팅 따라잡기가 내는 SPACE_LIST 는 서버 몫으로 답한다 — 창 1 이라 답이 없으면 뒤 요청을 막는다(SDK:IMPL-CHAT-CATCHUP 2) */
+  send(b: Uint8Array): void {
+    this.sent.push(b)
+    const f = decodeFrame(b)
+    if (f.kind === 'request' && f.op === Op.SPACE_LIST) setTimeout(() => { if (this.readyState === 1) this.deliver(encodeFrame('ok', f.op, f.pid, { spaces: [] })) }, 0)
+  }
   close(): void { if (this.readyState === 3) return; this.readyState = 3; this.onclose?.() }
   open(): void { this.readyState = 1; this.onopen?.() }
   deliver(b: Uint8Array): void { const c = b.slice(); this.onmessage?.({ data: c.buffer }) }

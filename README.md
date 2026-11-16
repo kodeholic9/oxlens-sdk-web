@@ -106,11 +106,12 @@ node examples/web/server.mjs --https     # 찍히는 https://<LAN IP>:5590 을 �
 |---|---|---|
 | `createClient(opts)` → `OxLensClient` | 세션 하나 — 만드는 길은 이것 하나 | `connect()` · `close()` · `join(roomId, {mode})` · `setSpeakingRoom(id)` · `setToken(t)` · `listRooms()` · `preview(roomId)` · 이벤트 `session` · `track` · `link` · `closed` · `tokenRequired` · `audioPlayback` · `speakingRoom` |
 | `client.media` | 내 장치와 발행 | `enableMicrophone()` · `enableCamera()` · `enableScreen()` · `acquire()` · `publish()` · `switchDevice()` · `startAudio()` · `devices` |
-| `Room` | 들어간 방 하나 | `leave()` · `participants` · `tracks` · `sendMessage()` · `audio`(음량 · 음소거) · `ptt` · 이벤트 `track` · `trackUnreachable` · `participants` · `message` · `forced` · `state` |
+| `Room` | 들어간 방 하나 | `leave()` · `participants` · `tracks` · `audio`(음량 · 음소거) · `ptt` · 이벤트 `track` · `trackUnreachable` · `participants` · `forced` · `state` |
 | `Ptt` | 그 방의 발언권 | `press()` · `release()` · `input`(hold · toggle) · `priority` · `enable()` · `enableVideo()` · 이벤트 `state` · `speaker` · `granted` · `denied` · `revoked` |
 | `LocalTrack` | 내가 보내는 트랙 | `trackId` · `state` · `muted` · `duplex` · `mediaStreamTrack` |
 | `RemoteTrack` | 받는 트랙 | `attach(el)` · `detach()` · `setLayer()` · `volume` · `userId` · `type`(individual · slot) · 이벤트 `ended` · `active` |
 | `OxLensError` | 모든 실패 | `code` · `name` · `category` · `retryable` |
+| `client.chat` | 채팅(공간) — 방 입장과 무관 | `send(spaceId, content, {msgId})` · `history(spaceId, {after · before · limit})` · `spaces()` · `spaceList` · `view()` · `focus()` · `enabled` · 이벤트 `messages`(배열 + 출처 live · catchup · history) · `spaces` |
 | `client.diagnostics` | 진단 | `logs()` · `setLogLevel()` · `probe()` · 이벤트 `transition` |
 
 `ClientOptions` 의 손잡이(연결 방식 `pcMode` · `adaptiveStream` · 복구 시계 등)는 [`src/domain/defaults.ts`](src/domain/defaults.ts) 에 있다.

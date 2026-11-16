@@ -7,7 +7,7 @@ import type { FloorCore, PttState as CorePttState, PressSource } from '../domain
 import type { Participant, Permission } from '../domain/room/store.js'
 import type { LinkState } from '../domain/link/core.js'
 import type { Core } from '../domain/ses/core.js'
-import { Fault, fromFailure, stateFault, closedFault } from '../platform/fault.js'
+import { Fault, stateFault, closedFault } from '../platform/fault.js'
 import { OxLensError, toError, wrap, act } from './errors.js'
 import { inHandler } from '../platform/emitter.js'
 import { nextTick } from '../platform/clock.js'
@@ -59,20 +59,10 @@ export class Room {
 
   leave(): Promise<void> { return act(() => this.core.leave()) }
 
-  async sendMessage(content: string): Promise<{ msgId: string }> {
-    // 닫힌 방 핸들은 wire 에 닿지 않는다 — closed · CLOSED(SDK:IMPL-ERR-TYPE 닫힌 핸들에 API)
-    if (this.core.closed) throw toError(closedFault())
-    if (inHandler()) await nextTick()
-    const r = await wrap(this.core.core.sig.request('MESSAGE', { room_id: this.id, content }))
-    if (!r.ok) throw toError(fromFailure(r.body))
-    return { msgId: String((r.body as { msg_id?: string }).msg_id ?? '') }
-  }
-
   on(name: 'track', fn: Fn<[RemoteTrack]>): Off
   on(name: 'trackUnreachable', fn: Fn<[RemoteInfo]>): Off
   on(name: 'participants', fn: Fn<[Participant[]]>): Off
   on(name: 'permission', fn: Fn<[{ userId: string; permission: Permission; mine: boolean }]>): Off
-  on(name: 'message', fn: Fn<[{ userId: string; content: string }]>): Off
   on(name: 'error' | 'joinFailed', fn: Fn<[OxLensError]>): Off
   on(name: 'forced', fn: Fn<[{ cause: string }]>): Off
   on(name: 'joined' | 'left' | 'resync', fn: Fn<[]>): Off

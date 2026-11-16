@@ -4,7 +4,7 @@
 import { test, afterEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { FakeWS, tick } from './_ws.js'
-import { SA, up, linkOf, enter, drain, joinBody, joinFrame, leaveFrame, FAIL, type Rig } from './_rig.js'
+import { SA, up, linkOf, enter, drain, joinBody, joinFrame, leaveFrame, FAIL, httpMock, type Rig } from './_rig.js'
 import { Op, Code } from '../src/internal/wire/ws.js'
 import { createClient, OxLensError, type OxLensClient } from '../src/index.js'
 import { LocalCore } from '../src/domain/pub/local.js'
@@ -73,17 +73,18 @@ const SIX = ['DEVICE_PERMISSION_DENIED', 'DEVICE_NOT_FOUND', 'DEVICE_IN_USE', 'D
 
 test('SD-CATEGORY-ALL — 코드 앞자리 → category 사상 전량(코드 표 전부 · 표에 없는 코드도 앞자리로) · wire 코드는 그대로', async () => {
   const r = await rig()
-  const h = await enter(r, 'r1')
   const LEAD: Record<string, string> = { '1': 'bug', '2': 'auth', '3': 'state', '4': 'limit', '5': 'server' }
   const codes = [...Object.values(Code).map((c) => c.code), 1999, 2999, 3999, 4999, 5999]
-  for (const code of codes) {
-    const p = h.sendMessage('x').then(() => null, (e: unknown) => e)
-    await tick()
-    r.ws.answer(r.ws.last(Op.MESSAGE), FAIL(code, `C${code}`), false)
-    const e = await p
-    assert.ok(e instanceof OxLensError && e.code === code, `${code} 그대로`)
-    assert.equal(e.category, LEAD[String(code)[0]!], `SD-CATEGORY-ALL — ${code} → ${LEAD[String(code)[0]!]}`)
-  }
+  // 재시도 없이 실패 body 를 그대로 나르는 길(방 목록 HTTP) — 코드마다 한 번
+  let code = 0
+  const http = httpMock(() => ({ status: 400, body: FAIL(code, `C${code}`) }))
+  try {
+    for (code of codes) {
+      const e = await r.c.listRooms().then(() => null, (x: unknown) => x)
+      assert.ok(e instanceof OxLensError && e.code === code, `${code} 그대로`)
+      assert.equal(e.category, LEAD[String(code)[0]!], `SD-CATEGORY-ALL — ${code} → ${LEAD[String(code)[0]!]}`)
+    }
+  } finally { http.restore() }
 })
 
 test('SD-CATEGORY-BUG — 1xxx 는 재시도 0(permanent 가 거짓으로 와도) · bug 로 reject', async () => {
@@ -99,11 +100,9 @@ test('SD-CATEGORY-BUG — 1xxx 는 재시도 0(permanent 가 거짓으로 와도
 
 test('SD-CATEGORY-AUTH — 2xxx 는 auth · 재접속 중의 2003 은 tokenRequired 가 먼저 받는다(앱 reject 0 · 새 토큰으로 이어간다)', async () => {
   const r = await rig()
-  const h = await enter(r, 'r1')
-  const p = h.sendMessage('x').then(() => null, (e: unknown) => e)
-  await tick()
-  r.ws.answer(r.ws.last(Op.MESSAGE), FAIL(2006, 'NOT_AUTHORIZED'), false)
-  const e = await p
+  await enter(r, 'r1')
+  const http = httpMock(() => ({ status: 400, body: FAIL(2006, 'NOT_AUTHORIZED') }))
+  const e = await r.c.listRooms().then(() => null, (x: unknown) => x).finally(() => http.restore())
   assert.ok(e instanceof OxLensError && e.category === 'auth', '2xxx → auth')
   const tokens: unknown[] = []
   const closed: unknown[] = []
@@ -122,11 +121,9 @@ test('SD-CATEGORY-AUTH — 2xxx 는 auth · 재접속 중의 2003 은 tokenRequi
 
 test('SD-CATEGORY-STATE — 3xxx 는 state(code 그대로) · wire 를 안 탄 상태 오류는 code 0 + STATE_* name', async () => {
   const r = await rig()
-  const h = await enter(r, 'r1')
-  const p = h.sendMessage('x').then(() => null, (e: unknown) => e)
-  await tick()
-  r.ws.answer(r.ws.last(Op.MESSAGE), FAIL(3002, 'NOT_IN_ROOM'), false)
-  const e1 = await p
+  await enter(r, 'r1')
+  const http = httpMock(() => ({ status: 400, body: FAIL(3002, 'NOT_IN_ROOM') }))
+  const e1 = await r.c.listRooms().then(() => null, (x: unknown) => x).finally(() => http.restore())
   assert.ok(e1 instanceof OxLensError && e1.category === 'state' && e1.code === 3002, '3xxx → state')
   const before = r.ws.sent.length
   const e2 = await r.c.media.enableMicrophone().then(() => null, (e: unknown) => e)
@@ -225,7 +222,6 @@ test('SD-CATEGORY-CLOSED — 닫힌 핸들에 API 는 closed · CLOSED(닫힌 �
   const l = h.leave(); await tick(); r.ws.answer(leaveFrame(r.ws, 'r1'), {}); await l
   const sent = r.ws.sent.length
   const isClosed = (e: unknown): boolean => e instanceof OxLensError && e.category === 'closed' && e.name === 'CLOSED' && e.code === 0
-  assert.ok(isClosed(await h.sendMessage('x').then(() => null, (e: unknown) => e)), 'SD-CATEGORY-CLOSED — 닫힌 방 sendMessage → CLOSED')
   assert.ok(isClosed(await h.ptt.press().then(() => null, (e: unknown) => e)), 'SD-CATEGORY-CLOSED — 닫힌 방 ptt.press → CLOSED')
   assert.equal(r.ws.sent.length, sent, 'SD-CATEGORY-CLOSED — 닫힌 방 핸들은 wire 0')
   const [t] = await r.c.media.acquire({ microphone: true })

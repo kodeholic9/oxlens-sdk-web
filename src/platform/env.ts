@@ -152,6 +152,15 @@ export function userAgent(): string {
   return typeof navigator !== 'undefined' ? navigator.userAgent : ''
 }
 
+/** UUID v4 — 암호 난수(getRandomValues · 보안 문맥 밖 http 에서도 열린다 · randomUUID 는 아니다) · 저장된 상태에 기대지 않는 값(연:RULE-CHAT-MSG-ID) */
+export function uuidV4(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6]! & 0x0f) | 0x40
+  b[8] = (b[8]! & 0x3f) | 0x80
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
 /** 환경 요약 — probe env(SDK:IMPL-DIAG-PROBE) · 아는 칸만 싣고 하나도 모르면 null(칸을 뺀다 — 지어내지 않는다) */
 export function describe(): Record<string, unknown> | null {
   const out: Record<string, unknown> = {}

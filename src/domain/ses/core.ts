@@ -2,10 +2,11 @@
 // spec: v1.2 @d626fda · SDK:IMPL-SES-API · SDK:IMPL-SES-EVENTS · SDK:IMPL-SES-CLOCK · SDK:IMPL-LINK-PROJECTION 출입구 하나 · SDK:RULE-MOD-AREA-MIRROR domain/ses · 연:RULE-SES-FINGERPRINT · model: claude-opus-5-5
 import * as SES from '../gen/session_client.js'
 import * as SB from '../gen/session_binding.js'
-import type { ResumeRes, LeaveBody, MlineTable, RoomSnapshot } from '../../internal/wire/ws.js'
+import type { ResumeRes, LeaveBody, MlineTable, RoomSnapshot, ChatMessage } from '../../internal/wire/ws.js'
 import { Code } from '../../internal/wire/ws.js'
 import { Signaling, type Inbound, type Reply } from '../../internal/ses/signaling.js'
 import { Emitter } from '../../platform/emitter.js'
+import { Queue } from '../../platform/queue.js'
 import { sessionFingerprint } from '../../platform/sha256.js'
 import { LogBook, type Logger } from '../../platform/log.js'
 import { Timer } from '../../platform/clock.js'
@@ -86,6 +87,8 @@ export class Core {
   readonly links = new Map<string, LinkCore>()
   readonly media: MediaRegistry
   readonly diag: Diag
+  /** 채팅이 꺼낼 사실 — 실시간 통지 · 세션이 섰다 · 앱이 닫았다(영역 관계 CHAT → SES — 세션은 채팅을 모르고 넣기만 하고, 채팅이 직접 꺼낸다) */
+  readonly chatInbox = new Queue<{ readonly t: 'message'; readonly body: ChatMessage } | { readonly t: 'up' } | { readonly t: 'closed' }>()
   readonly sids = new Interner()
   readonly epochs = new Interner()
   /** 방 입장 식별자 join_id(연:RULE-ROOM-JOIN-ID) — 방 상태기는 같은지만 본다 */
@@ -203,6 +206,7 @@ export class Core {
     for (const l of this.links.values()) l.closeForApp()
     this.enter('disconnect', 'app', [], true)
     this.diag.stop()
+    this.chatInbox.push({ t: 'closed' })
     this.media.closeForApp()
     this.watchPage(false)
     this.jitter?.stop()
@@ -256,6 +260,7 @@ export class Core {
     for (const f of step.fx) this.effect(f, entry)
     if (this.ses.cs === 'ACTIVE' && prev.cs !== 'ACTIVE') {
       this.diag.sessionActive(true)
+      this.chatInbox.push({ t: 'up' })
       for (const w of this.activeWaiters.splice(0)) w.resolve()
       for (const l of this.links.values()) l.sessionBack()
     }
@@ -331,8 +336,7 @@ export class Core {
         return
       }
       case 'MESSAGE': {
-        const r = this.rooms.get(String(b['room_id'] ?? ''))
-        if (r) r.events.emit('message', { userId: String(b['user_id'] ?? ''), content: String(b['content'] ?? '') })
+        this.chatInbox.push({ t: 'message', body: body as ChatMessage })
         return
       }
       case 'TASK': {

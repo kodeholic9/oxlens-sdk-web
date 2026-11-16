@@ -351,8 +351,8 @@ test('SD-ENTRY-ROOM-DOWN-ALL · SD-ENTRY-ROOM-REJOIN — 재구축은 위 이음
     const h1 = await enter(r, 'r1')
     await enter(r, 'rb', { sc: SB })
     await note(r, Op.PARTICIPANT_EVENT, { type: 'joined', room_id: 'r1', user_id: 'u2', select: false, participant_type: 0, version: vers(2) })
-    const msg = h1.sendMessage('x')
-    await tick(); r.ws.reply(Op.MESSAGE, { msg_id: 'm-1' }); await msg
+    const msg = r.c.chat.send('r1', 'x')
+    await tick(); r.ws.reply(Op.MESSAGE, { t: 1 }); await msg
     assert.deepEqual([spy.n('downAll'), spy.n('rejoin')], [0, 0], 'SD-ENTRY-ROOM-DOWN-ALL · SD-ENTRY-ROOM-REJOIN — 앱 · 통지 사건은 넣지 않는다(0)')
     // LINK — 그 서버 기동이 바뀌었다(epoch) → store.drop_server · rooms.rejoin_server
     await note(r, Op.PARTICIPANT_EVENT, { type: 'joined', room_id: 'r1', user_id: 'u3', select: false, participant_type: 0, version: vers(3, 'e2') })
@@ -588,17 +588,6 @@ test('SD-API-ROOM-LEAVE — 발언 방을 나가면 위 이음매가 발언 방(
   r.ws.answer(leaveFrame(r.ws, 'ra'), {})
   await l
   assert.deepEqual([ha.state, hb.state], ['closed', 'joined'], 'SD-API-ROOM-LEAVE — 그 방만(다른 서버 방 그대로)')
-  await r.c.close()
-})
-
-test('SD-API-ROOM-SEND-MESSAGE — 방 문자는 MESSAGE 왕복 하나 · msgId 로 resolve', async () => {
-  const r = await up()
-  const h = await enter(r, 'r1')
-  const p = h.sendMessage('hello')
-  await tick()
-  assert.deepEqual(r.ws.last(Op.MESSAGE).body, { room_id: 'r1', content: 'hello' })
-  r.ws.reply(Op.MESSAGE, { msg_id: 'm-7' })
-  assert.deepEqual(await p, { msgId: 'm-7' }, '옛 방 문자 room.sendMessage — 왕복 뒤 msgId(규격은 client.chat 으로 옮김 · 채팅 SDK 코딩 때 다시 짠다)')
   await r.c.close()
 })
 

@@ -72,6 +72,8 @@ const qa = {
     client.diagnostics.setLogLevel('debug')
     client.diagnostics.on('transition', (t) => { state.transitions.push(t); if (state.transitions.length > 2000) state.transitions.shift() })
     client.on('session', (s) => note('session', { state: s.state, recovering: s.recovering }))
+    client.chat.on('messages', (spaceId, msgs, source) => note('chat', { spaceId, source, msgs: msgs.map((m) => ({ msgId: m.msgId, userId: m.userId, t: m.t, content: m.content })) }))
+    client.chat.on('spaces', (spaces) => note('chatSpaces', spaces))
     await client.connect()
     return { userId: client.session.userId, pcMode: client.session.pcMode }
   },
@@ -85,17 +87,28 @@ const qa = {
       note('speaker', { room: roomId, userId: e.userId })
     })
     room.on('resync', () => note('resync', { room: roomId }))
-    room.on('message', (m) => note('message', { room: roomId, userId: m.userId, content: m.content }))
     room.on('error', (e) => note('roomError', { room: roomId, name: e.name, code: e.code }))
     return { id: room.id, mode: room.mode, server: room.server, participants: room.participants.length }
   },
 
   async leave(roomId) { await state.client.rooms.get(roomId)?.leave() },
 
-  /** 연:AUX.op.MESSAGE — 응답의 msg_id 로 내 것을 안다. 에코는 오지 않는다. */
-  async sendMessage(roomId, content) {
-    return state.client.rooms.get(roomId).sendMessage(content)
+  /** 연:CHAT.op.MESSAGE — 방 입장과 무관 · 보낸 세션에는 통지가 없다(자기 것은 응답으로 안다). */
+  async chatSend(spaceId, content, msgId) {
+    const m = await state.client.chat.send(spaceId, content, msgId ? { msgId } : {})
+    return { msgId: m.msgId, userId: m.userId, t: m.t, content: m.content }
   },
+
+  async chatHistory(spaceId, q) {
+    const r = await state.client.chat.history(spaceId, q ?? {})
+    return { more: r.more, msgs: r.messages.map((m) => ({ msgId: m.msgId, userId: m.userId, t: m.t, content: m.content })) }
+  },
+
+  async chatSpaces() { return state.client.chat.spaces() },
+
+  async chatView(spaceId) { await state.client.chat.view(spaceId) },
+
+  chatFocus(spaceId) { state.client.chat.focus(spaceId) },
 
   async enableMic() {
     const t = await state.client.media.enableMicrophone()

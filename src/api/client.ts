@@ -1,5 +1,5 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:RULE-API-HANDLES OxLensClient · SDK:IMPL-SES-API · SDK:IMPL-AFF-SPEAKING-ROOM · SDK:IMPL-PUB-API media · SDK:RULE-SRC-DEVICES · SDK:RULE-DIAG-EVENTS · model: claude-opus-5-5
+// spec: v1.2 @d626fda · SDK:RULE-API-HANDLES OxLensClient · SDK:IMPL-SES-API · SDK:IMPL-AFF-SPEAKING-ROOM · SDK:IMPL-PUB-API media · SDK:RULE-SRC-DEVICES · SDK:RULE-DIAG-EVENTS · SDK:IMPL-CHAT-API chat · model: claude-opus-5-5
 import { Core, type SessionInfo, type SessionState, type Health, type Quality, type Transition } from '../domain/ses/core.js'
 import type { ClientOptions } from '../domain/defaults.js'
 import type { LinkInfo } from '../domain/link/core.js'
@@ -7,6 +7,7 @@ import type { Participant } from '../domain/room/store.js'
 import type { RoomCore } from '../domain/room/core.js'
 import type { RemoteCore } from '../domain/trk/remote.js'
 import type { TrackOptions } from '../domain/pub/local.js'
+import { ChatCore, type ChatMessage, type Space, type MessageSource, type HistoryQuery } from '../domain/chat/core.js'
 import type { RoomSummary, GetRoomRes } from '../internal/wire/ws.js'
 import type { PermState } from '../platform/env.js'
 import type { Level, LogEntry } from '../platform/log.js'
@@ -145,11 +146,43 @@ export class Diagnostics {
   }
 }
 
-/** 클라이언트 객체 — createClient() 가 유일한 생성 경로 · 세션 · 방 · 발행을 소유한다 */
+/** 채팅 — 방 입장과 무관하다(SDK:IMPL-CHAT-API) · 세션이 넣는 통에서 통지 · 세션 사실을 직접 꺼낸다 */
+export class Chat {
+  /** @internal */
+  readonly core: ChatCore
+  constructor(private readonly ses: Core) {
+    this.core = new ChatCore(ses.sig, ses.chatInbox, ses.book.scope('chat'))
+  }
+
+  get enabled(): boolean { return this.core.enabled }
+  get spaceList(): Map<string, Space> { return new Map(this.core.spaceList) }
+
+  /** msgId 가 없으면 SDK 가 짓는다(앞이 내 user_id — 접속 전이면 BIND 를 기다린다) · 끝내 실패하면 details.msgId 를 실어 reject */
+  async send(spaceId: string, content: string, o: { msgId?: string } = {}): Promise<ChatMessage> {
+    if (inHandler()) await nextTick()
+    if (this.ses.userId === null) await wrap(this.ses.untilActive())
+    const userId = this.ses.userId ?? ''
+    return wrap(this.core.send(spaceId, content, o.msgId ?? this.core.newMsgId(userId), userId))
+  }
+
+  history(spaceId: string, q: HistoryQuery = {}): Promise<{ messages: ChatMessage[]; more: boolean }> { return act(() => this.core.history(spaceId, q)) }
+  spaces(): Promise<Space[]> { return act(() => this.core.spaces()) }
+  view(spaceId: string): Promise<void> { return act(() => this.core.view(spaceId)) }
+  focus(spaceId: string | null): void { this.core.focus(spaceId) }
+
+  on(name: 'messages', fn: Fn<[string, ChatMessage[], MessageSource]>): Off
+  on(name: 'spaces', fn: Fn<[Space[]]>): Off
+  on(name: 'messages' | 'spaces', fn: Fn<never[]>): Off { return this.core.events.on(name, fn as never) }
+
+  off(name: 'messages' | 'spaces'): void { this.core.events.off(name) }
+}
+
+/** 클라이언트 객체 — createClient() 가 유일한 생성 경로 · 세션 · 방 · 발행 · 채팅을 소유한다 */
 export class OxLensClient {
   readonly session: Session
   readonly media: Media
   readonly diagnostics: Diagnostics
+  readonly chat: Chat
   /** @internal */
   readonly core: Core
 
@@ -159,6 +192,7 @@ export class OxLensClient {
     this.session = new Session(this.core)
     this.media = new Media(this.core)
     this.diagnostics = new Diagnostics(this.core)
+    this.chat = new Chat(this.core)
   }
 
   get rooms(): Map<string, Room> {

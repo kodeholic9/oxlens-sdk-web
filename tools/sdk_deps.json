@@ -10,7 +10,8 @@
   "FLR",
   "PUB",
   "TRK",
-  "LINK"
+  "LINK",
+  "CHAT"
  ],
  "aspects": [
   "DOC",
@@ -38,6 +39,16 @@
     "FLR",
     "PUB",
     "ROOM"
+   ],
+   "known_area": true
+  },
+  "CHAT": {
+   "relation": [
+    "SES"
+   ],
+   "seam": [],
+   "may_use": [
+    "SES"
    ],
    "known_area": true
   },
@@ -83,12 +94,10 @@
     "ROOM"
    ],
    "seam": [
-    "FLR",
     "LINK"
    ],
    "may_use": [
     "AFF",
-    "FLR",
     "LINK",
     "ROOM"
    ],

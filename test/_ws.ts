@@ -1,14 +1,15 @@
 // author: kodeholic (powered by Claude)
 // 1층 가짜 WebSocket — 불러들이면 globalThis.WebSocket 을 갈아 끼운다(브라우저 없이 시그널링 프레임을 주고받는다).
 import { decodeFrame, encodeFrame } from '../src/internal/ses/signaling.js'
+import { Op } from '../src/internal/wire/ws.js'
 
 export type Frame = ReturnType<typeof decodeFrame>
 
 export class FakeWS {
   static made: FakeWS[] = []
   static pid = 9000
-  /** 서버 몫을 대신하는 자동 응답 — 요청 op → 응답 body(창 1 이라 답 없는 요청이 뒤 요청을 막는다) */
-  static auto = new Map<number, unknown>()
+  /** 서버 몫을 대신하는 자동 응답 — 요청 op → 응답 body(창 1 이라 답 없는 요청이 뒤 요청을 막는다) · SPACE_LIST 는 다시 붙은 뒤 채팅 따라잡기가 낸다(SDK:IMPL-CHAT-CATCHUP 2) */
+  static auto = new Map<number, unknown>([[Op.SPACE_LIST, { spaces: [] }]])
   readyState = 0
   binaryType = 'blob'
   sent: Uint8Array[] = []

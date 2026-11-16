@@ -2,6 +2,10 @@
 // ★확인이 아니라 clear — 전제 검사는 남아 있다를 알려줄 뿐 해결하지 않는다.
 // 시험마다 user_id 를 가르면 서버 Peer 재사용이 아예 안 일어난다(가장 확실한 대응).
 import { BrowserContext, Page, expect } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { BASE, PAGE, roomFor, userFor } from './env.js'
 
 export interface Participant {
@@ -98,6 +102,20 @@ export async function ensureRoom(roomId: string): Promise<void> {
     body: JSON.stringify({ room_id: roomId, name: roomId }),
   })
   if (!res.ok && res.status !== 409) throw new Error(`POST /rooms ${roomId}: ${res.status}`)
+}
+
+/**
+ * 채팅 공간 — 만들고 멤버를 넣는다. ★공간 관리 입구는 아직 정하지 않았다(연:CAND-CHAT-SPACE-ADMIN) —
+ * 그때까지 서버 저장소의 `chat_seed`(게이트웨이와 같은 저장소 코드)로 준비한다. 저장소 자리는 개발 형상의 `[chat] db`.
+ */
+export function ensureSpace(spaceId: string, users: string[]): void {
+  const sfu = process.env.OXLENS_SFU ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../oxlens-sfu')
+  const sys = fs.readFileSync(path.join(sfu, 'dev', 'system.node-a.toml'), 'utf8')
+  const db = /\[chat\][^[]*?db\s*=\s*"([^"]+)"/.exec(sys)?.[1]
+  if (!db) throw new Error('개발 형상에 [chat] db 가 없다 — 채팅 시험을 못 한다')
+  const exe = path.join(sfu, 'target', 'debug', 'chat_seed')
+  execFileSync(exe, [db, 'space', spaceId])
+  if (users.length) execFileSync(exe, [db, 'join', spaceId, ...users])
 }
 
 export { expect }

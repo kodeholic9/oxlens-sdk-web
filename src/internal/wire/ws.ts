@@ -4,8 +4,11 @@
 /** op 번호 — 이름은 원천의 op 이름 그대로 */
 export const Op = {
   AFFILIATION: 0x0401,
-  MESSAGE: 0x0501,
   TASK: 0x0601,
+  MESSAGE: 0x0501,
+  SPACE_HISTORY: 0x0502,
+  SPACE_LIST: 0x0503,
+  SPACE_VIEW: 0x0504,
   ICE_RESTART: 0x0305,
   LINK_EVENT: 0x0706,
   MLINE_EVENT: 0x0707,
@@ -30,8 +33,11 @@ export type OpName = keyof typeof Op
 /** 흐름 제어 우선순위 단(0 복구 · 1 세션·방·미디어 · 2 데이터 · 3 진단) */
 export const Lane: Readonly<Record<OpName, 0 | 1 | 2 | 3>> = {
   AFFILIATION: 1,
-  MESSAGE: 2,
   TASK: 3,
+  MESSAGE: 2,
+  SPACE_HISTORY: 2,
+  SPACE_LIST: 2,
+  SPACE_VIEW: 2,
   ICE_RESTART: 1,
   LINK_EVENT: 1,
   MLINE_EVENT: 1,
@@ -59,8 +65,11 @@ export const OutsideQueue: readonly OpName[] = ['LEAVE']   // 큐를 거치지 �
 /** 응답 갈래 — response 응답 있음 · none 응답 없음 · ack 통지(빈 body 의 01) */
 export const Reply: Readonly<Record<OpName, 'response' | 'none' | 'ack'>> = {
   AFFILIATION: 'response',
-  MESSAGE: 'response',
   TASK: 'response',
+  MESSAGE: 'response',
+  SPACE_HISTORY: 'response',
+  SPACE_LIST: 'response',
+  SPACE_VIEW: 'response',
   ICE_RESTART: 'response',
   LINK_EVENT: 'ack',
   MLINE_EVENT: 'ack',
@@ -109,6 +118,10 @@ export const Code = {
   PRECONDITION_FAILED: { code: 3009, permanent: false },
   PEER_NOT_FOUND: { code: 3010, permanent: false },
   NOT_PUB_ROOM: { code: 3011, permanent: false },
+  SPACE_NOT_FOUND: { code: 3012, permanent: false },
+  NOT_SPACE_MEMBER: { code: 3013, permanent: false },
+  CHAT_DISABLED: { code: 3014, permanent: true },
+  MSG_ID_CONFLICT: { code: 3015, permanent: true },
   ROOM_FULL: { code: 4001, permanent: false },
   TRACK_LIMIT: { code: 4002, permanent: false },
   QUOTA_EXCEEDED: { code: 4003, permanent: false },
@@ -149,6 +162,23 @@ export interface ProbeResult {
   readonly permissions?: unknown
   readonly state?: unknown
   readonly network?: unknown
+}
+
+/** CHAT.type.ChatMessage — 메시지 한 건 (§[CHAT.op.MESSAGE]) */
+export interface ChatMessage {
+  readonly space_id: string
+  readonly msg_id: string
+  readonly user_id: string
+  readonly t: number
+  readonly content: string
+}
+
+/** CHAT.type.SpaceEntry — 내 공간 한 줄 (§[CHAT.op.SPACE_LIST]) */
+export interface SpaceEntry {
+  readonly space_id: string
+  readonly total: number
+  readonly read: number
+  readonly last_t?: number
 }
 
 /** ERR.type.Failure — 실패 응답 body (§[ERR.type.Failure]) */
@@ -382,24 +412,6 @@ export interface AffiliationRes {
   readonly change_id?: string
 }
 
-/** AUX.op.MESSAGE.req — 0x0501 문자 */
-export interface MessageReq {
-  readonly room_id: string
-  readonly content: string
-}
-
-/** AUX.op.MESSAGE.res — 0x0501 문자 */
-export interface MessageRes {
-  readonly msg_id: string
-}
-
-/** AUX.op.MESSAGE.body — 0x0501 문자 */
-export interface MessageBody {
-  readonly room_id: string
-  readonly user_id: string
-  readonly content: string
-}
-
 /** AUX.op.TASK.req — 0x0601 시켜서 하고 보고한다 */
 export type TaskReq =
   | { readonly phase: "request"; readonly req_id: number; readonly type: "probe"; readonly params: unknown }
@@ -407,6 +419,53 @@ export type TaskReq =
 
 /** AUX.op.TASK.res — 0x0601 시켜서 하고 보고한다 */
 export type TaskRes = Record<string, never>
+
+/** CHAT.op.MESSAGE.req — 0x0501 메시지 */
+export interface MessageReq {
+  readonly space_id: string
+  readonly msg_id: string
+  readonly content: string
+}
+
+/** CHAT.op.MESSAGE.res — 0x0501 메시지 */
+export interface MessageRes {
+  readonly t: number
+}
+
+/** CHAT.op.MESSAGE.body — 0x0501 메시지 */
+export type MessageBody = ChatMessage
+
+/** CHAT.op.SPACE_HISTORY.req — 0x0502 다시 가져오기 */
+export interface SpaceHistoryReq {
+  readonly space_id: string
+  readonly after?: number
+  readonly before?: number
+  readonly limit?: number
+}
+
+/** CHAT.op.SPACE_HISTORY.res — 0x0502 다시 가져오기 */
+export interface SpaceHistoryRes {
+  readonly messages: ChatMessage[]
+  readonly more: boolean
+}
+
+/** CHAT.op.SPACE_LIST.req — 0x0503 내 공간 목록 */
+export type SpaceListReq = Record<string, never>
+
+/** CHAT.op.SPACE_LIST.res — 0x0503 내 공간 목록 */
+export interface SpaceListRes {
+  readonly spaces: SpaceEntry[]
+}
+
+/** CHAT.op.SPACE_VIEW.req — 0x0504 읽음 */
+export interface SpaceViewReq {
+  readonly space_id: string
+}
+
+/** CHAT.op.SPACE_VIEW.res — 0x0504 읽음 */
+export interface SpaceViewRes {
+  readonly read: number
+}
 
 /** LINK.op.ICE_RESTART.req — 0x0305 그 서버 연결을 다시 뚫는다 */
 export interface IceRestartReq {
