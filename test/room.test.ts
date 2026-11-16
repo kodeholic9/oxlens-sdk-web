@@ -598,7 +598,7 @@ test('SD-API-ROOM-SEND-MESSAGE — 방 문자는 MESSAGE 왕복 하나 · msgId 
   await tick()
   assert.deepEqual(r.ws.last(Op.MESSAGE).body, { room_id: 'r1', content: 'hello' })
   r.ws.reply(Op.MESSAGE, { msg_id: 'm-7' })
-  assert.deepEqual(await p, { msgId: 'm-7' }, 'SD-API-ROOM-SEND-MESSAGE — 왕복 뒤 msgId')
+  assert.deepEqual(await p, { msgId: 'm-7' }, '옛 방 문자 room.sendMessage — 왕복 뒤 msgId(규격은 client.chat 으로 옮김 · 채팅 SDK 코딩 때 다시 짠다)')
   await r.c.close()
 })
 

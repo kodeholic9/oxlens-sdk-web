@@ -183,7 +183,7 @@ test('SD-EVENT-MESSAGE — 방 문자 통지는 그 방 핸들의 message 하나
   h1.on('message', (m) => m1.push(m))
   h2.on('message', (m) => m2.push(m))
   await note(r, Op.MESSAGE, { room_id: 'r1', user_id: 'u2', content: 'hello', msg_id: 'm-1' })
-  assert.deepEqual([m1, m2], [[{ userId: 'u2', content: 'hello' }], []], 'SD-EVENT-MESSAGE — message 1 · 그 방만')
+  assert.deepEqual([m1, m2], [[{ userId: 'u2', content: 'hello' }], []], '옛 방 문자 message 이벤트 — 1 · 그 방만(규격은 client.chat messages 로 옮김 · 채팅 SDK 코딩 때 다시 짠다)')
   await r.c.close()
 })
 
