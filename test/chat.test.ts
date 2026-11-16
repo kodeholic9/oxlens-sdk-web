@@ -146,6 +146,33 @@ test('SDK:IMPL-CHAT-API view — 응답의 read 로 보관본을 고치고 space
   } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
 })
 
+test('SDK:IMPL-CHAT-API 내가 보낸 것 — 보관본 한 건 늘고 읽은 것으로(unread 0) · 다시 가져오기가 내 글을 또 내지 않는다 · view 의 read 가 로컬 total 보다 커도 unread 는 음수가 아니다', async () => {
+  FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'c1', total: 4, read: 4 }] })
+  try {
+    const r = await rig()
+    await tick(5)
+    await r.c.chat.spaces()
+    const ev: string[] = []
+    r.c.chat.on('messages', (_, ms, src) => { for (const m of ms) ev.push(`${src}:${m.msgId}`) })
+    const s = r.c.chat.send('c1', 'mine', { msgId: 'u1/own-1' })
+    await tick()
+    r.ws.reply(Op.MESSAGE, { t: 105 })
+    await s
+    assert.deepEqual(r.c.chat.spaceList.get('c1'), { spaceId: 'c1', total: 5, read: 5, unread: 0, lastT: 105 }, '내 글은 안 읽은 수에 안 든다(서버도 보낸 사람 read 를 올린다)')
+    const h = r.c.chat.history('c1', { after: 100 })
+    await tick()
+    r.ws.reply(Op.SPACE_HISTORY, { messages: [msg('c1', 'x', 104), { space_id: 'c1', msg_id: 'u1/own-1', user_id: 'u1', t: 105, content: 'mine' }], more: false })
+    await h
+    assert.deepEqual(ev, ['history:u2/x'], '내가 보낸 msg_id 는 다시 가져오기가 또 내지 않는다')
+    const v = r.c.chat.view('c1')
+    await tick()
+    r.ws.reply(Op.SPACE_VIEW, { read: 7 })
+    await v
+    const e = r.c.chat.spaceList.get('c1')
+    assert.deepEqual([e?.total, e?.read, e?.unread], [7, 7, 0], 'view 의 read 가 로컬 total 보다 크면 total 을 올린다 — unread 는 음수가 아니다')
+  } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
+})
+
 // ══ 따라잡기 기준 · msg_id 거르기(SDK:IMPL-CHAT-CATCHUP) ═══════════════════════════════════════
 
 test('K-sym-IMPL-CHAT-CATCHUP-1 — 서버 둘: 103 이 102 보다 먼저 닿은 뒤 끊김 · RESUME → 따라잡기 after 는 마지막 서버 읽기의 끝 t(100 · 받은 103 아님) · 102 는 catchup · 103 두 번 0', async () => {

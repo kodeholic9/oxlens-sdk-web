@@ -118,7 +118,7 @@ export const Code = {
   PRECONDITION_FAILED: { code: 3009, permanent: false },
   PEER_NOT_FOUND: { code: 3010, permanent: false },
   NOT_PUB_ROOM: { code: 3011, permanent: false },
-  SPACE_NOT_FOUND: { code: 3012, permanent: false },
+  SPACE_NOT_FOUND: { code: 3012, permanent: true },
   NOT_SPACE_MEMBER: { code: 3013, permanent: false },
   CHAT_DISABLED: { code: 3014, permanent: true },
   MSG_ID_CONFLICT: { code: 3015, permanent: true },

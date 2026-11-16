@@ -89,8 +89,25 @@ export class ChatCore {
   async send(spaceId: string, content: string, msgId: string, userId: string): Promise<ChatMessage> {
     try {
       const r = (await this.ask('MESSAGE', { space_id: spaceId, msg_id: msgId, content })) as MessageRes
+      this.own(spaceId, msgId, r.t)
       return { spaceId, msgId, userId, t: r.t, content }
     } catch (e) { throw withMsgId(e, msgId) }
+  }
+
+  /** 내가 보낸 것 — 보낸 세션엔 통지가 없으므로 여기서 집합에 넣고(다시 가져오기가 또 내지 않게) · 보관본은 한 건 늘리고 그 순간까지 읽은 것으로(서버도 보낸 사람의 read 를 올린다 — 연:RULE-CHAT-UNREAD) */
+  private own(spaceId: string, msgId: string, t: number): void {
+    const b = this.basis.get(spaceId)
+    if (b === undefined || t > b) {
+      let set = this.seen.get(spaceId)
+      if (!set) { set = new Map(); this.seen.set(spaceId, set) }
+      if (set.has(msgId)) return
+      set.set(msgId, t)
+    }
+    const s = this.spaceList.get(spaceId)
+    if (!s) return
+    const total = s.total + 1
+    this.spaceList.set(spaceId, { ...s, total, read: total, unread: 0, lastT: Math.max(s.lastT ?? t, t) })
+    this.events.emit('spaces', [...this.spaceList.values()])
   }
 
   history(spaceId: string, q: HistoryQuery = {}): Promise<{ messages: ChatMessage[]; more: boolean }> {
@@ -110,7 +127,8 @@ export class ChatCore {
     const r = (await this.ask('SPACE_VIEW', { space_id: spaceId })) as SpaceViewRes
     const s = this.spaceList.get(spaceId)
     if (!s) return
-    this.spaceList.set(spaceId, { ...s, read: r.read, unread: s.total - r.read })
+    const total = Math.max(s.total, r.read)
+    this.spaceList.set(spaceId, { ...s, total, read: r.read, unread: total - r.read })
     this.events.emit('spaces', [...this.spaceList.values()])
   }
 
