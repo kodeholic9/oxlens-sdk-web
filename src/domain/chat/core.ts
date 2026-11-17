@@ -1,15 +1,17 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-CHAT-API · SDK:IMPL-CHAT-CATCHUP · SDK:RULE-API-ASYNC 재시도 · SDK:RULE-MOD-AREA-MIRROR domain/chat · 연:RULE-CHAT-MSG-ID · 연:RULE-CHAT-SEND · 연:RULE-CHAT-RECV · 연:RULE-CHAT-MISSED · 연:RULE-CHAT-CATCHUP-BASIS · 연:RULE-CHAT-UNREAD · 연:RULE-CHAT-DISABLED · model: claude-opus-5-5
-// 채팅 — 방 핸들과 따로 산다(연:RULE-CHAT-SPACE). 위가 상태기를 두지 않는다 — 공간 보관본 · 따라잡기 기준 · msg_id 거르기를 여기서 든다.
-// 영역 관계 CHAT → SES(tools/sdk_deps.json) — 요청은 시그널링(internal)에 직접 · 통지와 세션 사실은 세션이 넣는 통(Queue)에서 직접 꺼낸다(콜백 주입 없음 · 세션은 채팅을 모른다).
+// spec: v1.2 @d626fda · SDK:IMPL-CHAT-API · SDK:IMPL-CHAT-CATCHUP · SDK:RULE-API-ASYNC 재시도 · SDK:RULE-MOD-AREA-MIRROR domain/chat · 연:RULE-CHAT-MSG-ID · 연:RULE-CHAT-SEND · 연:RULE-CHAT-RECV · 연:RULE-CHAT-MISSED · 연:RULE-CHAT-CATCHUP · 연:RULE-CHAT-CATCHUP-BUNDLE · 연:RULE-CHAT-MEMBER-NOTICE · 연:RULE-CHAT-UNREAD · 연:RULE-CHAT-DISABLED · model: claude-opus-5-5
+// 채팅 — 방 핸들과 따로 산다(연:RULE-CHAT-SPACE). 위가 상태기를 두지 않는다 — 공간 보관본 · msg_id 거르기를 여기서 든다. 따라잡기는 앱이 부른다(SDK 는 스스로 부르지 않는다).
+// 영역 관계 CHAT → SES(tools/sdk_deps.json) — 요청은 시그널링(internal)에 직접 · 통지는 세션이 넣는 통(Queue)에서 직접 꺼낸다(콜백 주입 없음 · 세션은 채팅을 모른다).
 import { Code, type ChatMessage as WireMessage, type SpaceEntry, type SpaceHistoryRes, type SpaceListRes, type SpaceViewRes, type MessageRes, type OpName } from '../../internal/wire/ws.js'
 import type { Signaling } from '../../internal/ses/signaling.js'
 import { LADDER } from '../gen/session_client.js'
 import { Emitter } from '../../platform/emitter.js'
 import { Fault, fromFailure } from '../../platform/fault.js'
-import { sleep } from '../../platform/clock.js'
-import { uuidV4 } from '../../platform/env.js'
-import type { Logger } from '../../platform/log.js'
+import { sleep, wall } from '../../platform/clock.js'
+import { randomHex } from '../../platform/env.js'
+import { sha256Hex } from '../../platform/sha256.js'
+
+export type MemberKind = 'join' | 'leave' | 'add' | 'remove'
 
 export interface ChatMessage {
   readonly spaceId: string
@@ -17,6 +19,9 @@ export interface ChatMessage {
   readonly userId: string
   readonly t: number
   readonly content: string
+  /** 멤버 변경 메시지만 — 없으면 보통 메시지(연:RULE-CHAT-MEMBER-NOTICE) */
+  readonly kind?: MemberKind
+  readonly target?: string
 }
 
 export interface Space {
@@ -31,20 +36,33 @@ export type MessageSource = 'live' | 'catchup' | 'history'
 
 export interface HistoryQuery { readonly after?: number; readonly before?: number; readonly limit?: number }
 
+export interface CatchupQuery { readonly spaceId?: string; readonly t?: number }
+
 export interface ChatEvents extends Record<string, unknown[]> {
   messages: [string, ChatMessage[], MessageSource]
   spaces: [Space[]]
 }
 
-/** 세션이 넣는 사실 — 실시간 통지 · 세션이 섰다 · 앱이 닫았다 */
-export type ChatFact = { readonly t: 'message'; readonly body: WireMessage } | { readonly t: 'up' } | { readonly t: 'closed' }
+/** 세션이 넣는 사실 — 실시간 통지 · 따라잡기 묶음 · 앱이 닫았다 */
+export type ChatFact =
+  | { readonly t: 'message'; readonly body: WireMessage }
+  | { readonly t: 'messages'; readonly body: readonly WireMessage[] }
+  | { readonly t: 'closed' }
 
 /** 재시도 간격 — 사다리의 둘째~넷째 칸(연:RULE-ERR-CLIENT-FAIL-DEFAULT 4) */
 const WAITS = LADDER.waits.slice(1, 4)
+/** 공간마다 드는 낸 msg_id 수 — 넘치면 오래된 것부터 버린다(SDK:IMPL-CHAT-CATCHUP) */
+const SEEN_MAX = 1000
 
-const toMessage = (m: WireMessage): ChatMessage => ({ spaceId: m.space_id, msgId: m.msg_id, userId: m.user_id, t: m.t, content: m.content })
+const toMessage = (m: WireMessage): ChatMessage => ({
+  spaceId: m.space_id, msgId: m.msg_id, userId: m.user_id, t: m.t, content: m.content,
+  ...(m.kind !== undefined ? { kind: m.kind } : {}), ...(m.target !== undefined ? { target: m.target } : {}),
+})
 
 const toSpace = (e: SpaceEntry): Space => ({ spaceId: e.space_id, total: e.total, read: e.read, unread: e.total - e.read, ...(e.last_t !== undefined ? { lastT: e.last_t } : {}) })
+
+/** (t, msgId) 차례(연:RULE-CHAT-ORDER) */
+const byOrder = (a: ChatMessage, b: ChatMessage): number => a.t - b.t || (a.msgId < b.msgId ? -1 : a.msgId > b.msgId ? 1 : 0)
 
 /** 끝내 실패한 전송 — 앱이 「실패」로 남기고 다시 보낼 때 넘길 msgId 를 싣는다(SDK:IMPL-CHAT-API) */
 function withMsgId(e: unknown, msgId: string): Fault {
@@ -56,18 +74,13 @@ function withMsgId(e: unknown, msgId: string): Fault {
 export class ChatCore {
   readonly events = new Emitter<ChatEvents>()
   readonly spaceList = new Map<string, Space>()
-  /** 공간마다 따라잡기 기준 — 그 공간을 마지막으로 서버에서 읽은 응답의 끝 t(연:RULE-CHAT-CATCHUP-BASIS) */
-  readonly basis = new Map<string, number>()
-  /** 공간마다 기준보다 뒤에 실시간으로 받은 msg_id → t */
-  readonly seen = new Map<string, Map<string, number>>()
-  focused: string | null = null
+  /** 공간마다 낸 msg_id — 넣은 차례 · 최근 SEEN_MAX 개 */
+  readonly seen = new Map<string, Set<string>>()
   enabled = true
   /** 3014 로 꺼진 사실 — 그 뒤 채팅 API 는 보내지 않고 이것으로 reject 한다 */
   private disabled: Fault | null = null
-  /** 이 수명에서 세션이 선 적이 있다 — 그 뒤에 다시 서면 놓친 것으로 본다(연:RULE-CHAT-MISSED) */
-  private wasUp = false
 
-  constructor(private readonly sig: Signaling, private readonly inbox: { next(): Promise<ChatFact | null> }, private readonly log: Logger) {
+  constructor(private readonly sig: Signaling, private readonly inbox: { next(): Promise<ChatFact | null> }) {
     void this.pump()
   }
 
@@ -76,15 +89,18 @@ export class ChatCore {
       const f = await this.inbox.next()
       if (!f) return
       if (f.t === 'message') this.live(f.body)
-      else if (f.t === 'up') { if (this.wasUp) void this.catchUp(); this.wasUp = true }
+      else if (f.t === 'messages') this.bundle(f.body)
       else this.reset()
     }
   }
 
   // ── 앱 조작 ─────────────────────────────────────────────────────────
 
-  /** msg_id 를 짓는다 — `<내 user_id>/<UUID v4>`(저장된 상태에 기대지 않는 값 · 연:RULE-CHAT-MSG-ID) */
-  newMsgId(userId: string): string { return `${userId}/${uuidV4()}` }
+  /** msg_id 를 짓는다 — 소문자 hex 36 자 = SHA-256(userId) 앞 4 byte · unix ms 6 byte · 보안 난수 8 byte(연:RULE-CHAT-MSG-ID · 저장된 상태에 기대지 않는다) */
+  newMsgId(userId: string): string {
+    const ms = (wall() % 0x1000000000000).toString(16).padStart(12, '0')
+    return `${sha256Hex(userId).slice(0, 8)}${ms}${randomHex(8)}`
+  }
 
   async send(spaceId: string, content: string, msgId: string, userId: string): Promise<ChatMessage> {
     try {
@@ -94,15 +110,9 @@ export class ChatCore {
     } catch (e) { throw withMsgId(e, msgId) }
   }
 
-  /** 내가 보낸 것 — 보낸 세션엔 통지가 없으므로 여기서 집합에 넣고(다시 가져오기가 또 내지 않게) · 보관본은 한 건 늘리고 그 순간까지 읽은 것으로(서버도 보낸 사람의 read 를 올린다 — 연:RULE-CHAT-UNREAD) */
+  /** 내가 보낸 것 — 보낸 세션엔 통지가 없으므로 여기서 집합에 넣고(따라잡기가 또 내지 않게) · 보관본은 한 건 늘리고 그 순간까지 읽은 것으로(서버도 보낸 사람의 read 를 올린다 — 연:RULE-CHAT-UNREAD) */
   private own(spaceId: string, msgId: string, t: number): void {
-    const b = this.basis.get(spaceId)
-    if (b === undefined || t > b) {
-      let set = this.seen.get(spaceId)
-      if (!set) { set = new Map(); this.seen.set(spaceId, set) }
-      if (set.has(msgId)) return
-      set.set(msgId, t)
-    }
+    if (!this.mark(spaceId, msgId)) return
     const s = this.spaceList.get(spaceId)
     if (!s) return
     const total = s.total + 1
@@ -110,8 +120,13 @@ export class ChatCore {
     this.events.emit('spaces', [...this.spaceList.values()])
   }
 
+  /** 따라잡기 — 앱이 부른다 · 서버 응답에 resolve · 못 받은 것은 그 뒤 messages{catchup} 으로 온다(연:RULE-CHAT-CATCHUP) */
+  async catchup(q: CatchupQuery = {}): Promise<void> {
+    await this.ask('CATCHUP', { ...(q.spaceId !== undefined ? { space_id: q.spaceId } : {}), ...(q.t !== undefined ? { t: q.t } : {}) })
+  }
+
   history(spaceId: string, q: HistoryQuery = {}): Promise<{ messages: ChatMessage[]; more: boolean }> {
-    return this.page(spaceId, q, 'history')
+    return this.page(spaceId, q)
   }
 
   async spaces(): Promise<Space[]> {
@@ -132,54 +147,61 @@ export class ChatCore {
     this.events.emit('spaces', [...this.spaceList.values()])
   }
 
-  focus(spaceId: string | null): void { this.focused = spaceId }
-
   // ── 받는 쪽 ─────────────────────────────────────────────────────────
 
-  /** 실시간 통지 — t ≤ basis 면 버린다 · 집합에 있으면 버린다 · 아니면 넣고 messages{live}(SDK:IMPL-CHAT-CATCHUP 1) */
-  private live(m: WireMessage): void {
-    const b = this.basis.get(m.space_id)
-    if (b !== undefined && m.t <= b) return
-    let set = this.seen.get(m.space_id)
-    if (!set) { set = new Map(); this.seen.set(m.space_id, set) }
-    if (set.has(m.msg_id)) return
-    set.set(m.msg_id, m.t)
-    this.events.emit('messages', m.space_id, [toMessage(m)], 'live')
-    const s = this.spaceList.get(m.space_id)
-    if (!s) return
-    const total = s.total + 1
-    this.spaceList.set(m.space_id, { ...s, total, unread: total - s.read, lastT: Math.max(s.lastT ?? m.t, m.t) })
-    this.events.emit('spaces', [...this.spaceList.values()])
+  /** 낸 것으로 적는다 — 이미 있으면 false · 집합은 최근 SEEN_MAX 개 */
+  private mark(spaceId: string, msgId: string): boolean {
+    let set = this.seen.get(spaceId)
+    if (!set) { set = new Set(); this.seen.set(spaceId, set) }
+    if (set.has(msgId)) return false
+    set.add(msgId)
+    if (set.size > SEEN_MAX) set.delete(set.values().next().value!)
+    return true
   }
 
-  /** 다시 붙은 뒤 — spaces() · focus 공간 하나만 기준 뒤를 more 가 거짓일 때까지(기준이 없으면 최근 쪽 하나 · SDK:IMPL-CHAT-CATCHUP 2) */
-  private async catchUp(): Promise<void> {
-    if (!this.enabled) return
-    try { await this.spaces() } catch (e) { this.log.warn('따라잡기 — 공간 목록 실패', { err: e instanceof Fault ? `${e.code} ${e.name}` : String(e) }) }
-    const id = this.focused
-    if (id === null || !this.enabled) return
-    try {
-      for (;;) {
-        const b = this.basis.get(id)
-        const p = await this.page(id, b === undefined ? {} : { after: b }, 'catchup')
-        if (b === undefined || !p.more || p.messages.length === 0) return
-      }
-    } catch (e) { this.log.warn('따라잡기 — 다시 가져오기 실패', { space: id, err: e instanceof Fault ? `${e.code} ${e.name}` : String(e) }) }
+  /** 받은 메시지를 보관본에 — 멤버 변경 메시지는 total 을 올리지 않는다(연:RULE-CHAT-UNREAD) */
+  private count(msgs: readonly ChatMessage[]): void {
+    let changed = false
+    for (const m of msgs) {
+      const s = this.spaceList.get(m.spaceId)
+      if (!s || m.kind !== undefined) continue
+      const total = s.total + 1
+      this.spaceList.set(m.spaceId, { ...s, total, unread: total - s.read, lastT: Math.max(s.lastT ?? m.t, m.t) })
+      changed = true
+    }
+    if (changed) this.events.emit('spaces', [...this.spaceList.values()])
   }
 
-  /** 한 쪽 — after · 인자 없음 갈래만 기준을 그 끝 t 로 올리고 집합에서 t ≤ basis 를 지운다(SDK:IMPL-CHAT-CATCHUP 3) · 낼 것은 집합으로 거른 뒤 */
-  private async page(spaceId: string, q: HistoryQuery, source: MessageSource): Promise<{ messages: ChatMessage[]; more: boolean }> {
+  /** 실시간 통지 — 집합에 있으면 버린다 · 아니면 넣고 messages{live}(SDK:IMPL-CHAT-CATCHUP 1) */
+  private live(w: WireMessage): void {
+    if (!this.mark(w.space_id, w.msg_id)) return
+    const m = toMessage(w)
+    this.events.emit('messages', m.spaceId, [m], 'live')
+    this.count([m])
+  }
+
+  /** 따라잡기 묶음 — 공간마다 나눠 (t, msgId) 차례로 · 집합으로 거른 뒤 messages{catchup}(SDK:IMPL-CHAT-CATCHUP 2) */
+  private bundle(ws: readonly WireMessage[]): void {
+    const by = new Map<string, ChatMessage[]>()
+    for (const w of ws) {
+      if (!this.mark(w.space_id, w.msg_id)) continue
+      const list = by.get(w.space_id) ?? []
+      list.push(toMessage(w))
+      by.set(w.space_id, list)
+    }
+    for (const [spaceId, list] of by) {
+      list.sort(byOrder)
+      this.events.emit('messages', spaceId, list, 'catchup')
+      this.count(list)
+    }
+  }
+
+  /** 한 쪽 — 집합에 없는 것만 내고 넣는다(SDK:IMPL-CHAT-CATCHUP 3) */
+  private async page(spaceId: string, q: HistoryQuery): Promise<{ messages: ChatMessage[]; more: boolean }> {
     const r = (await this.ask('SPACE_HISTORY', { space_id: spaceId, ...q })) as SpaceHistoryRes
     const messages = r.messages.map(toMessage)
-    const set = this.seen.get(spaceId)
-    const fresh = set ? messages.filter((m) => !set.has(m.msgId)) : messages
-    const end = messages.at(-1)
-    if (q.before === undefined && end) {
-      const b = Math.max(this.basis.get(spaceId) ?? end.t, end.t)
-      this.basis.set(spaceId, b)
-      if (set) for (const [id, t] of set) if (t <= b) set.delete(id)
-    }
-    if (fresh.length) this.events.emit('messages', spaceId, fresh, source)
+    const fresh = messages.filter((m) => this.mark(spaceId, m.msgId))
+    if (fresh.length) this.events.emit('messages', spaceId, fresh, 'history')
     return { messages, more: r.more }
   }
 
@@ -198,16 +220,13 @@ export class ChatCore {
     }
   }
 
-  /** 수명 끝(close()) — 보관본 · 기준 · 집합 · 표지를 비운다 */
+  /** 수명 끝(close()) — 보관본 · 집합 · 표지를 비운다 */
   private reset(): void {
     const had = this.spaceList.size > 0
     this.spaceList.clear()
-    this.basis.clear()
     this.seen.clear()
-    this.focused = null
     this.enabled = true
     this.disabled = null
-    this.wasUp = false
     if (had) this.events.emit('spaces', [])
   }
 }

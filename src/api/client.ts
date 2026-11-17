@@ -7,7 +7,7 @@ import type { Participant } from '../domain/room/store.js'
 import type { RoomCore } from '../domain/room/core.js'
 import type { RemoteCore } from '../domain/trk/remote.js'
 import type { TrackOptions } from '../domain/pub/local.js'
-import { ChatCore, type ChatMessage, type Space, type MessageSource, type HistoryQuery } from '../domain/chat/core.js'
+import { ChatCore, type ChatMessage, type Space, type MessageSource, type HistoryQuery, type CatchupQuery } from '../domain/chat/core.js'
 import type { RoomSummary, GetRoomRes } from '../internal/wire/ws.js'
 import type { PermState } from '../platform/env.js'
 import type { Level, LogEntry } from '../platform/log.js'
@@ -151,7 +151,7 @@ export class Chat {
   /** @internal */
   readonly core: ChatCore
   constructor(private readonly ses: Core) {
-    this.core = new ChatCore(ses.sig, ses.chatInbox, ses.book.scope('chat'))
+    this.core = new ChatCore(ses.sig, ses.chatInbox)
   }
 
   get enabled(): boolean { return this.core.enabled }
@@ -168,7 +168,8 @@ export class Chat {
   history(spaceId: string, q: HistoryQuery = {}): Promise<{ messages: ChatMessage[]; more: boolean }> { return act(() => this.core.history(spaceId, q)) }
   spaces(): Promise<Space[]> { return act(() => this.core.spaces()) }
   view(spaceId: string): Promise<void> { return act(() => this.core.view(spaceId)) }
-  focus(spaceId: string | null): void { this.core.focus(spaceId) }
+  /** 따라잡기 — 앱이 부른다(SDK 는 스스로 부르지 않는다) · spaceId · t 를 넣고 빼는 것이 곧 고르기(연:RULE-CHAT-CATCHUP) */
+  catchup(q: CatchupQuery = {}): Promise<void> { return act(() => this.core.catchup(q)) }
 
   on(name: 'messages', fn: Fn<[string, ChatMessage[], MessageSource]>): Off
   on(name: 'spaces', fn: Fn<[Space[]]>): Off

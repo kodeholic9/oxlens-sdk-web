@@ -8,7 +8,7 @@ export type Frame = ReturnType<typeof decodeFrame>
 export class FakeWS {
   static made: FakeWS[] = []
   static pid = 9000
-  /** 서버 몫을 대신하는 자동 응답 — 요청 op → 응답 body(창 1 이라 답 없는 요청이 뒤 요청을 막는다) · SPACE_LIST 는 다시 붙은 뒤 채팅 따라잡기가 낸다(SDK:IMPL-CHAT-CATCHUP 2) */
+  /** 서버 몫을 대신하는 자동 응답 — 요청 op → 응답 body(창 1 이라 답 없는 요청이 뒤 요청을 막는다) · 채팅 따라잡기는 앱이 부른다(SDK:IMPL-CHAT-API catchup) */
   static auto = new Map<number, unknown>([[Op.SPACE_LIST, { spaces: [] }]])
   readyState = 0
   binaryType = 'blob'

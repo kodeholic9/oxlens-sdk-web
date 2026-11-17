@@ -72,7 +72,7 @@ const qa = {
     client.diagnostics.setLogLevel('debug')
     client.diagnostics.on('transition', (t) => { state.transitions.push(t); if (state.transitions.length > 2000) state.transitions.shift() })
     client.on('session', (s) => note('session', { state: s.state, recovering: s.recovering }))
-    client.chat.on('messages', (spaceId, msgs, source) => note('chat', { spaceId, source, msgs: msgs.map((m) => ({ msgId: m.msgId, userId: m.userId, t: m.t, content: m.content })) }))
+    client.chat.on('messages', (spaceId, msgs, source) => note('chat', { spaceId, source, msgs: msgs.map((m) => ({ msgId: m.msgId, userId: m.userId, t: m.t, content: m.content, ...(m.kind ? { kind: m.kind, target: m.target } : {}) })) }))
     client.chat.on('spaces', (spaces) => note('chatSpaces', spaces))
     await client.connect()
     return { userId: client.session.userId, pcMode: client.session.pcMode }
@@ -108,7 +108,8 @@ const qa = {
 
   async chatView(spaceId) { await state.client.chat.view(spaceId) },
 
-  chatFocus(spaceId) { state.client.chat.focus(spaceId) },
+  /** 연:CHAT.op.CATCHUP — 앱이 부른다 · 못 받은 것은 그 뒤 messages{catchup} 으로 온다(events 'chat'). */
+  async chatCatchup(q) { await state.client.chat.catchup(q ?? {}) },
 
   async enableMic() {
     const t = await state.client.media.enableMicrophone()

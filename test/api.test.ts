@@ -174,8 +174,8 @@ test('SD-EVENT-RESYNC — 갭 뒤 재동기를 반영한 뒤에 resync 하나 ·
   } finally { http.restore() }
 })
 
-test('SD-EVENT-MESSAGES — 채팅은 client.chat 의 messages(spaceId, 배열, 출처) · 실시간 live 길이 1 · history() 결과 history · 다시 붙은 뒤 catchup · t 오름차순 · 같은 msg_id 두 번 0 · spaces 는 spaceList 가 바뀔 때 1', async () => {
-  const msg = (id: string, t: number) => ({ space_id: 'c1', msg_id: `u2/${id}`, user_id: 'u2', t, content: id })
+test('SD-EVENT-MESSAGES — 채팅은 client.chat 의 messages(spaceId, 배열, 출처) · 실시간 live 길이 1 · history() 결과 history · catchup() 뒤 MESSAGES 묶음은 공간마다 catchup · (t, msgId) 오름차순 · 같은 msg_id 두 번 0 · spaces 는 spaceList 가 바뀔 때 1', async () => {
+  const msg = (id: string, t: number, space = 'c1') => ({ space_id: space, msg_id: `m-${id}`, user_id: 'u2', t, content: id })
   FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'c1', total: 5, read: 3, last_t: 101 }] })
   try {
     const r = await rig()
@@ -186,7 +186,6 @@ test('SD-EVENT-MESSAGES — 채팅은 client.chat 의 messages(spaceId, 배열, 
     r.c.chat.on('spaces', (l) => sp.push(l.map((x) => `${x.spaceId}:${x.total}-${x.read}=${x.unread}`)))
     const list = await r.c.chat.spaces()
     assert.deepEqual([list, sp], [[{ spaceId: 'c1', total: 5, read: 3, unread: 2, lastT: 101 }], [['c1:5-3=2']]], 'SD-EVENT-MESSAGES — spaces() 가 spaceList 를 갈아 끼우고 spaces 1')
-    r.c.chat.focus('c1')
     const h = r.c.chat.history('c1')
     await tick()
     assert.deepEqual(r.ws.last(Op.SPACE_HISTORY).body, { space_id: 'c1' }, '인자 없음 — 최근 쪽')
@@ -199,21 +198,17 @@ test('SD-EVENT-MESSAGES — 채팅은 client.chat 의 messages(spaceId, 배열, 
     assert.deepEqual(sp, [['c1:6-3=3']], 'SD-EVENT-MESSAGES — 실시간 메시지가 그 공간 total +1 → spaces 1')
     await note(r, Op.MESSAGE, msg('d', 103))
     await note(r, Op.MESSAGE, msg('b', 101))
-    assert.deepEqual([ev.length, sp.length], [1, 1], 'SD-EVENT-MESSAGES — 같은 msg_id 두 번 0 · 이미 읽은 t 0 · spaceList 그대로면 spaces 0')
+    assert.deepEqual([ev.length, sp.length], [1, 1], 'SD-EVENT-MESSAGES — 같은 msg_id 두 번 0 · spaceList 그대로면 spaces 0')
     ev.length = 0; sp.length = 0
-    // 이어받기 — 놓친 것으로 본다: spaces() · focus 공간 하나 따라잡기
-    FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'c1', total: 7, read: 3, last_t: 103 }] })
-    r.ws.close(); await tick(5)
-    const ws2 = FakeWS.made.at(-1)!
-    ws2.open(); await tick()
-    ws2.reply(Op.BIND, BIND_OK); await tick()
-    ws2.reply(Op.RESUME, { snapshot: { r1: { participants: [mem('u1')], me: mem('u1'), tracks: [], version: vers(1) } }, publications: [], mline_tables: [] })
-    for (let i = 0; i < 20 && ws2.requests(Op.SPACE_HISTORY).length === 0; i++) await tick(1)
-    assert.deepEqual(ws2.last(Op.SPACE_HISTORY).body, { space_id: 'c1', after: 101 }, '따라잡기 — 마지막 서버 읽기의 끝 t 뒤')
-    ws2.reply(Op.SPACE_HISTORY, { messages: [msg('c', 102), msg('d', 103)], more: false })
-    await tick(); await tick()
-    assert.deepEqual(sp, [['c1:7-3=4']], 'SD-EVENT-MESSAGES — 다시 붙은 뒤 spaces() → spaces 1')
-    assert.deepEqual(ev, [['c1', ['c@102'], 'catchup']], 'SD-EVENT-MESSAGES — RESUME 뒤 출처 catchup · 실시간으로 낸 msg_id(103)는 두 번 0')
+    // 따라잡기 — 앱이 부른다: 바로 응답 → MESSAGES 묶음(공간 섞임) → 공간마다 catchup
+    const c = r.c.chat.catchup()
+    await tick()
+    assert.deepEqual(r.ws.last(Op.CATCHUP).body, {}, 'catchup() 인자 없음 — 공간 · t 없이')
+    r.ws.reply(Op.CATCHUP, {})
+    await c
+    await note(r, Op.MESSAGES, { messages: [msg('c', 102), msg('x', 102, 'c2'), msg('d', 103), { ...msg('j', 104), content: '', kind: 'add', user_id: '$sys', target: 'u9' }] })
+    assert.deepEqual(ev, [['c1', ['c@102', '@104'], 'catchup'], ['c2', ['x@102'], 'catchup']], 'SD-EVENT-MESSAGES — 묶음은 공간마다 catchup · 실시간으로 낸 msg_id(103)는 두 번 0')
+    assert.deepEqual(sp, [['c1:7-3=4']], 'SD-EVENT-MESSAGES — 따라잡기 메시지가 total +1 · 멤버 변경 메시지는 세지 않는다')
     await r.c.close()
   } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
 })

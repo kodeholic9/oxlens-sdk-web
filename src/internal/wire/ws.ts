@@ -9,6 +9,8 @@ export const Op = {
   SPACE_HISTORY: 0x0502,
   SPACE_LIST: 0x0503,
   SPACE_VIEW: 0x0504,
+  CATCHUP: 0x0505,
+  MESSAGES: 0x0506,
   ICE_RESTART: 0x0305,
   LINK_EVENT: 0x0706,
   MLINE_EVENT: 0x0707,
@@ -38,6 +40,8 @@ export const Lane: Readonly<Record<OpName, 0 | 1 | 2 | 3>> = {
   SPACE_HISTORY: 2,
   SPACE_LIST: 2,
   SPACE_VIEW: 2,
+  CATCHUP: 2,
+  MESSAGES: 2,
   ICE_RESTART: 1,
   LINK_EVENT: 1,
   MLINE_EVENT: 1,
@@ -70,6 +74,8 @@ export const Reply: Readonly<Record<OpName, 'response' | 'none' | 'ack'>> = {
   SPACE_HISTORY: 'response',
   SPACE_LIST: 'response',
   SPACE_VIEW: 'response',
+  CATCHUP: 'response',
+  MESSAGES: 'ack',
   ICE_RESTART: 'response',
   LINK_EVENT: 'ack',
   MLINE_EVENT: 'ack',
@@ -171,6 +177,8 @@ export interface ChatMessage {
   readonly user_id: string
   readonly t: number
   readonly content: string
+  readonly kind?: "join" | "leave" | "add" | "remove"
+  readonly target?: string
 }
 
 /** CHAT.type.SpaceEntry — 내 공간 한 줄 (§[CHAT.op.SPACE_LIST]) */
@@ -465,6 +473,20 @@ export interface SpaceViewReq {
 /** CHAT.op.SPACE_VIEW.res — 0x0504 읽음 */
 export interface SpaceViewRes {
   readonly read: number
+}
+
+/** CHAT.op.CATCHUP.req — 0x0505 따라잡기 */
+export interface CatchupReq {
+  readonly space_id?: string
+  readonly t?: number
+}
+
+/** CHAT.op.CATCHUP.res — 0x0505 따라잡기 */
+export type CatchupRes = Record<string, never>
+
+/** CHAT.op.MESSAGES.body — 0x0506 따라잡기 묶음 */
+export interface MessagesBody {
+  readonly messages: ChatMessage[]
 }
 
 /** LINK.op.ICE_RESTART.req — 0x0305 그 서버 연결을 다시 뚫는다 */

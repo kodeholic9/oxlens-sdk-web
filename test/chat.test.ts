@@ -4,10 +4,12 @@
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { FakeWS, tick } from './_ws.js'
+import { encodeFrame } from '../src/internal/ses/signaling.js'
 import { up, enter, note, mem, vers, FAIL, BIND_OK, type Rig } from './_rig.js'
 import { live } from './_pub.js'
 import { Op, type ChatMessage } from '../src/internal/wire/ws.js'
 import { OxLensError } from '../src/index.js'
+import { sha256Hex } from '../src/platform/sha256.js'
 
 /** 단언이 깨져도 클라이언트를 닫는다(test/_pub 의 afterEach) */
 async function rig(): Promise<Rig> { const r = await up(); live.push(r); return r }
@@ -29,16 +31,20 @@ async function resume(r: Rig): Promise<void> {
 
 async function until(f: () => boolean): Promise<void> { for (let i = 0; i < 50 && !f(); i++) await tick(1) }
 
-const UUID4 = /^u1\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+/** msgId 꼴 — SHA-256('u1') 앞 4 byte · unix ms 6 byte · 난수 8 byte = 소문자 hex 36 자(연:RULE-CHAT-MSG-ID) */
+const HEX36 = /^[0-9a-f]{36}$/
 
 // ══ 전송 — msgId · 재시도 · 끝내 실패(SDK:IMPL-CHAT-API) ═══════════════════════════════════════════
 
-test('SDK:IMPL-CHAT-API send — msgId 가 없으면 SDK 가 <userId>/<UUID v4> 로 짓는다 · 보낼 때마다 다르다 · 방 입장 없이 · resolve 는 서버가 매긴 t 를 담은 메시지', async () => {
+test('SDK:IMPL-CHAT-API send — msgId 가 없으면 SDK 가 hex 36 자(사용자 해시 · 시각 · 난수)로 짓는다 · 보낼 때마다 다르다 · 방 입장 없이 · resolve 는 서버가 매긴 t 를 담은 메시지', async () => {
   const r = await rig()
   const p = r.c.chat.send('c1', '들리나')
   await tick()
   const b = r.ws.last(Op.MESSAGE).body as { space_id: string; msg_id: string; content: string }
-  assert.match(b.msg_id, UUID4, 'SDK:IMPL-CHAT-API — msgId = <userId>/<UUID v4>')
+  assert.match(b.msg_id, HEX36, 'SDK:IMPL-CHAT-API — msgId = 소문자 hex 36 자')
+  assert.equal(b.msg_id.slice(0, 8), sha256Hex('u1').slice(0, 8), 'SDK:IMPL-CHAT-API — 앞 8 자 = SHA-256(userId) 앞 4 byte')
+  const ms = parseInt(b.msg_id.slice(8, 20), 16)
+  assert.ok(Math.abs(ms - Date.now()) < 60_000, 'SDK:IMPL-CHAT-API — 가운데 12 자 = 지은 시각(unix ms)')
   assert.deepEqual([b.space_id, b.content], ['c1', '들리나'])
   r.ws.reply(Op.MESSAGE, { t: 1700 })
   assert.deepEqual(await p, { spaceId: 'c1', msgId: b.msg_id, userId: 'u1', t: 1700, content: '들리나' }, 'SDK:IMPL-CHAT-API — resolve 값은 t 를 담은 메시지')
@@ -173,65 +179,41 @@ test('SDK:IMPL-CHAT-API 내가 보낸 것 — 보관본 한 건 늘고 읽은 �
   } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
 })
 
-// ══ 따라잡기 기준 · msg_id 거르기(SDK:IMPL-CHAT-CATCHUP) ═══════════════════════════════════════
+// ══ 따라잡기 받기 · msg_id 거르기(SDK:IMPL-CHAT-CATCHUP) ═══════════════════════════════════════
 
-test('K-sym-IMPL-CHAT-CATCHUP-1 — 서버 둘: 103 이 102 보다 먼저 닿은 뒤 끊김 · RESUME → 따라잡기 after 는 마지막 서버 읽기의 끝 t(100 · 받은 103 아님) · 102 는 catchup · 103 두 번 0', async () => {
+test('SDK:IMPL-CHAT-API catchup — 앱이 부른다 · spaceId · t 를 넣고 빼면 그대로 실린다 · 다시 붙어도 SDK 는 스스로 부르지 않는다', async () => {
   const r = await rig()
+  const a = r.c.chat.catchup({ spaceId: 'S', t: 1700 })
+  await tick()
+  assert.deepEqual(r.ws.last(Op.CATCHUP).body, { space_id: 'S', t: 1700 }, '연:RULE-CHAT-CATCHUP — 칸 둘 그대로')
+  r.ws.reply(Op.CATCHUP, {}); await a
+  const b = r.c.chat.catchup()
+  await tick()
+  assert.deepEqual(r.ws.last(Op.CATCHUP).body, {}, '인자 없음 — 공간 경계 없이 · 미전송 기록만')
+  r.ws.reply(Op.CATCHUP, {}); await b
   await enter(r, 'r1')
+  await resume(r)
+  await tick(5)
+  assert.equal(r.ws.requests(Op.CATCHUP).length + r.ws.requests(Op.SPACE_HISTORY).length + r.ws.requests(Op.SPACE_LIST).length, 0, 'SDK:IMPL-CHAT-CATCHUP — 다시 붙은 뒤 SDK 가 스스로 따라잡지 않는다')
+})
+
+test('K-sym-IMPL-CHAT-CATCHUP-1 — 공간 둘이 섞인 MESSAGES 묶음 → ACK 먼저 · 공간마다 따로 catchup · (t, msgId) 오름차순 · 이미 낸 msg_id 0', async () => {
+  const r = await rig()
   const ev: string[] = []
-  r.c.chat.on('messages', (_, ms, src) => { for (const m of ms) ev.push(`${src}:${m.t}`) })
-  r.c.chat.focus('S')
-  const h = r.c.chat.history('S')
+  r.c.chat.on('messages', (sp, ms, src) => ev.push(`${src}:${sp}:${ms.map((m) => m.msgId).join(',')}`))
+  await note(r, Op.MESSAGE, msg('S', 'a', 100))
+  const pid = 9001
+  r.ws.deliver(encodeFrame('request', Op.MESSAGES, pid, { messages: [msg('S', 'a', 100), msg('S', 'c', 102), msg('S', 'b', 102), msg('T', 'z', 105)] }))
   await tick()
-  r.ws.reply(Op.SPACE_HISTORY, { messages: [msg('S', 'a', 100)], more: false })
-  await h
-  await note(r, Op.MESSAGE, msg('S', 'd', 103, 'D'))
-  await resume(r)
-  await until(() => r.ws.requests(Op.SPACE_HISTORY).length > 0)
-  assert.deepEqual(r.ws.last(Op.SPACE_HISTORY).body, { space_id: 'S', after: 100 }, 'K-sym-IMPL-CHAT-CATCHUP-1 — after = 마지막 서버 읽기 응답의 끝 t(100) · 받은 103 아님')
-  r.ws.reply(Op.SPACE_HISTORY, { messages: [msg('S', 'b', 101), msg('S', 'c', 102, 'C'), msg('S', 'd', 103, 'D')], more: false })
-  await tick(); await tick()
-  await note(r, Op.MESSAGE, msg('S', 'd', 103, 'D'))
-  assert.deepEqual(ev, ['history:100', 'live:103', 'catchup:101', 'catchup:102'], 'K-sym-IMPL-CHAT-CATCHUP-1 — 102 가 catchup 으로 온다 · 103 두 번 0')
-  assert.equal(r.c.chat.core.basis.get('S'), 103, '응답 끝 t 로 기준을 올린다')
+  const acks = r.ws.frames().filter((f) => f.op === Op.MESSAGES && f.pid === pid && f.kind === 'ok')
+  assert.equal(acks.length, 1, 'K-sym-IMPL-CHAT-CATCHUP-1 — 묶음 ACK 하나(연:RULE-TRN-NOTIFY-ACK-STEPS)')
+  assert.deepEqual(ev, ['live:S:u2/a', 'catchup:S:u2/b,u2/c', 'catchup:T:u2/z'], 'K-sym-IMPL-CHAT-CATCHUP-1 — 공간마다 따로 · (t, msgId) 차례 · 이미 낸 a 는 0')
 })
 
-test('K-sym-IMPL-CHAT-CATCHUP-1 — more 가 참이면 끝 t 로 이어 부른다 · 기준이 없으면 최근 쪽 하나 · before 쪽은 기준을 안 바꾼다', async () => {
+test('K-sym-IMPL-CHAT-CATCHUP-2 — 오래 켠 클라: 실시간 1,200 개 → 집합은 1,000 개 · 버린 것은 가장 오래된 것부터', async () => {
   const r = await rig()
-  await enter(r, 'r1')
-  r.c.chat.focus('S')
-  const b = r.c.chat.history('S', { before: 50 })
-  await tick()
-  r.ws.reply(Op.SPACE_HISTORY, { messages: [msg('S', 'o', 40), msg('S', 'p', 49)], more: true })
-  await b
-  assert.equal(r.c.chat.core.basis.has('S'), false, 'K-sym-IMPL-CHAT-CATCHUP-1 — before 쪽은 기준을 안 바꾼다')
-  await resume(r)
-  await until(() => r.ws.requests(Op.SPACE_HISTORY).length > 0)
-  assert.deepEqual(r.ws.last(Op.SPACE_HISTORY).body, { space_id: 'S' }, '기준이 없으면 최근 쪽')
-  r.ws.reply(Op.SPACE_HISTORY, { messages: [msg('S', 'x', 200)], more: true })
-  await tick(5)
-  assert.equal(r.ws.requests(Op.SPACE_HISTORY).length, 1, '기준이 없으면 최근 쪽 하나(이어 부르기 0)')
-  await resume(r)
-  await until(() => r.ws.requests(Op.SPACE_HISTORY).length > 0)
-  assert.deepEqual(r.ws.last(Op.SPACE_HISTORY).body, { space_id: 'S', after: 200 })
-  r.ws.reply(Op.SPACE_HISTORY, { messages: [msg('S', 'y', 201), msg('S', 'z', 202)], more: true })
-  await until(() => r.ws.requests(Op.SPACE_HISTORY).length > 1)
-  assert.deepEqual(r.ws.last(Op.SPACE_HISTORY).body, { space_id: 'S', after: 202 }, 'K-sym-IMPL-CHAT-CATCHUP-1 — more 면 받은 끝 t 로 이어 부른다')
-  r.ws.reply(Op.SPACE_HISTORY, { messages: [msg('S', 'w', 203)], more: false })
-  await tick(5)
-  assert.equal(r.ws.requests(Op.SPACE_HISTORY).length, 2, 'more 가 거짓이면 멈춘다')
-})
-
-test('K-sym-IMPL-CHAT-CATCHUP-2 — 오래 켠 클라: 실시간 메시지 다수 뒤 history() → 집합에서 t ≤ basis 인 것이 지워진다 · 집합 크기 = 마지막 읽기 뒤 실시간 몫', async () => {
-  const r = await rig()
-  for (let t = 101; t <= 150; t++) r.ws.notify(Op.MESSAGE, msg('S', `m${t}`, t))
-  await tick(); await tick()
+  for (let t = 1; t <= 1200; t++) r.ws.notify(Op.MESSAGE, msg('S', `m${t}`, t))
+  await until(() => (r.c.chat.core.seen.get('S')?.size ?? 0) >= 1000 && r.c.chat.core.seen.get('S')!.has('u2/m1200'))
   const set = r.c.chat.core.seen.get('S')!
-  assert.equal(set.size, 50, '실시간으로 받은 50')
-  const h = r.c.chat.history('S')
-  await tick()
-  r.ws.reply(Op.SPACE_HISTORY, { messages: [msg('S', 'm139', 139), msg('S', 'm140', 140)], more: true })
-  await h
-  assert.equal(r.c.chat.core.basis.get('S'), 140)
-  assert.deepEqual([set.size, [...set.values()].every((t) => t > 140)], [10, true], 'K-sym-IMPL-CHAT-CATCHUP-2 — t ≤ basis 지움 · 남은 것 = 마지막 읽기 뒤 실시간 몫(141~150)')
+  assert.deepEqual([set.size, set.has('u2/m200'), set.has('u2/m201'), set.has('u2/m1200')], [1000, false, true, true], 'K-sym-IMPL-CHAT-CATCHUP-2 — 1,000 개 · 가장 오래된 200 을 버림')
 })

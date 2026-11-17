@@ -87,8 +87,8 @@ export class Core {
   readonly links = new Map<string, LinkCore>()
   readonly media: MediaRegistry
   readonly diag: Diag
-  /** 채팅이 꺼낼 사실 — 실시간 통지 · 세션이 섰다 · 앱이 닫았다(영역 관계 CHAT → SES — 세션은 채팅을 모르고 넣기만 하고, 채팅이 직접 꺼낸다) */
-  readonly chatInbox = new Queue<{ readonly t: 'message'; readonly body: ChatMessage } | { readonly t: 'up' } | { readonly t: 'closed' }>()
+  /** 채팅이 꺼낼 사실 — 실시간 통지 · 따라잡기 묶음 · 앱이 닫았다(영역 관계 CHAT → SES — 세션은 채팅을 모르고 넣기만 하고, 채팅이 직접 꺼낸다) */
+  readonly chatInbox = new Queue<{ readonly t: 'message'; readonly body: ChatMessage } | { readonly t: 'messages'; readonly body: readonly ChatMessage[] } | { readonly t: 'closed' }>()
   readonly sids = new Interner()
   readonly epochs = new Interner()
   /** 방 입장 식별자 join_id(연:RULE-ROOM-JOIN-ID) — 방 상태기는 같은지만 본다 */
@@ -260,7 +260,6 @@ export class Core {
     for (const f of step.fx) this.effect(f, entry)
     if (this.ses.cs === 'ACTIVE' && prev.cs !== 'ACTIVE') {
       this.diag.sessionActive(true)
-      this.chatInbox.push({ t: 'up' })
       for (const w of this.activeWaiters.splice(0)) w.resolve()
       for (const l of this.links.values()) l.sessionBack()
     }
@@ -337,6 +336,10 @@ export class Core {
       }
       case 'MESSAGE': {
         this.chatInbox.push({ t: 'message', body: body as ChatMessage })
+        return
+      }
+      case 'MESSAGES': {
+        this.chatInbox.push({ t: 'messages', body: (b['messages'] ?? []) as ChatMessage[] })
         return
       }
       case 'TASK': {

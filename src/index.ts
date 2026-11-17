@@ -13,4 +13,4 @@ export type { Participant, Permission, ParticipantType } from './domain/room/sto
 export type { RemoteInfo } from './domain/trk/remote.js'
 export type { TrackOptions, LocalState, Owner, EndReason, Profile } from './domain/pub/local.js'
 export type { Phase, LastEnd, ArmingStage, PressSource } from './domain/flr/core.js'
-export type { ChatMessage, Space, MessageSource, HistoryQuery } from './domain/chat/core.js'
+export type { ChatMessage, Space, MessageSource, HistoryQuery, CatchupQuery, MemberKind } from './domain/chat/core.js'
