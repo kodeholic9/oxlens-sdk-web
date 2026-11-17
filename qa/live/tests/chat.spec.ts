@@ -50,7 +50,7 @@ test('CHAT-02 멤버가 아닌 공간에는 못 보낸다', { annotation: { type
 
 test('CHAT-03 접속하지 않던 멤버가 따라잡기를 부르면 못 받은 메시지와 자기 추가 메시지가 온다', { annotation: { type: 'spec', description: 'CP-OP-CATCHUP · CP-OP-MESSAGES · SD-EVENT-MESSAGES' } }, async ({ browser }) => {
   const ctx = await browser.newContext()
-  const space = S.room('catchup')
+  const space = S.room(`catchup_${Date.now()}`)  // 회차마다 새 공간 — 개발 채팅 DB 는 회차를 넘어 남아 이미 멤버면 추가 메시지가 새로 안 생긴다
   ensureSpace(space, [S.user('U04'), S.user('U05')])
   const a = await S.open(ctx, { userId: S.user('U04') })
   const content = `늦게 온 사람 ${Date.now()}`
