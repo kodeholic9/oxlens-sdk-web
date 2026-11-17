@@ -64,3 +64,29 @@ test('CHAT-03 접속하지 않던 멤버가 따라잡기를 부르면 못 받은
     return { post: caught.some((m) => m.content === content), added: caught.some((m) => m.kind === 'add' && m.target === S.user('U05')) }
   }, { message: '★CATCHUP{} 뒤 MESSAGES 로 못 받은 메시지 · 자기 추가 메시지(멤버 변경)' }).toEqual({ post: true, added: true })
 })
+
+interface UpNote { detail: { spaceId: string; msgs: { msgId: string; content: string; edited: boolean; deleted: boolean; reactions: Record<string, string[]> }[] } }
+
+test('CHAT-04 고침 · 반응 · 지움은 원본을 가리키는 새 메시지 — 받는 쪽은 원본에 접어 updates 로 · 지운 뒤 다시 받아도 본문이 없다', { annotation: { type: 'spec', description: 'CP-OP-MESSAGE · CP-CODE-REF-DELETED · SD-EVENT-MESSAGES' } }, async ({ browser }) => {
+  const ctx = await browser.newContext()
+  const space = S.room(`rel_${Date.now()}`)
+  ensureSpace(space, [S.user('U06'), S.user('U07')])
+  const a = await S.open(ctx, { userId: S.user('U06') })
+  const b = await S.open(ctx, { userId: S.user('U07') })
+  const post = await a.call<{ msgId: string }>('chatSend', space, '원본 글')
+  await expect.poll(async () => (await b.call<Note[]>('events', 'chat')).some((n) => n.detail.msgs.some((m) => m.msgId === post.msgId)), { message: 'b 가 원본을 받는다' }).toBe(true)
+
+  const last = async (who: typeof a) => (await who.call<UpNote[]>('events', 'chatUpdates')).flatMap((n) => n.detail.msgs).filter((m) => m.msgId === post.msgId).at(-1) ?? null
+  await a.call('chatEdit', space, post.msgId, '고친 글')
+  await expect.poll(() => last(b), { message: '★b 에게 고침이 원본에 접혀 온다' }).toMatchObject({ content: '고친 글', edited: true, deleted: false })
+  await b.call('chatReact', space, post.msgId, ['👍'])
+  await expect.poll(() => last(a), { message: '★a 에게 b 의 반응이 원본에 접혀 온다' }).toMatchObject({ reactions: { '👍': [S.user('U07')] } })
+  await a.call('chatDelete', space, post.msgId)
+  await expect.poll(() => last(b), { message: '★b 에게 지움이 온다' }).toMatchObject({ content: '', deleted: true })
+  await expect(a.call('chatEdit', space, post.msgId, '되살리기'), '지운 글은 고칠 수 없다(3017)').rejects.toThrow(/REF_DELETED|3017/)
+  // 서버가 원본 · 고침 본문을 비우는 것은 SDK 접기가 가린다 — 1층 l1_chat · 2층 스모크 chat_fanout ⑦ 이 원본 행을 잰다
+
+  const c = await S.open(ctx, { userId: S.user('U07') })
+  const page = await c.call<{ msgs: { msgId: string; content: string; deleted: boolean }[] }>('chatHistory', space, {})
+  expect(page.msgs.find((m) => m.msgId === post.msgId), '★다시 받아도 지운 본문 · 고친 본문이 없다').toMatchObject({ content: '', deleted: true })
+})

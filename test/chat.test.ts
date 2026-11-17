@@ -217,3 +217,104 @@ test('K-sym-IMPL-CHAT-CATCHUP-2 — 오래 켠 클라: 실시간 1,200 개 → �
   const set = r.c.chat.core.seen.get('S')!
   assert.deepEqual([set.size, set.has('u2/m200'), set.has('u2/m201'), set.has('u2/m1200')], [1000, false, true, true], 'K-sym-IMPL-CHAT-CATCHUP-2 — 1,000 개 · 가장 오래된 200 을 버림')
 })
+
+// ══ 접기 — 고침 · 반응 · 지움(SDK:IMPL-CHAT-FOLD) ═══════════════════════════════════════════════════
+
+const rel = (space: string, id: string, t: number, kind: 'edit' | 'react' | 'delete', ref: string, more: Partial<ChatMessage> = {}, user = 'u2'): ChatMessage =>
+  ({ space_id: space, msg_id: `${user}/${id}`, user_id: user, t, content: '', kind, ref, ...more })
+
+test('K-sym-IMPL-CHAT-FOLD-1 — 고침(200) · 고침(300) · 지움(400)을 400 → 200 → 300 차례로 받아도 지워진 글 · 고침 둘만 거꾸로면 t=300 본문', async () => {
+  const r = await rig()
+  const ups: string[] = []
+  r.c.chat.on('updates', (_sp, ms) => ups.push(ms.map((m) => `${m.msgId}:${m.deleted ? 'X' : m.content}`).join(',')))
+  await note(r, Op.MESSAGE, msg('S', 'p', 100))
+  await note(r, Op.MESSAGE, rel('S', 'd', 400, 'delete', 'u2/p'))
+  await note(r, Op.MESSAGE, rel('S', 'e1', 200, 'edit', 'u2/p', { content: 'v200' }))
+  await note(r, Op.MESSAGE, rel('S', 'e2', 300, 'edit', 'u2/p', { content: 'v300' }))
+  assert.deepEqual(ups, ['u2/p:X', 'u2/p:X', 'u2/p:X'], 'K-sym-IMPL-CHAT-FOLD-1①② — 지움은 끝 · 늦게 온 고침이 되살리지 않는다')
+  await note(r, Op.MESSAGE, msg('S', 'q', 110))
+  ups.length = 0
+  await note(r, Op.MESSAGE, rel('S', 'f2', 300, 'edit', 'u2/q', { content: 'v300' }))
+  await note(r, Op.MESSAGE, rel('S', 'f1', 200, 'edit', 'u2/q', { content: 'v200' }))
+  assert.deepEqual(ups, ['u2/q:v300', 'u2/q:v300'], 'K-sym-IMPL-CHAT-FOLD-1③ — (t, msgId) 최대 고침')
+})
+
+test('K-sym-IMPL-CHAT-FOLD-2 — 원본보다 고침 · 반응이 먼저 와도 원본을 낼 때 붙어 있다 · 관계 메시지는 messages 로 따로 안 나온다 · total 은 글만', async () => {
+  const r = await rig()
+  const got: { msgId: string; content: string; edited?: boolean; reactions?: Readonly<Record<string, readonly string[]>> }[] = []
+  r.c.chat.on('messages', (_sp, ms) => got.push(...ms))
+  FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'S', total: 0, read: 0 }] })
+  try { await r.c.chat.spaces() } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
+  await note(r, Op.MESSAGE, rel('S', 'e', 200, 'edit', 'u2/p', { content: '고침' }))
+  await note(r, Op.MESSAGE, rel('S', 'r1', 210, 'react', 'u2/p', { keys: ['+1'] }, 'u3'))
+  await note(r, Op.MESSAGE, rel('S', 'r2', 220, 'react', 'u2/p', { keys: ['+1', 'ok'] }, 'u4'))
+  assert.equal(got.length, 0, '관계 메시지는 messages 로 안 나온다')
+  await note(r, Op.MESSAGE, msg('S', 'p', 100))
+  const p = got.find((m) => m.msgId === 'u2/p')!
+  assert.deepEqual([p.content, p.edited, p.reactions], ['고침', true, { '+1': ['u3', 'u4'], ok: ['u4'] }], 'K-sym-IMPL-CHAT-FOLD-2 — 먼저 온 관계가 붙는다')
+  assert.equal(r.c.chat.spaceList.get('S')?.total, 1, '연:RULE-CHAT-UNREAD — 글만 센다')
+})
+
+test('SDK:IMPL-CHAT-FOLD 모르는 종류 — content 가 있으면 글로 · 없으면 버린다 · 내가 보낸 고침 · 반응 · 지움은 성공 때 updates', async () => {
+  const r = await rig()
+  const seen: string[] = []
+  const ups: string[] = []
+  r.c.chat.on('messages', (_sp, ms) => seen.push(...ms.map((m) => `${m.msgId}:${m.kind ?? ''}`)))
+  r.c.chat.on('updates', (_sp, ms) => ups.push(...ms.map((m) => `${m.content}|${m.edited ? 'E' : ''}${m.deleted ? 'X' : ''}|${JSON.stringify(m.reactions ?? {})}`)))
+  await note(r, Op.MESSAGE, { ...msg('S', 'n1', 100), kind: 'poll' as never, content: '투표: 점심?' })
+  await note(r, Op.MESSAGE, { ...msg('S', 'n2', 101), kind: 'typing' as never, content: '' })
+  assert.deepEqual(seen, ['u2/n1:poll'], '연:RULE-CHAT-UNKNOWN-KIND')
+  const s = r.c.chat.send('S', '원본')
+  await tick(); r.ws.reply(Op.MESSAGE, { t: 500 })
+  const mine = await s
+  const e = r.c.chat.edit('S', mine.msgId, '고친 원본')
+  await tick()
+  const eb = r.ws.last(Op.MESSAGE).body as { kind: string; ref: string; content: string }
+  assert.deepEqual([eb.kind, eb.ref, eb.content], ['edit', mine.msgId, '고친 원본'], 'SDK:IMPL-CHAT-API edit — 늘 원본을 가리킨다')
+  r.ws.reply(Op.MESSAGE, { t: 501 }); await e
+  const k = r.c.chat.react('S', mine.msgId, ['+1'])
+  await tick(); r.ws.reply(Op.MESSAGE, { t: 502 }); await k
+  const d = r.c.chat.delete('S', mine.msgId)
+  await tick()
+  assert.equal((r.ws.last(Op.MESSAGE).body as { kind: string }).kind, 'delete')
+  r.ws.reply(Op.MESSAGE, { t: 503 }); await d
+  assert.deepEqual(ups, ['고친 원본|E|{}', '고친 원본|E|{"+1":["u1"]}', '|X|{}'], 'SDK:IMPL-CHAT-FOLD — 내 것도 접어 updates')
+})
+
+test('SDK:IMPL-CHAT-API send — 요청 몸이 131,072 byte 를 넘으면 보내지 않고 INVALID_PAYLOAD 로 reject(연:RULE-CHAT-CONTENT)', async () => {
+  const r = await rig()
+  const n = r.ws.requests(Op.MESSAGE).length
+  const e = await r.c.chat.send('S', 'x', { ext: { blob: 'a'.repeat(140_000) } }).then(() => null, (x: unknown) => x)
+  assert.ok(e instanceof OxLensError && e.code === 1002, 'INVALID_PAYLOAD')
+  assert.equal(r.ws.requests(Op.MESSAGE).length, n, '보내지 않는다')
+})
+
+test('SDK:IMPL-CHAT-FOLD 상한 — 원본을 모르는 관계 1,200 개가 몰려도 이미 낸 글의 접기 상태는 남는다(상한은 모르는 원본에만)', async () => {
+  const r = await rig()
+  const ups: string[] = []
+  r.c.chat.on('updates', (_sp, ms) => ups.push(...ms.map((m) => `${m.content}|${m.edited ? 'E' : ''}|${JSON.stringify(m.reactions ?? {})}`)))
+  await note(r, Op.MESSAGE, msg('S', 'p', 100))
+  await note(r, Op.MESSAGE, rel('S', 'e', 110, 'edit', 'u2/p', { content: '고침' }))
+  r.ws.deliver(encodeFrame('request', Op.MESSAGES, 9100, { messages: Array.from({ length: 1200 }, (_, i) => rel('S', `x${i}`, 120 + i, 'react', `u2/old${i}`, { keys: ['+1'] })) }))
+  await tick()
+  await note(r, Op.MESSAGE, rel('S', 'r', 2000, 'react', 'u2/p', { keys: ['ok'] }, 'u3'))
+  assert.equal(ups.at(-1), '고침|E|{"ok":["u3"]}', 'SDK:IMPL-CHAT-FOLD — 낸 글의 고침이 밀려나지 않는다')
+})
+
+test('SDK:IMPL-CHAT-FOLD history — 쪽의 relations 를 먼저 접어 글에 붙여 낸다 · 돌려준 쪽도 접힌 글', async () => {
+  const r = await rig()
+  const got: { msgId: string; content: string; deleted?: boolean; edited?: boolean; reactions?: Readonly<Record<string, readonly string[]>> }[] = []
+  r.c.chat.on('messages', (_sp, ms) => got.push(...ms))
+  const h = r.c.chat.history('S')
+  await tick()
+  r.ws.reply(Op.SPACE_HISTORY, {
+    messages: [msg('S', 'a', 100), msg('S', 'b', 101)],
+    relations: [rel('S', 'e', 150, 'edit', 'u2/a', { content: 'a 고침' }), rel('S', 'r', 151, 'react', 'u2/a', { keys: ['+1'] }, 'u3'), rel('S', 'd', 152, 'delete', 'u2/b')],
+    more: false,
+  })
+  const page = await h
+  const view = (m: { msgId: string; content: string; deleted?: boolean; edited?: boolean; reactions?: Readonly<Record<string, readonly string[]>> }) => [m.msgId, m.content, !!m.edited, !!m.deleted, m.reactions ?? {}]
+  const want = [['u2/a', 'a 고침', true, false, { '+1': ['u3'] }], ['u2/b', '', false, true, {}]]
+  assert.deepEqual(got.map(view), want, '연:RULE-CHAT-HISTORY-PAGE — messages{history} 가 접힌 글')
+  assert.deepEqual(page.messages.map(view), want, 'history() 가 돌려준 쪽도 접힌 글')
+})

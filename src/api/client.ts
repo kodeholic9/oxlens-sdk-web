@@ -158,11 +158,34 @@ export class Chat {
   get spaceList(): Map<string, Space> { return new Map(this.core.spaceList) }
 
   /** msgId 가 없으면 SDK 가 짓는다(앞이 내 user_id — 접속 전이면 BIND 를 기다린다) · 끝내 실패하면 details.msgId 를 실어 reject */
-  async send(spaceId: string, content: string, o: { msgId?: string } = {}): Promise<ChatMessage> {
+  async send(spaceId: string, content: string, o: { msgId?: string; ref?: string; ext?: unknown } = {}): Promise<ChatMessage> {
+    const userId = await this.me()
+    return wrap(this.core.send(spaceId, content, o.msgId ?? this.core.newMsgId(userId), userId, { ...(o.ref !== undefined ? { ref: o.ref } : {}), ...(o.ext !== undefined ? { ext: o.ext } : {}) }))
+  }
+
+  /** 고침 — msgId 는 늘 원본 · content · ext 통째 교체(연:RULE-CHAT-EDIT) */
+  async edit(spaceId: string, msgId: string, content: string, o: { ext?: unknown } = {}): Promise<void> {
+    const userId = await this.me()
+    return wrap(this.core.relate(spaceId, 'edit', msgId, this.core.newMsgId(userId), userId, { content, ...(o.ext !== undefined ? { ext: o.ext } : {}) }))
+  }
+
+  /** 반응 — keys 는 내 반응 전체 · [] 이면 모두 지움(연:RULE-CHAT-REACT) */
+  async react(spaceId: string, msgId: string, keys: readonly string[]): Promise<void> {
+    const userId = await this.me()
+    return wrap(this.core.relate(spaceId, 'react', msgId, this.core.newMsgId(userId), userId, { keys }))
+  }
+
+  /** 지움 — 내 글만(연:RULE-CHAT-DELETE) */
+  async delete(spaceId: string, msgId: string): Promise<void> {
+    const userId = await this.me()
+    return wrap(this.core.relate(spaceId, 'delete', msgId, this.core.newMsgId(userId), userId))
+  }
+
+  /** 내 user_id — msgId 앞이 내 user_id 라 접속 전이면 BIND 를 기다린다 */
+  private async me(): Promise<string> {
     if (inHandler()) await nextTick()
     if (this.ses.userId === null) await wrap(this.ses.untilActive())
-    const userId = this.ses.userId ?? ''
-    return wrap(this.core.send(spaceId, content, o.msgId ?? this.core.newMsgId(userId), userId))
+    return this.ses.userId ?? ''
   }
 
   history(spaceId: string, q: HistoryQuery = {}): Promise<{ messages: ChatMessage[]; more: boolean }> { return act(() => this.core.history(spaceId, q)) }
@@ -172,10 +195,11 @@ export class Chat {
   catchup(q: CatchupQuery = {}): Promise<void> { return act(() => this.core.catchup(q)) }
 
   on(name: 'messages', fn: Fn<[string, ChatMessage[], MessageSource]>): Off
+  on(name: 'updates', fn: Fn<[string, ChatMessage[]]>): Off
   on(name: 'spaces', fn: Fn<[Space[]]>): Off
-  on(name: 'messages' | 'spaces', fn: Fn<never[]>): Off { return this.core.events.on(name, fn as never) }
+  on(name: 'messages' | 'updates' | 'spaces', fn: Fn<never[]>): Off { return this.core.events.on(name, fn as never) }
 
-  off(name: 'messages' | 'spaces'): void { this.core.events.off(name) }
+  off(name: 'messages' | 'updates' | 'spaces'): void { this.core.events.off(name) }
 }
 
 /** 클라이언트 객체 — createClient() 가 유일한 생성 경로 · 세션 · 방 · 발행 · 채팅을 소유한다 */

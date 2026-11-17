@@ -74,6 +74,7 @@ const qa = {
     client.on('session', (s) => note('session', { state: s.state, recovering: s.recovering }))
     client.chat.on('messages', (spaceId, msgs, source) => note('chat', { spaceId, source, msgs: msgs.map((m) => ({ msgId: m.msgId, userId: m.userId, t: m.t, content: m.content, ...(m.kind ? { kind: m.kind, target: m.target } : {}) })) }))
     client.chat.on('spaces', (spaces) => note('chatSpaces', spaces))
+    client.chat.on('updates', (spaceId, msgs) => note('chatUpdates', { spaceId, msgs: msgs.map((m) => ({ msgId: m.msgId, content: m.content, edited: !!m.edited, deleted: !!m.deleted, reactions: m.reactions ?? {} })) }))
     await client.connect()
     return { userId: client.session.userId, pcMode: client.session.pcMode }
   },
@@ -101,8 +102,13 @@ const qa = {
 
   async chatHistory(spaceId, q) {
     const r = await state.client.chat.history(spaceId, q ?? {})
-    return { more: r.more, msgs: r.messages.map((m) => ({ msgId: m.msgId, userId: m.userId, t: m.t, content: m.content })) }
+    return { more: r.more, msgs: r.messages.map((m) => ({ msgId: m.msgId, userId: m.userId, t: m.t, content: m.content, edited: !!m.edited, deleted: !!m.deleted, reactions: m.reactions ?? {} })) }
   },
+
+  /** 연:RULE-CHAT-EDIT · 연:RULE-CHAT-REACT · 연:RULE-CHAT-DELETE — 관계 메시지(새 메시지 + 원본 포인터) · 받는 쪽은 updates 로(events 'chatUpdates') */
+  async chatEdit(spaceId, msgId, content) { await state.client.chat.edit(spaceId, msgId, content) },
+  async chatReact(spaceId, msgId, keys) { await state.client.chat.react(spaceId, msgId, keys) },
+  async chatDelete(spaceId, msgId) { await state.client.chat.delete(spaceId, msgId) },
 
   async chatSpaces() { return state.client.chat.spaces() },
 

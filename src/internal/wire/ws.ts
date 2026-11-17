@@ -128,6 +128,9 @@ export const Code = {
   NOT_SPACE_MEMBER: { code: 3013, permanent: false },
   CHAT_DISABLED: { code: 3014, permanent: true },
   MSG_ID_CONFLICT: { code: 3015, permanent: true },
+  REF_NOT_FOUND: { code: 3016, permanent: true },
+  REF_DELETED: { code: 3017, permanent: true },
+  NOT_REF_SENDER: { code: 3018, permanent: true },
   ROOM_FULL: { code: 4001, permanent: false },
   TRACK_LIMIT: { code: 4002, permanent: false },
   QUOTA_EXCEEDED: { code: 4003, permanent: false },
@@ -177,7 +180,10 @@ export interface ChatMessage {
   readonly user_id: string
   readonly t: number
   readonly content: string
-  readonly kind?: "join" | "leave" | "add" | "remove"
+  readonly kind?: "edit" | "react" | "delete" | "join" | "leave" | "add" | "remove"
+  readonly ref?: string
+  readonly keys?: string[]
+  readonly ext?: unknown
   readonly target?: string
 }
 
@@ -432,7 +438,11 @@ export type TaskRes = Record<string, never>
 export interface MessageReq {
   readonly space_id: string
   readonly msg_id: string
-  readonly content: string
+  readonly kind?: "edit" | "react" | "delete"
+  readonly ref?: string
+  readonly content?: string
+  readonly keys?: string[]
+  readonly ext?: unknown
 }
 
 /** CHAT.op.MESSAGE.res — 0x0501 메시지 */
@@ -454,6 +464,7 @@ export interface SpaceHistoryReq {
 /** CHAT.op.SPACE_HISTORY.res — 0x0502 다시 가져오기 */
 export interface SpaceHistoryRes {
   readonly messages: ChatMessage[]
+  readonly relations: ChatMessage[]
   readonly more: boolean
 }
 
