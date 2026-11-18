@@ -495,9 +495,10 @@ export interface CatchupReq {
 /** CHAT.op.CATCHUP.res — 0x0505 따라잡기 */
 export type CatchupRes = Record<string, never>
 
-/** CHAT.op.MESSAGES.body — 0x0506 따라잡기 묶음 */
+/** CHAT.op.MESSAGES.body — 0x0506 메시지 묶음 */
 export interface MessagesBody {
   readonly messages: ChatMessage[]
+  readonly live?: boolean
 }
 
 /** LINK.op.ICE_RESTART.req — 0x0305 그 서버 연결을 다시 뚫는다 */

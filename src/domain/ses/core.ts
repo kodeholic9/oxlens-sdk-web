@@ -2,7 +2,7 @@
 // spec: v1.2 @d626fda · SDK:IMPL-SES-API · SDK:IMPL-SES-EVENTS · SDK:IMPL-SES-CLOCK · SDK:IMPL-LINK-PROJECTION 출입구 하나 · SDK:RULE-MOD-AREA-MIRROR domain/ses · 연:RULE-SES-FINGERPRINT · model: claude-opus-5-5
 import * as SES from '../gen/session_client.js'
 import * as SB from '../gen/session_binding.js'
-import type { ResumeRes, LeaveBody, MlineTable, RoomSnapshot, ChatMessage } from '../../internal/wire/ws.js'
+import type { ResumeRes, LeaveBody, MlineTable, RoomSnapshot, ChatMessage, MessagesBody } from '../../internal/wire/ws.js'
 import { Code } from '../../internal/wire/ws.js'
 import { Signaling, type Inbound, type Reply } from '../../internal/ses/signaling.js'
 import { Emitter } from '../../platform/emitter.js'
@@ -87,8 +87,8 @@ export class Core {
   readonly links = new Map<string, LinkCore>()
   readonly media: MediaRegistry
   readonly diag: Diag
-  /** 채팅이 꺼낼 사실 — 실시간 통지 · 따라잡기 묶음 · 앱이 닫았다(영역 관계 CHAT → SES — 세션은 채팅을 모르고 넣기만 하고, 채팅이 직접 꺼낸다) */
-  readonly chatInbox = new Queue<{ readonly t: 'message'; readonly body: ChatMessage } | { readonly t: 'messages'; readonly body: readonly ChatMessage[] } | { readonly t: 'closed' }>()
+  /** 채팅이 꺼낼 사실 — 실시간 통지 · 묶음(`live` = 혼잡할 때 묶인 실시간 · 없으면 따라잡기) · 앱이 닫았다(영역 관계 CHAT → SES — 세션은 채팅을 모르고 넣기만 하고, 채팅이 직접 꺼낸다) */
+  readonly chatInbox = new Queue<{ readonly t: 'message'; readonly body: ChatMessage } | { readonly t: 'messages'; readonly body: readonly ChatMessage[]; readonly live: boolean } | { readonly t: 'closed' }>()
   readonly sids = new Interner()
   readonly epochs = new Interner()
   /** 방 입장 식별자 join_id(연:RULE-ROOM-JOIN-ID) — 방 상태기는 같은지만 본다 */
@@ -339,7 +339,8 @@ export class Core {
         return
       }
       case 'MESSAGES': {
-        this.chatInbox.push({ t: 'messages', body: (b['messages'] ?? []) as ChatMessage[] })
+        const m = body as MessagesBody
+        this.chatInbox.push({ t: 'messages', body: m.messages ?? [], live: m.live === true })
         return
       }
       case 'TASK': {

@@ -237,6 +237,28 @@ test('K-sym-IMPL-CHAT-CATCHUP-2 — 오래 켠 클라: 실시간 1,200 개 → �
   assert.deepEqual([set.size, set.has('u2/m200'), set.has('u2/m201'), set.has('u2/m1200')], [1000, false, true, true], 'K-sym-IMPL-CHAT-CATCHUP-2 — 1,000 개 · 가장 오래된 200 을 버림')
 })
 
+test('K-sym-IMPL-CHAT-CATCHUP-3 — MESSAGES{live:true} 와 칸 없는 MESSAGES → 앞은 live · 뒤는 catchup · 둘 다 ACK 먼저 1 · 공간마다 나눠 · 묶인 실시간도 실시간처럼 센다(목록이 센 것은 빼고 · 20261118w)', async () => {
+  FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'S', total: 5, read: 2, last_t: 300 }, { space_id: 'T', total: 0, read: 0 }] })
+  try {
+    const r = await rig()
+    await r.c.chat.spaces()
+    const ev: string[] = []
+    r.c.chat.on('messages', (sp, ms, src) => ev.push(`${src}:${sp}:${ms.map((m) => m.msgId).join(',')}`))
+    // ① 혼잡할 때 묶인 실시간 — 300 은 목록이 이미 센 글(목록 응답 전에 저장 · 뒤에 닿음)
+    r.ws.deliver(encodeFrame('request', Op.MESSAGES, 9201, { live: true, messages: [msg('S', 'x', 300), msg('S', 'y', 310), msg('T', 'z', 315), msg('S', 'w', 320)] }))
+    await tick()
+    // ② 따라잡기 묶음 — live 칸 없음
+    r.ws.deliver(encodeFrame('request', Op.MESSAGES, 9202, { messages: [msg('S', 'v', 330)] }))
+    await tick()
+    const acks = (pid: number) => r.ws.frames().filter((f) => f.op === Op.MESSAGES && f.pid === pid && f.kind === 'ok').length
+    assert.deepEqual([acks(9201), acks(9202)], [1, 1], 'K-sym-IMPL-CHAT-CATCHUP-3 — 묶음마다 ACK 하나(연:RULE-TRN-NOTIFY-ACK-STEPS)')
+    assert.deepEqual(ev, ['live:S:u2/x,u2/y,u2/w', 'live:T:u2/z', 'catchup:S:u2/v'], '★K-sym-IMPL-CHAT-CATCHUP-3 — live:true 묶음은 live · 칸 없는 묶음은 catchup · 공간마다 나눠(연:RULE-CHAT-CATCHUP-BUNDLE)')
+    const s = r.c.chat.spaceList.get('S')
+    assert.deepEqual([s?.total, s?.read, s?.unread], [8, 2, 6], 'SDK:IMPL-CHAT-API — 묶인 실시간 310 · 320 과 따라잡기 330 은 세고 · 목록이 센 300 은 빼고')
+    assert.deepEqual([r.c.chat.spaceList.get('T')?.total, r.c.chat.spaceList.get('T')?.unread], [1, 1], '다른 공간의 묶인 실시간도 센다')
+  } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
+})
+
 // ══ 접기 — 고침 · 반응 · 지움(SDK:IMPL-CHAT-FOLD) ═══════════════════════════════════════════════════
 
 const rel = (space: string, id: string, t: number, kind: 'edit' | 'react' | 'delete', ref: string, more: Partial<ChatMessage> = {}, user = 'u2'): ChatMessage =>

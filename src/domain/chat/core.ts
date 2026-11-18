@@ -53,10 +53,10 @@ export interface ChatEvents extends Record<string, unknown[]> {
   spaces: [Space[]]
 }
 
-/** 세션이 넣는 사실 — 실시간 통지 · 따라잡기 묶음 · 앱이 닫았다 */
+/** 세션이 넣는 사실 — 실시간 통지 · 묶음(`live` 면 혼잡할 때 묶인 실시간 — 출처 `live` · 아니면 `catchup` · SDK:IMPL-CHAT-CATCHUP) · 앱이 닫았다 */
 export type ChatFact =
   | { readonly t: 'message'; readonly body: WireMessage }
-  | { readonly t: 'messages'; readonly body: readonly WireMessage[] }
+  | { readonly t: 'messages'; readonly body: readonly WireMessage[]; readonly live: boolean }
   | { readonly t: 'closed' }
 
 /** 재시도 간격 — 사다리의 둘째~넷째 칸(연:RULE-ERR-CLIENT-FAIL-DEFAULT 4) */
@@ -144,7 +144,7 @@ export class ChatCore {
       const f = await this.inbox.next()
       if (!f) return
       if (f.t === 'message') this.take([f.body], 'live')
-      else if (f.t === 'messages') this.take(f.body, 'catchup')
+      else if (f.t === 'messages') this.take(f.body, f.live ? 'live' : 'catchup')
       else this.reset()
     }
   }
