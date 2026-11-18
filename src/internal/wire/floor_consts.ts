@@ -46,6 +46,7 @@ export const Tlv = {
   PREV: 26,
   REASON: 27,
   ROOM: 29,
+  TALK: 32,
   SOURCES: 31,
 } as const
 export const Deny = {

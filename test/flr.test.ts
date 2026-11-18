@@ -261,6 +261,25 @@ test('SD-EFFECT-FLR-APP-SPEAKER · SD-EFFECT-FLR-APP-SPEAKER-NONE — 위 효과
   u.f.dispose()
 }))
 
+test('SDK:IMPL-FLR-EXPOSE talkId — 화자 알림 · 내 허가에 실린 발언 id(TLV 0x20)를 그대로 낸다 · 없으면(옛 서버) 비운다 · 놓으면 내 talkId 는 사라진다', async () => {
+  const u = unit()
+  u.room.slots = ['ptt-ch-3-audio']
+  u.rx(C.buildTaken({ speaker: 'u2', seq: 1, room: R, talk: 'T-u2' }))
+  assert.deepEqual(u.ev.speaker.at(-1), { userId: 'u2', trackIds: ['ptt-ch-3-audio'], talkId: 'T-u2' }, 'SDK:IMPL-FLR-EXPOSE speaker.talkId — 화자 알림의 발언 id(연:RULE-FLR-TLV)')
+  u.rx(idle())
+  assert.ok(!('talkId' in (u.ev.speaker.at(-1) as object)), '화자가 없으면 talkId 도 없다')
+  u.rx(taken('u3', 3))
+  assert.ok(!('talkId' in (u.ev.speaker.at(-1) as object)), '이 필드 전의 서버면 비운다')
+  u.rx(idle(4))
+  await pressed(u)
+  u.rx(C.buildGranted({ priority: 0, duration: 30, room: R, talk: 'T-me' }))
+  assert.equal((u.ev.granted.at(-1) as PttState).talkId, 'T-me', 'SDK:IMPL-FLR-EXPOSE PttState.talkId — 내 허가의 발언 id = 그 발언 기록의 msgId(연:RULE-CHAT-TALK)')
+  await u.f.release()
+  for (let i = 0; i < 5; i++) await tick()
+  assert.equal(u.f.snapshot().talkId, undefined, '허가를 놓으면 내 talkId 는 낸 상태에서 빠진다')
+  u.f.dispose()
+})
+
 test("SD-EFFECT-FLR-APP-REQUEST-TIMEOUT · SD-EFFECT-FLR-APP-QUEUE-TIMEOUT · SD-EFFECT-FLR-APP-GRANT-EXPIRED — 시한 효과 셋은 state 의 lastEnd 로(no_response · no_response · t132_expired)", () => spying(async (spy) => {
   mock.timers.enable({ apis: ['setTimeout'] })
   try {
@@ -346,10 +365,10 @@ test("SD-EVENT-GRANTED — 사건별 편의 이벤트는 state 와 같은 순간
 // ══ 버튼 계약 · 상태 노출 ══════════════════════════════════════════════════════════════════
 
 test('SD-API-PTT-STATE — PttState 필드 전량(arming · armingStage 넷 · lastError 포함 · draining 부재)', () => {
-  const fields: Record<keyof PttState, true> = { phase: true, remainingSec: true, priority: true, queue: true, acceptPending: true, talkingSince: true, lastDeny: true, lastRevoke: true, canRequest: true, source: true, lastEnd: true, trusted: true, arming: true, armingStage: true, lastError: true, mic: true }
+  const fields: Record<keyof PttState, true> = { phase: true, remainingSec: true, priority: true, queue: true, acceptPending: true, talkingSince: true, talkId: true, lastDeny: true, lastRevoke: true, canRequest: true, source: true, lastEnd: true, trusted: true, arming: true, armingStage: true, lastError: true, mic: true }
   const api: Record<keyof ApiPttState, true> = fields
   const stages: Record<ArmingStage, true> = { register: true, select: true, transport: true, recovering: true }
-  assert.equal(Object.keys(fields).length, 16, 'SD-API-PTT-STATE — 필드 열여섯(§7-1-1)')
+  assert.equal(Object.keys(fields).length, 17, 'SD-API-PTT-STATE — 필드 열일곱(SDK:IMPL-FLR-EXPOSE — talkId 포함)')
   assert.deepEqual(Object.keys(stages), ['register', 'select', 'transport', 'recovering'], "SD-API-PTT-STATE — armingStage 넷('recovering' 포함 · release_other 0)")
   assert.ok(!('draining' in api), 'SD-API-PTT-STATE — draining 부재')
   const u = unit()

@@ -2,7 +2,7 @@
 // ★생성 파일 — 원천 areas/flr/model/messages.ts 에서 gen/codec.py 가 지었다. 손으로 고치지 않는다.
 
 export const Type = {REQUEST: 0, GRANTED: 1, TAKEN: 2, DENY: 3, RELEASE: 4, IDLE: 5, REVOKE: 6, QPOS_REQ: 8, QINFO: 9, ACK: 10} as const
-export const TlvId = {PRIORITY: 0, DURATION: 1, CAUSE: 2, QINFO: 3, SPEAKER: 4, SEQ: 8, ACKTYPE: 12, PREV: 26, REASON: 27, ROOM: 29, SOURCES: 31} as const
+export const TlvId = {PRIORITY: 0, DURATION: 1, CAUSE: 2, QINFO: 3, SPEAKER: 4, SEQ: 8, ACKTYPE: 12, PREV: 26, REASON: 27, ROOM: 29, TALK: 32, SOURCES: 31} as const
 export const RETIRED: readonly number[] = [7, 28, 30]
 export const MAX_VALUE = 255
 
@@ -80,12 +80,13 @@ export function readRequest(msg: Message): { value: { room?: string | undefined;
   return { value: { priority, room }, missing }
 }
 
-/** 1 Floor Granted(원문 8.2.5) · S→C · A 세운다 — 필수 priority, duration, room · 선택 없음 */
-export function buildGranted(a: { priority: number; duration: number; room: string }): Message {
+/** 1 Floor Granted(원문 8.2.5) · S→C · A 세운다 — 필수 priority, duration, room · 선택 talk */
+export function buildGranted(a: { priority: number; duration: number; room: string; talk?: string }): Message {
   const fields: Field[] = [{ id: TlvId.PRIORITY, value: u8spare(a.priority) }, { id: TlvId.DURATION, value: u16be(a.duration) }, { id: TlvId.ROOM, value: utf8(a.room) }]
+  if (a.talk !== undefined) fields.push({ id: TlvId.TALK, value: utf8(a.talk) })
   return { type: Type.GRANTED, ack: true, fields }
 }
-export function readGranted(msg: Message): { value: { priority?: number | undefined; duration?: number | undefined; room?: string | undefined }; missing: string[] } {
+export function readGranted(msg: Message): { value: { priority?: number | undefined; duration?: number | undefined; room?: string | undefined; talk?: string | undefined }; missing: string[] } {
   const missing: string[] = []
   const get = <T>(id: number, f: (b: Uint8Array) => T | undefined): T | undefined => {
     const x = msg.fields.find((y) => y.id === id)
@@ -94,19 +95,21 @@ export function readGranted(msg: Message): { value: { priority?: number | undefi
   const priority = get(TlvId.PRIORITY, (b) => rd8spare(b))
   const duration = get(TlvId.DURATION, (b) => rd16(b))
   const room = get(TlvId.ROOM, (b) => dec.decode(b))
+  const talk = get(TlvId.TALK, (b) => dec.decode(b))
   if (priority === undefined) missing.push('priority')
   if (duration === undefined) missing.push('duration')
   if (room === undefined) missing.push('room')
-  return { value: { priority, duration, room }, missing }
+  return { value: { priority, duration, room, talk }, missing }
 }
 
-/** 2 Floor Taken(원문 8.2.9) · S→C · A 세운다 — 필수 speaker, seq, room · 선택 sources */
-export function buildTaken(a: { speaker: string; seq: number; room: string; sources?: number[] }): Message {
+/** 2 Floor Taken(원문 8.2.9) · S→C · A 세운다 — 필수 speaker, seq, room · 선택 sources, talk */
+export function buildTaken(a: { speaker: string; seq: number; room: string; sources?: number[]; talk?: string }): Message {
   const fields: Field[] = [{ id: TlvId.SPEAKER, value: utf8(a.speaker) }, { id: TlvId.SEQ, value: u16be(a.seq) }, { id: TlvId.ROOM, value: utf8(a.room) }]
   if (a.sources !== undefined) fields.push({ id: TlvId.SOURCES, value: u32list(a.sources) })
+  if (a.talk !== undefined) fields.push({ id: TlvId.TALK, value: utf8(a.talk) })
   return { type: Type.TAKEN, ack: true, fields }
 }
-export function readTaken(msg: Message): { value: { speaker?: string | undefined; seq?: number | undefined; room?: string | undefined; sources?: number[] | undefined }; missing: string[] } {
+export function readTaken(msg: Message): { value: { speaker?: string | undefined; seq?: number | undefined; room?: string | undefined; sources?: number[] | undefined; talk?: string | undefined }; missing: string[] } {
   const missing: string[] = []
   const get = <T>(id: number, f: (b: Uint8Array) => T | undefined): T | undefined => {
     const x = msg.fields.find((y) => y.id === id)
@@ -116,10 +119,11 @@ export function readTaken(msg: Message): { value: { speaker?: string | undefined
   const sources = get(TlvId.SOURCES, (b) => rd32list(b))
   const seq = get(TlvId.SEQ, (b) => rd16(b))
   const room = get(TlvId.ROOM, (b) => dec.decode(b))
+  const talk = get(TlvId.TALK, (b) => dec.decode(b))
   if (speaker === undefined) missing.push('speaker')
   if (seq === undefined) missing.push('seq')
   if (room === undefined) missing.push('room')
-  return { value: { speaker, sources, seq, room }, missing }
+  return { value: { speaker, sources, seq, room, talk }, missing }
 }
 
 /** 3 Floor Deny(원문 8.2.6) · S→C · A 세운다 — 필수 cause, room · 선택 reason */

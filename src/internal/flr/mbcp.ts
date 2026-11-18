@@ -7,9 +7,9 @@ const MAX_PAYLOAD = 65532
 
 /** 서버 → 클라 발언권 사건 하나 — 방 키는 0x1D 단일(연:RULE-FLR-ROOM-KEY) */
 export type FloorRx =
-  | { t: 'TAKEN'; ack?: boolean; speaker: string; seq: number }
+  | { t: 'TAKEN'; ack?: boolean; speaker: string; seq: number; talk?: string }
   | { t: 'IDLE'; ack?: boolean; prev?: string; seq: number }
-  | { t: 'GRANTED'; ack?: boolean; priority: number; duration: number }
+  | { t: 'GRANTED'; ack?: boolean; priority: number; duration: number; talk?: string }
   | { t: 'DENY'; ack?: boolean; cause: number; reason?: string }
   | { t: 'QINFO'; ack?: boolean; info: { position: number; priority: number } }
   | { t: 'REVOKE'; ack?: boolean; cause: number; reason?: string }
@@ -68,7 +68,7 @@ export function parse(buf: Uint8Array): Received | null {
     case C.Type.TAKEN: {
       const r = C.readTaken(m)
       if (r.missing.length || r.value.room === undefined) return null
-      return { room: r.value.room, rx: { t: 'TAKEN', ack: m.ack, speaker: r.value.speaker!, seq: r.value.seq! } }
+      return { room: r.value.room, rx: { t: 'TAKEN', ack: m.ack, speaker: r.value.speaker!, seq: r.value.seq!, ...(r.value.talk !== undefined ? { talk: r.value.talk } : {}) } }
     }
     case C.Type.IDLE: {
       const r = C.readIdle(m)
@@ -79,7 +79,7 @@ export function parse(buf: Uint8Array): Received | null {
     case C.Type.GRANTED: {
       const r = C.readGranted(m)
       if (r.missing.length || r.value.room === undefined) return null
-      return { room: r.value.room, rx: { t: 'GRANTED', ack: m.ack, priority: r.value.priority!, duration: r.value.duration! } }
+      return { room: r.value.room, rx: { t: 'GRANTED', ack: m.ack, priority: r.value.priority!, duration: r.value.duration!, ...(r.value.talk !== undefined ? { talk: r.value.talk } : {}) } }
     }
     case C.Type.DENY: {
       const r = C.readDeny(m)

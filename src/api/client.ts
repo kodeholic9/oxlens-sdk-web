@@ -11,7 +11,8 @@ import { ChatCore, type ChatMessage, type Space, type MessageSource, type Histor
 import type { RoomSummary, GetRoomRes } from '../internal/wire/ws.js'
 import type { PermState } from '../platform/env.js'
 import type { Level, LogEntry } from '../platform/log.js'
-import { stateFault } from '../platform/fault.js'
+import { stateFault, Fault } from '../platform/fault.js'
+import { Code } from '../internal/wire/ws.js'
 import { OxLensError, toError, wrap, act } from './errors.js'
 import { inHandler } from '../platform/emitter.js'
 import { nextTick } from '../platform/clock.js'
@@ -151,7 +152,15 @@ export class Chat {
   /** @internal */
   readonly core: ChatCore
   constructor(private readonly ses: Core) {
-    this.core = new ChatCore(ses.sig, ses.chatInbox)
+    this.core = new ChatCore(ses.sig, ses.chatInbox, ses)
+  }
+
+  /** 녹취 — `msg.talk.rec.path` 를 서버 주소 뒤에 붙여 토큰을 머리로 실어 받는다(주소에 싣지 않는다) · rec 가 없으면 보내지 않고 REC_NOT_FOUND · 보관이 지났으면 서버의 REC_NOT_FOUND(연:CHAT.http.REC_FILE · SDK:IMPL-CHAT-API) */
+  async fetchRec(msg: ChatMessage): Promise<Blob> {
+    if (inHandler()) await nextTick()
+    const path = msg.talk?.rec?.path
+    if (!path) throw toError(new Fault({ code: Code.REC_NOT_FOUND.code, name: 'REC_NOT_FOUND', permanent: true, message: 'no recording on this talk' }))
+    return wrap(this.ses.blob(path))
   }
 
   get enabled(): boolean { return this.core.enabled }

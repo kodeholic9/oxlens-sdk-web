@@ -11,7 +11,7 @@ import { sessionFingerprint } from '../../platform/sha256.js'
 import { LogBook, type Logger } from '../../platform/log.js'
 import { Timer } from '../../platform/clock.js'
 import { Fault, fromFailure, closedFault } from '../../platform/fault.js'
-import { httpJson, httpUrl } from '../../platform/net.js'
+import { httpBlob, httpJson, httpUrl } from '../../platform/net.js'
 import { decide } from '../../platform/capability.js'
 import { pageTarget } from '../../platform/env.js'
 import { settle, opusFmtpLine, type ClientOptions, type Settings } from '../defaults.js'
@@ -508,6 +508,14 @@ export class Core {
     if (r.status === 401) this.events.emit('tokenRequired', { cause: 'expired' })
     if (r.status >= 400) throw fromFailure(r.body)
     return r.body
+  }
+
+  /** 녹취 받기 — `{base}/{path}` · 토큰은 머리로만(주소에 싣지 않는다 — 연:RULE-CHAT-REC-FILE) · 401 이면 tokenRequired */
+  async blob(path: string): Promise<Blob> {
+    const r = await httpBlob(httpUrl(this.cfg.base, '/' + path.replace(/^\/+/, '')), { Authorization: `Bearer ${this.token}` })
+    if (r.status === 401) this.events.emit('tokenRequired', { cause: 'expired' })
+    if (!r.blob) throw fromFailure(r.body)
+    return r.blob
   }
 
   // ── 표면 — 파생값은 여기 한 곳에서만 계산한다 ──────────────────────────

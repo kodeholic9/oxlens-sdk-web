@@ -25,6 +25,8 @@ export interface PttState {
   readonly queue?: { readonly position: number }
   readonly acceptPending: boolean
   readonly talkingSince?: number
+  /** 내 발언의 발언 id — 허가에 실린 것(연:RULE-FLR-TLV) = 그 발언 기록의 msgId(연:RULE-CHAT-TALK) · 이 필드 전의 서버면 없다(SDK:IMPL-FLR-EXPOSE) */
+  readonly talkId?: string
   readonly lastDeny?: { readonly cause: number; readonly text?: string }
   readonly lastRevoke?: { readonly cause: number; readonly text?: string }
   readonly canRequest: boolean
@@ -47,7 +49,7 @@ export interface FloorEvents extends Record<string, unknown[]> {
   revoked: [PttState]
   queued: [PttState]
   released: [PttState]
-  speaker: [{ userId: string | null; trackIds: string[] }]
+  speaker: [{ userId: string | null; trackIds: string[]; talkId?: string }]
 }
 
 /** 입구 표의 입구 — 위 결합(ptt_binding)의 ENTRY 열쇠 그대로 */
@@ -88,6 +90,10 @@ export class FloorCore {
   private remainingSec: number | undefined
   private grantedPrio: number | undefined
   private queuePos: number | undefined
+  /** 내 허가의 발언 id(GRANTED) */
+  private talkId: string | undefined
+  /** 지금 화자의 발언 id(TAKEN · 내 허가면 GRANTED) — IDLE 이면 비운다 */
+  private speakerTalk: string | undefined
   /** 지금 넣는 서버 사건 — 효과 덧붙임(lastDeny · queue · lastRevoke)이 그 내용을 읽는다 */
   private lastRx: Mbcp.FloorRx | null = null
   /** hold 승계 — 승계 허가 걸음이 끝난 뒤 입구 intent */
@@ -128,6 +134,7 @@ export class FloorCore {
     if (this.grantedPrio !== undefined && this.st.cs === 'PERM') s.priority = this.grantedPrio
     if (this.st.cs === 'QUEUED' && this.queuePos !== undefined) s.queue = { position: this.queuePos }
     if (this.talkingSince !== undefined && this.st.cs === 'PERM') s.talkingSince = this.talkingSince
+    if (this.talkId !== undefined && this.st.cs === 'PERM') s.talkId = this.talkId
     if (this.lastDeny) s.lastDeny = this.lastDeny
     if (this.lastRevoke) s.lastRevoke = this.lastRevoke
     if (this.source) s.source = this.source
@@ -235,6 +242,8 @@ export class FloorCore {
   rtpTx(): void { this.enter('rtpTx', 'gate', []) }
   rtpRx(): void { this.enter('rtpRx', 'media', []) }
   receive(rx: Mbcp.FloorRx): void {
+    if (rx.t === 'TAKEN' || rx.t === 'GRANTED') this.speakerTalk = rx.talk
+    else if (rx.t === 'IDLE') this.speakerTalk = undefined
     this.lastRx = rx
     this.enter('receive', `rx.${rx.t}`, [rx])
     this.lastRx = null
@@ -253,11 +262,12 @@ export class FloorCore {
 
   private emitSpeaker(): void {
     const ids = this.room.slotTrackIds()
-    const key = `${this.st.shown}|${ids.join(',')}`
+    const talkId = this.st.shown !== null ? this.speakerTalk : undefined
+    const key = `${this.st.shown}|${ids.join(',')}|${talkId ?? ''}`
     if (key === this.speakerKey) return
     this.speakerKey = key
     this.lastSpeaker = this.st.shown
-    this.events.emit('speaker', { userId: this.st.shown, trackIds: ids })
+    this.events.emit('speaker', { userId: this.st.shown, trackIds: ids, ...(talkId !== undefined ? { talkId } : {}) })
   }
 
   // ── 입구 표 — 위 결합 ENTRY 를 지나 한 걸음 ─────────────────────────────
@@ -318,6 +328,7 @@ export class FloorCore {
       case 'app.granted_queued':
         this.remainingSec = this.st.grant
         this.grantedPrio = this.st.prio
+        this.talkId = this.lastRx?.t === 'GRANTED' ? this.lastRx.talk : this.talkId
         this.lastEnd = undefined
         if (f === 'app.granted_queued') this.intentOwed = true
         break

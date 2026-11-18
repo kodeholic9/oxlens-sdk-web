@@ -120,5 +120,5 @@ export function httpMock(h: (url: string) => Promise<{ status: number; body: unk
 }
 
 export function getRoom(id: string, seq: number, others: MemberInfo[] = [], epoch = 'e1', tracks: TrackEntry[] = []): GetRoomRes {
-  return { room_id: id, name: id, capacity: 10, user_count: others.length + 1, participants: [mem('u1'), ...others], me: mem('u1'), created_at: 0, media_codecs: {}, version: vers(seq, epoch), tracks }
+  return { room_id: id, name: id, capacity: 10, user_count: others.length + 1, participants: [mem('u1'), ...others], me: mem('u1'), created_at: 0, record: false, media_codecs: {}, version: vers(seq, epoch), tracks }
 }

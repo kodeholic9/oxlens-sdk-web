@@ -359,3 +359,86 @@ test('SDK:IMPL-CHAT-FOLD history — 쪽의 relations 를 먼저 접어 글에 �
   assert.deepEqual(got.map(view), want, '연:RULE-CHAT-HISTORY-PAGE — messages{history} 가 접힌 글')
   assert.deepEqual(page.messages.map(view), want, 'history() 가 돌려준 쪽도 접힌 글')
 })
+
+// ══ 무전 발언 기록 — 접기 · deadline · 안 읽은 수 · 녹취(SDK:IMPL-CHAT-FOLD · SDK:IMPL-CHAT-API · 연:RULE-CHAT-TALK*) ══════
+
+type Talk = { state: string; room_id: string; start: number; deadline: number; duration_ms?: number; reason?: number; rec?: { path: string; size: number; mime: string; duration_ms: number } }
+const talkMsg = (space: string, id: string, t: number, user: string, talk: Talk): ChatMessage => ({ space_id: space, msg_id: id, user_id: user, t, content: '', kind: 'talk', talk } as ChatMessage)
+const talkUpd = (space: string, id: string, ref: string, t: number, user: string, talk: Talk): ChatMessage => ({ space_id: space, msg_id: id, user_id: user, t, content: '', kind: 'talk_update', ref, talk } as ChatMessage)
+const later = (ms: number): Talk => ({ state: 'talking', room_id: 'S', start: Date.now(), deadline: Date.now() + ms })
+
+test('SDK:IMPL-CHAT-FOLD 발언 기록 — kind talk 는 본문이 비어도 낸다 · talk_update 는 (t, msgId) 가장 큰 것의 전체 상태로 접는다 · 원본보다 먼저 온 갱신도 들고 있다 붙인다', async () => {
+  const r = await rig()
+  const ev: string[] = []
+  const up: string[] = []
+  r.c.chat.on('messages', (_, ms) => { for (const m of ms) ev.push(`${m.msgId}:${m.kind}:${m.talk?.state}`) })
+  r.c.chat.on('updates', (_, ms) => { for (const m of ms) up.push(`${m.msgId}:${m.talk?.state}:${m.talk?.rec?.path ?? '-'}`) })
+  const base = later(60_000)
+  await note(r, Op.MESSAGE, talkUpd('S', 'T1:end', 'T1', 20, 'u2', { ...base, state: 'ok', duration_ms: 900 }))
+  assert.deepEqual(ev, [], '원본 모르는 갱신은 내지 않고 들고 있다')
+  await note(r, Op.MESSAGE, talkMsg('S', 'T1', 10, 'u2', base))
+  assert.deepEqual(ev, ['T1:talk:ok'], '★발언 기록은 본문이 비어도 글처럼 낸다 · 먼저 온 끝 갱신이 접혀 있다(연:RULE-CHAT-TALK-UPDATE)')
+  await note(r, Op.MESSAGE, talkUpd('S', 'T1:rec', 'T1', 30, 'u2', { ...base, state: 'ok', duration_ms: 900, rec: { path: 'rec/S/S-T1-u2.ogg', size: 9, mime: 'audio/ogg', duration_ms: 900 } }))
+  await note(r, Op.MESSAGE, talkUpd('S', 'T1:old', 'T1', 15, 'u2', { ...base }))
+  assert.deepEqual(up, ['T1:ok:rec/S/S-T1-u2.ogg', 'T1:ok:rec/S/S-T1-u2.ogg'], '갱신은 늘 전체 상태 · 늦게 닿은 옛 갱신(t 15)은 마지막을 덮지 않는다')
+})
+
+test('SDK:IMPL-CHAT-FOLD deadline — 끝 갱신 없이 deadline 이 지나면 lost 로 updates · 낼 때 이미 지났으면 처음부터 lost · 재허가는 새 deadline · 뒤에 끝 갱신이 오면 그것으로', async () => {
+  const r = await rig()
+  const got: string[] = []
+  r.c.chat.on('messages', (_, ms) => { for (const m of ms) got.push(`m:${m.msgId}:${m.talk?.state}`) })
+  r.c.chat.on('updates', (_, ms) => { for (const m of ms) got.push(`u:${m.msgId}:${m.talk?.state}`) })
+  await note(r, Op.MESSAGE, talkMsg('S', 'A', 10, 'u2', { state: 'talking', room_id: 'S', start: 1, deadline: Date.now() - 1 }))
+  assert.deepEqual(got, ['m:A:lost'], '★낼 때 이미 deadline 이 지났으면 처음부터 lost(연:RULE-CHAT-TALK-UPDATE)')
+  const b = later(80)
+  await note(r, Op.MESSAGE, talkMsg('S', 'B', 20, 'u2', b))
+  await note(r, Op.MESSAGE, talkUpd('S', 'B:regrant', 'B', 21, 'u2', { ...b, deadline: Date.now() + 400 }))
+  await tick(200)
+  assert.deepEqual(got.slice(1), ['m:B:talking', 'u:B:talking'], '재허가는 새 deadline — 옛 deadline 에 lost 가 나지 않는다')
+  await tick(400)
+  assert.deepEqual(got.slice(3), ['u:B:lost'], 'K-sym-IMPL-CHAT-FOLD-3 — ★새 deadline 까지 끝 갱신이 없으면 lost 로 updates — 미디어 서버가 끝을 못 알린 발언')
+  await note(r, Op.MESSAGE, talkUpd('S', 'B:end', 'B', 30, 'u2', { ...b, state: 'cut', reason: 2, duration_ms: 30_000 }))
+  assert.deepEqual(got.slice(4), ['u:B:cut'], 'K-sym-IMPL-CHAT-FOLD-3 — 뒤에 끝 갱신이 오면 그것으로(저장된 상태가 정본)')
+})
+
+test('SDK:IMPL-CHAT-API 안 읽은 수 — 발언 기록은 total 을 올린다 · 갱신은 안 올린다 · 내 발언 기록은 읽은 것으로(서버도 화자 read 를 올린다)', async () => {
+  FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'S', total: 3, read: 3, last_t: 100 }] })
+  try {
+    const r = await rig()
+    await tick(5)
+    await r.c.chat.spaces()
+    const b = later(60_000)
+    await note(r, Op.MESSAGE, talkMsg('S', 'T2', 110, 'u2', b))
+    assert.deepEqual([r.c.chat.spaceList.get('S')?.total, r.c.chat.spaceList.get('S')?.unread], [4, 1], '연:RULE-CHAT-UNREAD — 남의 발언 기록은 안 읽은 수에 든다')
+    await note(r, Op.MESSAGE, talkUpd('S', 'T2:end', 'T2', 120, 'u2', { ...b, state: 'ok', duration_ms: 1 }))
+    assert.equal(r.c.chat.spaceList.get('S')?.total, 4, '갱신은 total 을 올리지 않는다')
+    await note(r, Op.MESSAGE, talkMsg('S', 'T3', 130, 'u1', b))
+    assert.deepEqual([r.c.chat.spaceList.get('S')?.total, r.c.chat.spaceList.get('S')?.read, r.c.chat.spaceList.get('S')?.unread], [5, 5, 0], '★내 발언 기록은 읽은 것으로 — 화자 단말은 보내지 않았지만 화자의 read 는 서버가 올린다')
+  } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
+})
+
+test('SDK:IMPL-CHAT-API fetchRec — talk.rec.path 를 서버 주소 뒤에 붙여 토큰은 머리로만 · rec 가 없으면 보내지 않고 REC_NOT_FOUND · 서버 404 는 REC_NOT_FOUND', async () => {
+  const r = await rig()
+  const g = globalThis as unknown as { fetch: unknown }
+  const saved = g.fetch
+  const calls: { url: string; headers: Record<string, string> }[] = []
+  let status = 200
+  g.fetch = async (url: string, init: { headers: Record<string, string> }) => {
+    calls.push({ url, headers: init.headers })
+    const body = status === 200 ? 'OggS' : JSON.stringify({ code: 3019, name: 'REC_NOT_FOUND', permanent: true })
+    return { status, blob: async () => new Blob([body]), text: async () => body }
+  }
+  try {
+    const msg = { spaceId: 'S', msgId: 'T1', userId: 'u2', t: 1, content: '', kind: 'talk', talk: { state: 'ok', room_id: 'S', start: 1, deadline: 2, rec: { path: 'rec/S/S-T1-u2.ogg', size: 4, mime: 'audio/ogg', duration_ms: 1 } } } as const
+    const blob = await r.c.chat.fetchRec(msg as never)
+    assert.equal(await blob.text(), 'OggS')
+    assert.deepEqual([calls[0]!.url, calls[0]!.headers['Authorization']], ['https://hub.example/rec/S/S-T1-u2.ogg', 'Bearer tok'], '연:RULE-CHAT-REC-FILE — {base}/ 뒤에 path · 토큰은 Authorization 머리로')
+    assert.ok(!calls[0]!.url.includes('tok'), '★토큰을 주소에 싣지 않는다')
+    status = 404
+    const e = await r.c.chat.fetchRec(msg as never).catch((x: unknown) => x)
+    assert.ok(e instanceof OxLensError && e.code === 3019, '보관이 지났으면 REC_NOT_FOUND 로 reject')
+    const n = calls.length
+    const none = await r.c.chat.fetchRec({ ...msg, talk: { ...msg.talk, rec: undefined } } as never).catch((x: unknown) => x)
+    assert.ok(none instanceof OxLensError && none.code === 3019 && calls.length === n, 'rec 가 없으면 보내지 않고 reject')
+  } finally { g.fetch = saved }
+})

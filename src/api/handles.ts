@@ -132,7 +132,7 @@ export class Ptt {
   keepWarm(ms = 0): void { this.room.core.media.halfMic(this.room.sfuId)?.keepWarm(ms) }
 
   on(name: 'state' | 'granted' | 'denied' | 'revoked' | 'queued' | 'released', fn: Fn<[PttState]>): Off
-  on(name: 'speaker', fn: Fn<[{ userId: string | null; trackIds: string[] }]>): Off
+  on(name: 'speaker', fn: Fn<[{ userId: string | null; trackIds: string[]; talkId?: string }]>): Off
   on(name: string, fn: Fn<never[]>): Off {
     const f = fn as unknown as Fn<unknown[]>
     return this.core.events.on(name, ((...a: unknown[]) => f(...a.map((x) => (name === 'speaker' ? x : pttOut(x as CorePttState))))) as never)

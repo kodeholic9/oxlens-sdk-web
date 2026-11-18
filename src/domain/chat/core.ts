@@ -1,13 +1,13 @@
 // author: kodeholic (powered by Claude)
-// spec: v1.2 @d626fda · SDK:IMPL-CHAT-API · SDK:IMPL-CHAT-CATCHUP · SDK:IMPL-CHAT-FOLD · SDK:RULE-API-ASYNC 재시도 · SDK:RULE-MOD-AREA-MIRROR domain/chat · 연:RULE-CHAT-MSG-ID · 연:RULE-CHAT-SEND · 연:RULE-CHAT-RECV · 연:RULE-CHAT-MISSED · 연:RULE-CHAT-CATCHUP · 연:RULE-CHAT-CATCHUP-BUNDLE · 연:RULE-CHAT-MEMBER-NOTICE · 연:RULE-CHAT-UNREAD · 연:RULE-CHAT-DISABLED · 연:RULE-CHAT-KIND · 연:RULE-CHAT-REPLY · 연:RULE-CHAT-EDIT · 연:RULE-CHAT-REACT · 연:RULE-CHAT-DELETE · 연:RULE-CHAT-FOLD · 연:RULE-CHAT-UNKNOWN-KIND · 연:RULE-CHAT-EXT · 연:RULE-CHAT-CONTENT · model: claude-opus-5-5
+// spec: v1.2 @d626fda · SDK:IMPL-CHAT-API · SDK:IMPL-CHAT-CATCHUP · SDK:IMPL-CHAT-FOLD · SDK:RULE-API-ASYNC 재시도 · SDK:RULE-MOD-AREA-MIRROR domain/chat · 연:RULE-CHAT-MSG-ID · 연:RULE-CHAT-SEND · 연:RULE-CHAT-RECV · 연:RULE-CHAT-MISSED · 연:RULE-CHAT-CATCHUP · 연:RULE-CHAT-CATCHUP-BUNDLE · 연:RULE-CHAT-MEMBER-NOTICE · 연:RULE-CHAT-UNREAD · 연:RULE-CHAT-DISABLED · 연:RULE-CHAT-KIND · 연:RULE-CHAT-REPLY · 연:RULE-CHAT-EDIT · 연:RULE-CHAT-REACT · 연:RULE-CHAT-DELETE · 연:RULE-CHAT-FOLD · 연:RULE-CHAT-UNKNOWN-KIND · 연:RULE-CHAT-EXT · 연:RULE-CHAT-CONTENT · 연:RULE-CHAT-TALK · 연:RULE-CHAT-TALK-UPDATE · model: claude-opus-5-5
 // 채팅 — 방 핸들과 따로 산다(연:RULE-CHAT-SPACE). 위가 상태기를 두지 않는다 — 공간 보관본 · msg_id 거르기 · 관계 메시지 접기를 여기서 든다. 따라잡기는 앱이 부른다(SDK 는 스스로 부르지 않는다).
 // 영역 관계 CHAT → SES(tools/sdk_deps.json) — 요청은 시그널링(internal)에 직접 · 통지는 세션이 넣는 통(Queue)에서 직접 꺼낸다(콜백 주입 없음 · 세션은 채팅을 모른다).
-import { Code, type ChatMessage as WireMessage, type SpaceEntry, type SpaceHistoryRes, type SpaceListRes, type SpaceViewRes, type MessageRes, type OpName } from '../../internal/wire/ws.js'
+import { Code, type ChatMessage as WireMessage, type SpaceEntry, type SpaceHistoryRes, type SpaceListRes, type SpaceViewRes, type MessageRes, type OpName, type TalkInfo } from '../../internal/wire/ws.js'
 import type { Signaling } from '../../internal/ses/signaling.js'
 import { LADDER } from '../gen/session_client.js'
 import { Emitter } from '../../platform/emitter.js'
 import { Fault, fromFailure } from '../../platform/fault.js'
-import { sleep, wall } from '../../platform/clock.js'
+import { sleep, wall, Timer } from '../../platform/clock.js'
 import { randomHex } from '../../platform/env.js'
 import { sha256Hex } from '../../platform/sha256.js'
 
@@ -31,7 +31,11 @@ export interface ChatMessage {
   readonly deleted?: true
   /** 반응 — 키마다 누른 사람 */
   readonly reactions?: Readonly<Record<string, readonly string[]>>
+  /** 무전 발언 기록(`kind:"talk"`)의 상태 — 갱신(`talk_update`)을 접은 마지막 전체 상태 · `deadline` 이 지난 `talking` 은 `lost`(SDK:IMPL-CHAT-FOLD · 연:CHAT.type.TalkInfo) */
+  readonly talk?: TalkInfo
 }
+
+export type { TalkInfo }
 
 export interface Space {
   readonly spaceId: string
@@ -66,11 +70,19 @@ const SEEN_MAX = 1000
 /** MESSAGE 요청 몸 상한(연:RULE-CHAT-CONTENT) */
 const BODY_MAX = 131_072
 
-const RELATION = new Set(['edit', 'react', 'delete'])
+const RELATION = new Set(['edit', 'react', 'delete', 'talk_update'])
 const MEMBER = new Set(['join', 'leave', 'add', 'remove'])
+/** 발언 시계의 깨어남 문턱 — 이 시계는 늦어도 판정이 같다(지난 뒤 처음 보면 lost) */
+const TALK_WAKE_MS = 60_000
 
-/** 원본 하나의 접기 상태 — 마지막 고침 · 사람마다 마지막 반응 · 지움(연:RULE-CHAT-FOLD) */
-interface Fold { edit?: WireMessage; readonly reacts: Map<string, WireMessage>; deleted: boolean }
+/** 원본 하나의 접기 상태 — 마지막 고침 · 사람마다 마지막 반응 · 지움 · 발언 기록의 마지막 갱신(연:RULE-CHAT-FOLD) */
+interface Fold { edit?: WireMessage; readonly reacts: Map<string, WireMessage>; deleted: boolean; talk?: WireMessage }
+
+/** 발언 상태 — 끝 갱신 없이 지금(단말 UTC ms)이 `deadline` 을 넘은 `talking` 은 `lost`(연:RULE-CHAT-TALK-UPDATE · SDK:IMPL-CHAT-FOLD) */
+function due(t: TalkInfo | undefined): TalkInfo | undefined {
+  if (!t || t.state !== 'talking' || wall() < t.deadline) return t
+  return { ...t, state: 'lost' }
+}
 
 const newer = (a: WireMessage, b: WireMessage | undefined): boolean => !b || a.t > b.t || (a.t === b.t && a.msg_id > b.msg_id)
 
@@ -87,11 +99,13 @@ function folded(w: WireMessage, f: Fold | undefined): ChatMessage {
   const src = f?.edit ?? w
   const reactions: Record<string, string[]> = {}
   for (const [user, r] of f?.reacts ?? []) for (const k of r.keys ?? []) (reactions[k] ??= []).push(user)
+  const talk = w.kind === 'talk' ? due(f?.talk?.talk ?? w.talk) : undefined
   return {
     ...base, ...tail, content: src.content,
     ...(src.ext !== undefined ? { ext: src.ext } : {}),
     ...(f?.edit ? { edited: true as const } : {}),
     ...(Object.keys(reactions).length ? { reactions } : {}),
+    ...(talk ? { talk } : {}),
   }
 }
 
@@ -134,8 +148,10 @@ export class ChatCore {
   enabled = true
   /** 3014 로 꺼진 사실 — 그 뒤 채팅 API 는 보내지 않고 이것으로 reject 한다 */
   private disabled: Fault | null = null
+  /** 낸 발언 기록마다 `deadline` 시계 — 공간 · msgId(SDK:IMPL-CHAT-FOLD) */
+  private readonly talkTimers = new Map<string, Map<string, Timer>>()
 
-  constructor(private readonly sig: Signaling, private readonly inbox: { next(): Promise<ChatFact | null> }) {
+  constructor(private readonly sig: Signaling, private readonly inbox: { next(): Promise<ChatFact | null> }, private readonly who: { readonly userId: string | null } = { userId: null }) {
     void this.pump()
   }
 
@@ -252,21 +268,45 @@ export class ChatCore {
     if (r.kind === 'delete') f.deleted = true
     else if (r.kind === 'edit' && newer(r, f.edit)) f.edit = r
     else if (r.kind === 'react' && newer(r, f.reacts.get(r.user_id))) f.reacts.set(r.user_id, r)
+    else if (r.kind === 'talk_update' && newer(r, f.talk)) f.talk = r
     if (known) table.set(ref, f)
     else capped(table, ref, f)
   }
 
-  /** 받은 메시지를 보관본에 — 글만 total 을 올린다 · ★목록이 이미 센 것(`t` ≤ 그 목록의 `last_t`)은 빼고(연:RULE-CHAT-UNREAD · SDK:IMPL-CHAT-API) */
+  /** 받은 메시지를 보관본에 — 글과 발언 기록만 total 을 올린다 · ★목록이 이미 센 것(`t` ≤ 그 목록의 `last_t`)은 빼고 · 내 발언 기록은 읽은 것으로(서버도 화자의 read 를 올린다)(연:RULE-CHAT-UNREAD · SDK:IMPL-CHAT-API) */
   private count(msgs: readonly ChatMessage[]): void {
     let changed = false
     for (const m of msgs) {
       const s = this.spaceList.get(m.spaceId)
-      if (!s || m.kind !== undefined || m.t <= (this.listed.get(m.spaceId) ?? 0)) continue
+      if (!s || (m.kind !== undefined && m.kind !== 'talk') || m.t <= (this.listed.get(m.spaceId) ?? 0)) continue
       const total = s.total + 1
-      this.spaceList.set(m.spaceId, { ...s, total, unread: total - s.read, lastT: Math.max(s.lastT ?? m.t, m.t) })
+      const read = m.kind === 'talk' && m.userId === this.who.userId ? total : s.read
+      this.spaceList.set(m.spaceId, { ...s, total, read, unread: total - read, lastT: Math.max(s.lastT ?? m.t, m.t) })
       changed = true
     }
     if (changed) this.events.emit('spaces', [...this.spaceList.values()])
+  }
+
+  /** 낸 발언 기록이 아직 `talking` 이면 `deadline` 에 시계를 건다 · 끝났거나 이미 lost 면 시계를 걷는다(SDK:IMPL-CHAT-FOLD) */
+  private watch(m: ChatMessage): void {
+    if (m.kind !== 'talk') return
+    const timers = inner(this.talkTimers, m.spaceId)
+    timers.get(m.msgId)?.stop()
+    timers.delete(m.msgId)
+    if (m.talk?.state !== 'talking') return
+    const t = new Timer(TALK_WAKE_MS)
+    timers.set(m.msgId, t)
+    t.start(Math.max(0, m.talk.deadline - wall()), () => this.overdue(m.spaceId, m.msgId))
+  }
+
+  /** 시계가 울렸다 — 그동안 끝 갱신이 없었으면 lost 로 updates(저장된 상태가 정본 — 뒤에 끝 갱신이 오면 그것으로) */
+  private overdue(spaceId: string, msgId: string): void {
+    this.talkTimers.get(spaceId)?.delete(msgId)
+    const w = this.postsOf(spaceId).get(msgId)
+    if (!w) return
+    const m = folded(w, this.folds.get(spaceId)?.get(msgId))
+    if (m.talk?.state === 'talking') return this.watch(m)
+    if (m.talk?.state === 'lost') this.events.emit('updates', spaceId, [m])
   }
 
   /** 받은 것 — 집합으로 거른 뒤 관계는 접기 상태에 · 글은 접어 messages 로 · 이미 낸 글이 바뀌었으면 updates 로(SDK:IMPL-CHAT-CATCHUP · SDK:IMPL-CHAT-FOLD) */
@@ -284,7 +324,7 @@ export class ChatCore {
         }
         continue
       }
-      if (w.kind !== undefined && !MEMBER.has(w.kind) && !w.content) continue
+      if (w.kind !== undefined && !MEMBER.has(w.kind) && w.kind !== 'talk' && !w.content) continue
       const list = posts.get(w.space_id) ?? []
       list.push(w)
       posts.set(w.space_id, list)
@@ -294,12 +334,14 @@ export class ChatCore {
       const out = list.map((w) => folded(w, this.folds.get(spaceId)?.get(w.msg_id))).sort(byOrder)
       this.events.emit('messages', spaceId, out, source)
       if (source !== 'history') this.count(out)
+      for (const m of out) this.watch(m)
     }
     for (const [spaceId, refs] of touched) {
       const fresh = new Set((posts.get(spaceId) ?? []).map((w) => w.msg_id))
       const known = this.postsOf(spaceId)
       const changed = [...refs].filter((r) => !fresh.has(r) && known.has(r)).map((r) => folded(known.get(r)!, this.folds.get(spaceId)?.get(r))).sort(byOrder)
       if (changed.length) this.events.emit('updates', spaceId, changed)
+      for (const m of changed) this.watch(m)
     }
   }
 
@@ -338,6 +380,8 @@ export class ChatCore {
     this.posts.clear()
     this.folds.clear()
     this.pending.clear()
+    for (const m of this.talkTimers.values()) for (const t of m.values()) t.stop()
+    this.talkTimers.clear()
     this.enabled = true
     this.disabled = null
     if (had) this.events.emit('spaces', [])

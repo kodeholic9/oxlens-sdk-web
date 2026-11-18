@@ -131,6 +131,7 @@ export const Code = {
   REF_NOT_FOUND: { code: 3016, permanent: true },
   REF_DELETED: { code: 3017, permanent: true },
   NOT_REF_SENDER: { code: 3018, permanent: true },
+  REC_NOT_FOUND: { code: 3019, permanent: true },
   ROOM_FULL: { code: 4001, permanent: false },
   TRACK_LIMIT: { code: 4002, permanent: false },
   QUOTA_EXCEEDED: { code: 4003, permanent: false },
@@ -149,6 +150,7 @@ export const RetiredCodes: readonly number[] = [2007, 3003, 3007]
 
 /** HTTP 접속점 — 메서드 · {base} 아래 경로 · 성공 상태 */
 export const Endpoint = {
+  REC_FILE: { method: 'GET', path: '/rec/{space_id}/{file}', status: 200 },
   LIST_ROOMS: { method: 'GET', path: '/rooms', status: 200 },
   CREATE_ROOM: { method: 'POST', path: '/rooms', status: 201 },
   GET_ROOM: { method: 'GET', path: '/rooms/{room_id}', status: 200 },
@@ -180,11 +182,31 @@ export interface ChatMessage {
   readonly user_id: string
   readonly t: number
   readonly content: string
-  readonly kind?: "edit" | "react" | "delete" | "join" | "leave" | "add" | "remove"
+  readonly kind?: "edit" | "react" | "delete" | "join" | "leave" | "add" | "remove" | "talk" | "talk_update"
   readonly ref?: string
   readonly keys?: string[]
   readonly ext?: unknown
   readonly target?: string
+  readonly talk?: TalkInfo
+}
+
+/** CHAT.type.TalkRec — 녹취 (§[CHAT.op.MESSAGE]) */
+export interface TalkRec {
+  readonly path: string
+  readonly size: number
+  readonly mime: string
+  readonly duration_ms: number
+}
+
+/** CHAT.type.TalkInfo — 발언 상태 (§[CHAT.op.MESSAGE]) */
+export interface TalkInfo {
+  readonly state: "talking" | "ok" | "short" | "cut" | "silent" | "lost"
+  readonly room_id: string
+  readonly start: number
+  readonly deadline: number
+  readonly duration_ms?: number
+  readonly reason?: number
+  readonly rec?: TalkRec
 }
 
 /** CHAT.type.SpaceEntry — 내 공간 한 줄 (§[CHAT.op.SPACE_LIST]) */
@@ -270,6 +292,7 @@ export interface RoomSummary {
   readonly user_count: number
   readonly created_at: number
   readonly rec: boolean
+  readonly record: boolean
 }
 
 /** ROOM.type.MemberInfo — `MemberInfo` (§[ROOM.type.MemberInfo]) */
@@ -343,6 +366,12 @@ export interface TrackEntry {
   readonly scalability?: string
 }
 
+/** CHAT.http.REC_FILE.params — GET /rec/{space_id}/{file} 녹취 내려받기 */
+export interface RecFileParams {
+  readonly space_id: string
+  readonly file: string
+}
+
 /** ROOM.http.LIST_ROOMS.res — GET /rooms 방 목록 */
 export interface ListRoomsRes {
   readonly rooms: RoomSummary[]
@@ -357,6 +386,7 @@ export interface CreateRoomReq {
   readonly unused_ttl_secs?: number
   readonly departure_ttl_secs?: number
   readonly media_codecs?: MediaCodecs
+  readonly record?: boolean
 }
 
 /** ROOM.http.CREATE_ROOM.res — POST /rooms 방 생성 */
@@ -365,6 +395,7 @@ export interface CreateRoomRes {
   readonly name: string
   readonly capacity: number
   readonly created_at: number
+  readonly record: boolean
   readonly media_codecs: MediaCodecs
 }
 
@@ -387,6 +418,7 @@ export interface GetRoomRes {
   readonly participants: MemberInfo[]
   readonly me?: MemberInfo
   readonly created_at: number
+  readonly record: boolean
   readonly media_codecs: MediaCodecs
   readonly version: Version
   readonly tracks?: TrackEntry[]
