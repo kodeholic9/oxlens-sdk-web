@@ -72,7 +72,7 @@ const qa = {
     client.diagnostics.setLogLevel('debug')
     client.diagnostics.on('transition', (t) => { state.transitions.push(t); if (state.transitions.length > 2000) state.transitions.shift() })
     client.on('session', (s) => note('session', { state: s.state, recovering: s.recovering }))
-    client.chat.on('messages', (spaceId, msgs, source) => note('chat', { spaceId, source, msgs: msgs.map((m) => ({ msgId: m.msgId, userId: m.userId, t: m.t, content: m.content, ...(m.kind ? { kind: m.kind, target: m.target } : {}) })) }))
+    client.chat.on('messages', (spaceId, msgs, source) => note('chat', { spaceId, source, msgs: msgs.map((m) => ({ msgId: m.msgId, userId: m.userId, t: m.t, content: m.content, ...(m.kind ? { kind: m.kind, target: m.target } : {}), ...(m.ref ? { ref: m.ref } : {}), ...(m.edited ? { edited: true } : {}), ...(m.deleted ? { deleted: true } : {}), ...(m.reactions && Object.keys(m.reactions).length ? { reactions: m.reactions } : {}) })) }))
     client.chat.on('spaces', (spaces) => note('chatSpaces', spaces))
     client.chat.on('updates', (spaceId, msgs) => note('chatUpdates', { spaceId, msgs: msgs.map((m) => ({ msgId: m.msgId, content: m.content, edited: !!m.edited, deleted: !!m.deleted, reactions: m.reactions ?? {} })) }))
     await client.connect()
@@ -95,9 +95,9 @@ const qa = {
   async leave(roomId) { await state.client.rooms.get(roomId)?.leave() },
 
   /** 연:CHAT.op.MESSAGE — 방 입장과 무관 · 보낸 세션에는 통지가 없다(자기 것은 응답으로 안다). */
-  async chatSend(spaceId, content, msgId) {
-    const m = await state.client.chat.send(spaceId, content, msgId ? { msgId } : {})
-    return { msgId: m.msgId, userId: m.userId, t: m.t, content: m.content }
+  async chatSend(spaceId, content, msgId, ref) {
+    const m = await state.client.chat.send(spaceId, content, { ...(msgId ? { msgId } : {}), ...(ref ? { ref } : {}) })
+    return { msgId: m.msgId, userId: m.userId, t: m.t, content: m.content, ...(m.ref ? { ref: m.ref } : {}) }
   },
 
   async chatHistory(spaceId, q) {

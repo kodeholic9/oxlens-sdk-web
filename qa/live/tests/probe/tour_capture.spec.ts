@@ -1,6 +1,6 @@
 // author: kodeholic (powered by Claude)
 // ★실측 탐침 — 학습 문서(oxlens-sfu docs/learn)의 콜 플로우 재료를 장마다 한 번에 거둔다. 판정하지 않는다.
-//   이름 = 학습 문서의 장 번호(context guide/learn · 20261109 다섯 부 구성) — TOUR-02 · 02P · 02T · 06 · 07 · 08 · 09 · 10 · 11 · 13.
+//   이름 = 학습 문서의 장 번호(context guide/learn · 20261109 다섯 부 구성) — TOUR-02 · 02P · 02T · 06 · 07 · 08 · 09 · 10 · 11 · 13 · 20(채팅 · 20261118p).
 //   거두는 것: 브라우저 WS 프레임(보냄 · 받음) · SDP 두 벌(setLocal · setRemote) · ICE · DC 상태와 DC 바이트 · SDK 전이 · 서버 표면(/admin).
 //   서버 로그는 정리(LEAVE)까지 본 뒤 이 회차의 시각 창으로 자른다(개발 형상 로그 위치 /tmp/oxlens/<node>/ox.log.<날짜> · stat 줄 뺌).
 //   산출: <저장소>/.archive/tour/tour-<시각>/<장>.json(TOUR_OUT 으로 바꾼다).
@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, connect as tcpConnect, Server, Socket } from 'node:net'
 import { join } from 'node:path'
 import { Browser, BrowserContext, Page, test } from '@playwright/test'
-import { Participant, Scope, ensureRoom, expect } from '../../fixtures/scope.js'
+import { Participant, Scope, ensureRoom, ensureSpace, expect } from '../../fixtures/scope.js'
 import { HUB, ROOT, placementOf, roomFor, sfuIds } from '../../fixtures/env.js'
 
 /** 신호만 끊는 TCP 중계 — 페이지의 WS · HTTP 를 hub 로 그대로 잇고, cut() 이면 열린 연결을 끊고 잠시 받지 않는다(미디어 UDP 는 안 지난다). */
@@ -104,7 +104,8 @@ function hookPc(): void {
 
 interface Frame { at: string; who: string; dir: 'send' | 'recv'; data: string }
 interface Http { at: string; who: string; data: string }
-type OpenExtra = { iceTcp?: boolean; dropUdpCandidate?: boolean; adaptiveStream?: boolean; pcMode?: '1pc' | '2pc' }
+/** `as` — 같은 사람이 새 문맥으로 다시 붙을 때 그 사람의 라벨(채팅 TOUR-20 · 끊었다 다시 붙기). */
+type OpenExtra = { iceTcp?: boolean; dropUdpCandidate?: boolean; adaptiveStream?: boolean; pcMode?: '1pc' | '2pc'; as?: string }
 interface IcePair { state: string | null; nominated: boolean | null; requestsSent: number; responsesReceived: number; bytesSent: number; localProtocol: string | null; remoteProtocol: string | null; remotePort: number | null; remoteTcpType: string | null }
 
 /** 한 장의 회차 — 사람마다 브라우저 문맥 하나(끊김 시험이 한 사람만 끊을 수 있게). */
@@ -113,6 +114,8 @@ class Capture {
   readonly http: Http[] = []
   readonly steps: { at: string; step: string }[] = []
   readonly people = new Map<string, { p: Participant; ctx: BrowserContext; userId: string }>()
+  /** 회차 중에 접속을 끊은 사람 — 끊기 직전에 거둔 것 */
+  readonly gone = new Map<string, { userId: string; data: Record<string, unknown> }>()
 
   constructor(readonly S: Scope, readonly browser: Browser) {}
 
@@ -135,10 +138,28 @@ class Capture {
       })
     })
     this.mark(`${who}.connect`)
-    const userId = this.S.user(who)
-    const p = await this.S.open(ctx, { userId, ...(base ? { base } : {}), ...extra })
+    const { as, ...rest } = extra
+    const userId = this.S.user(as ?? who)
+    const p = await this.S.open(ctx, { userId, ...(base ? { base } : {}), ...rest })
     this.people.set(who, { p, ctx, userId })
     return p
+  }
+
+  /** 한 사람만 접속을 끊는다(클라이언트 close · 문맥 닫음) — 그 전에 그 사람의 기록을 거둔다. */
+  async drop(who: string): Promise<void> {
+    const x = this.people.get(who)
+    if (!x) return
+    const data = {
+      userId: x.userId,
+      pc: await x.p.page.evaluate(() => (window as unknown as { __tour: unknown }).__tour),
+      diag: await x.p.call('diag'),
+      events: await x.p.call('events'),
+    }
+    this.mark(`${who}.drop`)
+    await x.p.call('teardown').catch(() => {})
+    await x.ctx.close().catch(() => {})
+    this.people.delete(who)
+    this.gone.set(who, { userId: x.userId, data })
   }
 
   async finish(name: string, extra: Record<string, unknown>, nodes: string[]): Promise<void> {
@@ -159,6 +180,7 @@ class Capture {
         media: await admin(`/admin/users/${userId}/media`),
       }
     }
+    for (const [who, g] of this.gone) per[who] = g.data
     this.mark('teardown')
     await this.S.teardown()
     for (const { ctx } of this.people.values()) await ctx.close().catch(() => {})
@@ -166,7 +188,7 @@ class Capture {
     const end = new Date()
     const out = {
       chapter: name, steps: this.steps, frames: this.frames, http: this.http, people: per, ...extra,
-      users: [...this.people.entries()].map(([who, x]) => ({ who, userId: x.userId })),
+      users: [...[...this.gone.entries()].map(([who, x]) => ({ who, userId: x.userId })), ...[...this.people.entries()].map(([who, x]) => ({ who, userId: x.userId }))],
       log: Object.fromEntries(nodes.map((n) => [n, serverLog(n, new Date(this.steps[0]!.at), end)])),
     }
     mkdirSync(OUT, { recursive: true })
@@ -582,4 +604,106 @@ test('TOUR-06 트랙 속성을 산 채로 — 음소거 · 영상 멈춤 · 회�
   }
   c.mark('collect')
   await c.finish('06', { rooms: [R1, R2], node: 'node-a', sfus: ids, tracks: { mic: mic.id, cam: cam.id }, server: { r1: await snapshot(R1), r2: await snapshot(R2) } }, ids)
+})
+
+interface ChatNote { at: number; detail: { spaceId: string; source: string; msgs: { msgId: string; t: number; content: string; kind?: string; ref?: string; edited?: boolean; deleted?: boolean; reactions?: Record<string, string[]> }[] } }
+interface ChatUp { at: number; detail: { spaceId: string; msgs: { msgId: string; content: string; edited: boolean; deleted: boolean; reactions: Record<string, string[]> }[] } }
+interface SpaceRow { spaceId: string; total: number; read: number; unread: number }
+const chatGot = (p: Participant, space: string, msgId: string) => p.call<ChatNote[]>('events', 'chat')
+  .then((ns) => ns.find((n) => n.detail.spaceId === space && n.detail.msgs.some((m) => m.msgId === msgId)) ?? null)
+const chatUp = (p: Participant, space: string, msgId: string, ok: (m: ChatUp['detail']['msgs'][number]) => boolean) => p.call<ChatUp[]>('events', 'chatUpdates')
+  .then((ns) => ns.some((n) => n.detail.spaceId === space && n.detail.msgs.some((m) => m.msgId === msgId && ok(m))))
+const spaceRow = (p: Participant, space: string) => p.call<SpaceRow[]>('chatSpaces').then((ss) => ss.find((s) => s.spaceId === space) ?? null)
+
+const S20 = new Scope('tourchat')
+scopes.push(S20)
+test('TOUR-20 채팅 — 실시간 · 따라잡기 · 관계 접기 · 목록 · 안 읽은 수 · 다른 node 의 멤버', { annotation: { type: 'spec', description: 'none' } }, async ({ browser }) => {
+  test.setTimeout(120_000)
+  const ids = await sfuIds()
+  // 회차마다 새 공간 — 개발 채팅 DB 는 회차를 넘어 남는다(chat.spec CHAT-03 과 같은 까닭)
+  const SPACE = S20.room(`space_${STAMP.replace('-', '')}`)
+  const c = new Capture(S20, browser)
+  c.mark('ensureSpace')
+  ensureSpace(SPACE, [S20.user('A'), S20.user('B'), S20.user('C')])
+  // A · B 는 entry node(node-a) hub · C 는 node-b hub 에 붙는다 — 다른 node 로 가는 실시간(oxmesh sess 토큰)
+  const a = await c.open('A')
+  const b = await c.open('B')
+  const cc = await c.open('C', `http://127.0.0.1:1975/media`)
+  c.mark('catchup0')
+  for (const p of [a, b, cc]) await p.call('chatCatchup', {})
+  await sleep(1_000)
+  c.mark('A.spaces')
+  const listA = await spaceRow(a, SPACE)
+  // ① 실시간 — A 가 보낸다 · B(같은 node) · C(다른 node) 가 받는다 · 보낸 세션에는 안 돌아온다
+  c.mark('A.send.M1')
+  const m1 = await a.call<{ msgId: string; t: number }>('chatSend', SPACE, '첫 글')
+  c.mark('A.res.M1')
+  await expect.poll(() => chatGot(b, SPACE, m1.msgId).then(Boolean)).toBe(true)
+  await expect.poll(() => chatGot(cc, SPACE, m1.msgId).then(Boolean)).toBe(true)
+  c.mark('BC.got.M1')
+  await sleep(500)
+  // ② 답장 · 고침 · 반응 — 원본에 접힌다
+  c.mark('B.reply.M1')
+  const r1 = await b.call<{ msgId: string; t: number }>('chatSend', SPACE, '답장', undefined, m1.msgId)
+  await expect.poll(() => chatGot(a, SPACE, r1.msgId).then(Boolean)).toBe(true)
+  c.mark('A.got.R1')
+  c.mark('A.edit.M1')
+  await a.call('chatEdit', SPACE, m1.msgId, '고친 첫 글')
+  await expect.poll(() => chatUp(b, SPACE, m1.msgId, (m) => m.edited)).toBe(true)
+  await expect.poll(() => chatUp(cc, SPACE, m1.msgId, (m) => m.edited)).toBe(true)
+  c.mark('BC.folded.edit')
+  c.mark('C.react.M1')
+  await cc.call('chatReact', SPACE, m1.msgId, ['👍'])
+  await expect.poll(() => chatUp(a, SPACE, m1.msgId, (m) => (m.reactions['👍'] ?? []).length > 0)).toBe(true)
+  await expect.poll(() => chatUp(b, SPACE, m1.msgId, (m) => (m.reactions['👍'] ?? []).length > 0)).toBe(true)
+  c.mark('AB.folded.react')
+  await sleep(500)
+  // ③ B 가 접속을 끊은 사이 쌓인다 — 글 둘 · 고침 · 반응 · 지움
+  await c.drop('B')
+  await sleep(1_000)
+  c.mark('A.send.M2')
+  const m2 = await a.call<{ msgId: string }>('chatSend', SPACE, '끊긴 사이 둘째')
+  c.mark('A.send.M3')
+  const m3 = await a.call<{ msgId: string }>('chatSend', SPACE, '끊긴 사이 셋째')
+  c.mark('C.send.M4')
+  const m4 = await cc.call<{ msgId: string }>('chatSend', SPACE, '끊긴 사이 넷째')
+  c.mark('A.edit.M2')
+  await a.call('chatEdit', SPACE, m2.msgId, '고친 둘째')
+  c.mark('C.react.M2')
+  await cc.call('chatReact', SPACE, m2.msgId, ['🎉'])
+  c.mark('A.delete.M3')
+  await a.call('chatDelete', SPACE, m3.msgId)
+  await sleep(1_000)
+  // ④ B 가 다시 붙는다 — 안 읽은 수를 먼저 보고 · CATCHUP → MESSAGES 묶음 → ACK
+  const b2 = await c.open('B2', undefined, { as: 'B' })
+  c.mark('B2.spaces.before')
+  const listB = await spaceRow(b2, SPACE)
+  c.mark('B2.catchup')
+  await b2.call('chatCatchup', {})
+  await expect.poll(() => chatGot(b2, SPACE, m4.msgId).then(Boolean)).toBe(true)
+  // ★같은 묶음에 원본과 관계가 함께 오면 SDK 는 접은 채 messages 로 낸다(updates 는 이미 낸 글만 — SDK:IMPL-CHAT-FOLD)
+  await expect.poll(() => chatGot(b2, SPACE, m3.msgId).then((n) => n?.detail.msgs.find((m) => m.msgId === m3.msgId)?.deleted === true)).toBe(true)
+  c.mark('B2.caught')
+  await sleep(1_000)
+  // ⑤ 다시 가져오기 · 읽음 표시
+  c.mark('B2.history')
+  const hist = await b2.call<{ more: boolean; msgs: { msgId: string; content: string; edited: boolean; deleted: boolean; reactions: Record<string, string[]> }[] }>('chatHistory', SPACE, {})
+  c.mark('B2.view')
+  await b2.call('chatView', SPACE)
+  const listB2 = await spaceRow(b2, SPACE)
+  c.mark('B2.spaces.after')
+  await sleep(500)
+  // ⑥ 지움이 실시간으로 — A 가 첫 글을 지운다 · B2 · C 가 받는다
+  c.mark('A.delete.M1')
+  await a.call('chatDelete', SPACE, m1.msgId)
+  await expect.poll(() => chatUp(b2, SPACE, m1.msgId, (m) => m.deleted)).toBe(true)
+  await expect.poll(() => chatUp(cc, SPACE, m1.msgId, (m) => m.deleted)).toBe(true)
+  c.mark('BC.folded.delete')
+  await sleep(1_000)
+  c.mark('collect')
+  await c.finish('20', {
+    space: SPACE, nodes: { A: 'node-a', B: 'node-a', C: 'node-b' }, sfus: ids,
+    msgs: { m1: m1.msgId, r1: r1.msgId, m2: m2.msgId, m3: m3.msgId, m4: m4.msgId },
+    chat: { listA, listB, listB2, history: hist },
+  }, ids)
 })
