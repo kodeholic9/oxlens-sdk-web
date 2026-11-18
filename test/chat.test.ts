@@ -152,6 +152,25 @@ test('SDK:IMPL-CHAT-API view — 응답의 read 로 보관본을 고치고 space
   } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
 })
 
+test('SDK:IMPL-CHAT-API 목록 뒤 따라잡기 — 목록이 센 글(t ≤ 목록 last_t)은 다시 세지 않는다 · 목록 뒤 글은 실시간이든 따라잡기든 센다 · 안 읽은 수 = 서버 total − read(20261118s)', async () => {
+  FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'S', total: 5, read: 2, last_t: 300 }] })
+  try {
+    const r = await rig()
+    await r.c.chat.spaces()
+    // ① 다시 붙은 뒤 목록 → 따라잡기 — 묶음의 글 셋은 목록이 이미 센 것(TOUR-20 의 꼴: 5/2/3 이 8/2/6 이 되던 결함)
+    r.ws.deliver(encodeFrame('request', Op.MESSAGES, 9101, { messages: [msg('S', 'a', 280), msg('S', 'b', 290), msg('S', 'c', 300)] }))
+    await tick()
+    assert.deepEqual(r.c.chat.spaceList.get('S'), { spaceId: 'S', total: 5, read: 2, unread: 3, lastT: 300 }, '★목록이 센 글을 따라잡기가 또 세지 않는다 — unread = 서버 total − read')
+    // ② 목록 뒤 실시간 글 — 센다
+    await note(r, Op.MESSAGE, msg('S', 'd', 310))
+    assert.deepEqual([r.c.chat.spaceList.get('S')?.total, r.c.chat.spaceList.get('S')?.unread], [6, 4], '목록 뒤 실시간 글은 센다(연:RULE-CHAT-UNREAD)')
+    // ③ 목록 뒤 저장됐지만 따라잡기로 늦게 온 글(t 305 < 실시간 310) — 기준은 목록 last_t 라 센다
+    r.ws.deliver(encodeFrame('request', Op.MESSAGES, 9102, { messages: [msg('S', 'e', 305)] }))
+    await tick()
+    assert.deepEqual([r.c.chat.spaceList.get('S')?.total, r.c.chat.spaceList.get('S')?.unread], [7, 5], '★기준은 목록 응답의 last_t — 실시간 글이 올린 lastT(310)가 아니다')
+  } finally { FakeWS.auto.set(Op.SPACE_LIST, { spaces: [] }) }
+})
+
 test('SDK:IMPL-CHAT-API 내가 보낸 것 — 보관본 한 건 늘고 읽은 것으로(unread 0) · 다시 가져오기가 내 글을 또 내지 않는다 · view 의 read 가 로컬 total 보다 커도 unread 는 음수가 아니다', async () => {
   FakeWS.auto.set(Op.SPACE_LIST, { spaces: [{ space_id: 'c1', total: 4, read: 4 }] })
   try {

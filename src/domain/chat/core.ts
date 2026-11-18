@@ -121,6 +121,8 @@ function inner<V>(m: Map<string, Map<string, V>>, k: string): Map<string, V> {
 export class ChatCore {
   readonly events = new Emitter<ChatEvents>()
   readonly spaceList = new Map<string, Space>()
+  /** 공간마다 마지막 목록이 센 끝 — 그 목록 응답의 `last_t` 그대로(없으면 0) · 실시간 글이 올리는 `lastT` 와 따로 든다(SDK:IMPL-CHAT-API) */
+  private readonly listed = new Map<string, number>()
   /** 공간마다 낸 msg_id — 넣은 차례 · 최근 SEEN_MAX 개 */
   readonly seen = new Map<string, Set<string>>()
   /** 공간마다 낸 글(원본 그대로) — 접은 결과를 updates 로 다시 낼 때 쓴다 */
@@ -201,7 +203,8 @@ export class ChatCore {
   async spaces(): Promise<Space[]> {
     const r = (await this.ask('SPACE_LIST', {})) as SpaceListRes
     this.spaceList.clear()
-    for (const e of r.spaces) this.spaceList.set(e.space_id, toSpace(e))
+    this.listed.clear()
+    for (const e of r.spaces) { this.spaceList.set(e.space_id, toSpace(e)); this.listed.set(e.space_id, e.last_t ?? 0) }
     const list = [...this.spaceList.values()]
     this.events.emit('spaces', list)
     return list
@@ -253,12 +256,12 @@ export class ChatCore {
     else capped(table, ref, f)
   }
 
-  /** 받은 메시지를 보관본에 — 글만 total 을 올린다(연:RULE-CHAT-UNREAD) */
+  /** 받은 메시지를 보관본에 — 글만 total 을 올린다 · ★목록이 이미 센 것(`t` ≤ 그 목록의 `last_t`)은 빼고(연:RULE-CHAT-UNREAD · SDK:IMPL-CHAT-API) */
   private count(msgs: readonly ChatMessage[]): void {
     let changed = false
     for (const m of msgs) {
       const s = this.spaceList.get(m.spaceId)
-      if (!s || m.kind !== undefined) continue
+      if (!s || m.kind !== undefined || m.t <= (this.listed.get(m.spaceId) ?? 0)) continue
       const total = s.total + 1
       this.spaceList.set(m.spaceId, { ...s, total, unread: total - s.read, lastT: Math.max(s.lastT ?? m.t, m.t) })
       changed = true
@@ -330,6 +333,7 @@ export class ChatCore {
   private reset(): void {
     const had = this.spaceList.size > 0
     this.spaceList.clear()
+    this.listed.clear()
     this.seen.clear()
     this.posts.clear()
     this.folds.clear()
